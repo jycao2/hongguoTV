@@ -61,7 +61,11 @@ object UpdateFiles {
                 output.fd.sync()
             }
             if (!verify(partial, update)) throw IOException("安装包校验未通过，请重新下载")
-            if (!partial.renameTo(destination)) throw IOException("无法保存安装包")
+            if (!partial.renameTo(destination)) {
+                // File.renameTo refuses to replace an existing target on Windows.
+                try { java.nio.file.Files.move(partial.toPath(), destination.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+                catch(e: Exception) { throw IOException("无法保存安装包", e) }
+            }
         } finally { partial.delete() }
     }
 }
