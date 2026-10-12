@@ -40,6 +40,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
             while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
+            if(bytes.isEmpty()) throw IOException("接口响应为空，请稍后重试")
             String(bytes,Charsets.UTF_8)
         }
     }
@@ -67,13 +68,20 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        // The website search does not constrain content type. Never use it for comics.
-        if(type==ContentType.COMIC) return appSearch(keyword,page,type)
+        if(type==ContentType.COMIC) {
+            try { return appSearch(keyword,page,type) }
+            catch(e: Exception) { /* App search API rejected the request or the cursor expired; the website paginates independently. */ }
+            return webSearch(keyword,page,COMIC_WEB_GENRE)
+        }
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
+        return webSearch(keyword,page,null)
+    }
+    private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
         val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
         val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
-        val items=valid(rows.objects().map(::card))
+        val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
+        val items=valid(mapped)
         return CatalogPage(items,items.isNotEmpty() && page<100)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
@@ -151,6 +159,8 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         return StreamInfo(url,key,quality)
     }
     companion object {
+        // Website search mixes genres; video_data.genre 203 marks 漫剧 (205 is 短剧), observed 2026-10.
+        private const val COMIC_WEB_GENRE="203"
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")

@@ -163,33 +163,55 @@ class ContentRepositoryTest {
         val requests=mutableListOf<Request>()
         val repo=repository { request ->
             requests+=request
-            JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","comic-session").put("passback","comic-cursor").put("next_offset",25))).toString()
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"203"}}]}}};</script>"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         repo.search("修仙",2,ContentType.COMIC)
         assertEquals("comic-session",requests[1].url.queryParameter("search_id"))
         assertEquals("comic-cursor",requests[1].url.queryParameter("passback"))
         assertEquals("25",requests[1].url.queryParameter("offset"))
-        assertThrows(SearchSessionExpiredException::class.java) { repo.search("重生",2,ContentType.COMIC) }
-        assertEquals(2,requests.size)
+        repo.search("重生",2,ContentType.COMIC)
+        assertEquals("2",requests[2].url.queryParameter("page"))
+        assertEquals(3,requests.size)
     }
 
     @Test fun expiredCursorRequestsFreshSearchInsteadOfDuplicateOffsetPage() {
         var now=0L
         var requests=0
-        val repo=repository(clock={ now }) {
+        val repo=repository(clock={ now }) { request ->
             requests++
-            JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","session").put("passback","cursor"))).toString()
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"203"}}]}}};</script>"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         now=300001L
-        assertThrows(SearchSessionExpiredException::class.java) { repo.search("修仙",2,ContentType.COMIC) }
-        assertEquals(1,requests)
+        assertEquals("444",repo.search("修仙",2,ContentType.COMIC).items.single().id)
+        assertEquals(2,requests)
         repo.search("修仙",1,ContentType.COMIC)
         repo.search("修仙",2,ContentType.COMIC)
-        assertEquals(3,requests)
+        assertEquals(4,requests)
+    }
+
+    @Test fun comicSearchFallsBackToWebsiteAndKeepsOnlyComicGenreRows() {
+        val repo=repository { request ->
+            if(request.url.host.endsWith("fqnovel.com")) ""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"203"}}]}}};</script>"""
+        }
+        val result=repo.search("修仙",1,ContentType.COMIC)
+        assertEquals(listOf("222"),result.items.map { it.id })
+        assertTrue(result.hasMore)
+    }
+
+    @Test fun shortSearchFallsBackToWebsiteWithoutGenreFilter() {
+        val repo=repository { request ->
+            if(request.url.host.endsWith("fqnovel.com")) ""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"203"}}]}}};</script>"""
+        }
+        val result=repo.search("总裁",1,ContentType.SHORT)
+        assertEquals(listOf("111","222"),result.items.map { it.id })
     }
 
     @Test fun shortHomeStillUsesCategoryAndStopsOnLastPage() {
@@ -227,11 +249,15 @@ class ContentRepositoryTest {
         assertEquals(1,requests)
     }
 
-    @Test fun missingComicTabDoesNotFallBackToShortResults() {
+    @Test fun missingComicTabFallsBackToWebsiteWithoutShortResults() {
         var requests=0
-        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}""" }
-        assertThrows(IOException::class.java) { repo.search("修仙",1,ContentType.COMIC) }
-        assertEquals(1,requests)
+        val repo=repository { request ->
+            requests++
+            if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}}]}}};</script>"""
+        }
+        assertTrue(repo.search("修仙",1,ContentType.COMIC).items.isEmpty())
+        assertEquals(2,requests)
     }
 
     @Test fun shortSearchKeepsWebsiteFallback() {
