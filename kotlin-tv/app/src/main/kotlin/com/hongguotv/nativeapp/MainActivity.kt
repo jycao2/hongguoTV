@@ -485,7 +485,6 @@ class MainActivity: Activity() {
                         val start=rankLabel.indexOf(' ')+1; val end=rankLabel.lastIndexOf(' ')
                         styled.setSpan(android.text.style.RelativeSizeSpan(1.45f),start,end,0)
                         styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD),start,end,0)
-                        if(rank in 2..3) styled.setSpan(android.text.style.ForegroundColorSpan(accent),start,end,0)
                     }
                     artwork.addView(TextView(this).apply { text=styled; textSize=11f; setTypeface(null,Typeface.BOLD); setTextColor(white); setPadding(dp(8),dp(4),dp(8),dp(4)); background=rounded(badgeBg,6) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
                     card.contentDescription="$rankLabel，${item.title}，${position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
