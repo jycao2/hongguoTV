@@ -12,7 +12,7 @@
 
 用于自家电视的非官方红果短剧客户端。首版采用 **React Native TV + TypeScript**，最低 Android 8.0（API 26）。电视负责界面和播放，独立 Node 服务负责内容接入与媒体分段处理，便于后续其他平台复用。
 
-**下载：[v0.1.1 APK、源码及 Docker 部署包](https://github.com/N3urda/hongguoTV/releases/tag/v0.1.1)** · [Docker 部署指南](docs/DOCKER.md)
+**下载：[v0.1.1 APK、源码及 Docker 部署包](https://github.com/jycao2/hongguoTV/releases/tag/v0.1.1)** · [Docker 部署指南](docs/DOCKER.md)
 
 ## 当前功能
 
