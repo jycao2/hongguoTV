@@ -30,11 +30,14 @@ internal object ComicRank {
                 val totalPages=pagination.optInt("totalPages",0)
                 if(totalPages<1 || pagination.optInt("pageNum",page)!=page) throw IOException("漫剧分页信息异常")
                 val positions=linkedMapOf<String,RankPosition>()
-                val items=rows.objects().map { row ->
+                val pageSize=rows.length()
+                val items=rows.objects().mapIndexed { index,row ->
                     val count=row.optInt("episodeCount",row.optJSONArray("episodeVids")?.length() ?: 0)
                     val tags=row.optJSONArray("tags") ?: JSONArray()
                     val id=row.str("seriesId").ifEmpty { row.str("id") }
-                    if(id !in positions) positions[id]=RankPosition(row.optInt("rank").takeIf { it>0 },row.str("heatText"))
+                    // The site only includes explicit ranks on page 1; derive the rest from order.
+                    val rank=row.optInt("rank").takeIf { it>0 } ?: (page-1)*pageSize+index+1
+                    if(id !in positions) positions[id]=RankPosition(rank,row.str("heatText"))
                     Series(id,row.str("title"),cleanUrl(row.str("cover")),
                         row.str("description"),if(count>0) "全 $count 集" else row.str("heatText"),
                         (0 until minOf(tags.length(),5)).joinToString(" · ") { tags.optString(it) })
@@ -52,13 +55,16 @@ internal object ComicRank {
             ?.optJSONObject("rank_hot-comic-drama/page") ?: throw IOException("页面没有漫剧榜单数据")
         if(route.str("rankKey")!="comic" || route.optInt("pageNum")!=page) throw IOException("漫剧分页信息异常")
         val positions=linkedMapOf<String,RankPosition>()
-        val items=document.select("article[aria-labelledby^=rank-title-]").mapNotNull { article ->
+        val cards=document.select("article[aria-labelledby^=rank-title-]")
+        val pageSize=cards.size
+        val items=cards.mapIndexedNotNull { index,article ->
             val heading=article.attr("aria-labelledby")
             val id=heading.removePrefix("rank-title-")
             val title=article.getElementById(heading)?.text().orEmpty()
-            if(!id.matches(Regex("[0-9]{1,30}")) || title.isBlank()) return@mapNotNull null
+            if(!id.matches(Regex("[0-9]{1,30}")) || title.isBlank()) return@mapIndexedNotNull null
+            val explicitRank=article.selectFirst("[class*=badge-number-]")?.text()?.toIntOrNull()?.takeIf { it>0 }
             if(id !in positions) positions[id]=RankPosition(
-                article.selectFirst("[class*=badge-number-]")?.text()?.toIntOrNull()?.takeIf { it>0 },
+                explicitRank ?: (page-1)*pageSize+index+1,
                 article.selectFirst("p[class*=metrics-]")?.text().orEmpty())
             Series(id,title,article.selectFirst("img[src]")?.attr("src").orEmpty(),
                 article.selectFirst("p[class*=description-]")?.text().orEmpty(),

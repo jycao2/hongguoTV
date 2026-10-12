@@ -477,12 +477,12 @@ class MainActivity: Activity() {
                 val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
                 val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover); cardImages[item.id]=image to item.cover
                 if(tab==2) {
-                    val rank=position?.rank ?: Int.MAX_VALUE
-                    val rankLabel=if(rank<=20) "第 $rank 名" else "名次暂无"
+                    val rank=position?.rank
+                    val rankLabel=if(rank!=null) "第 $rank 名" else "名次暂无"
                     val badgeBg=if(rank==1) accent else Color.argb(235,255,255,255)
                     val badgeText=if(rank==1) white else Color.rgb(24,26,30)
                     val styled=android.text.SpannableString(rankLabel)
-                    if(rank<=20) {
+                    if(rank!=null) {
                         val start=rankLabel.indexOf(' ')+1; val end=rankLabel.lastIndexOf(' ')
                         styled.setSpan(android.text.style.RelativeSizeSpan(1.45f),start,end,0)
                         styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD),start,end,0)

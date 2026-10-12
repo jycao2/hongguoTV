@@ -80,10 +80,10 @@ class ContentRepositoryTest {
         assertFalse(result.items.single().toJson().has("rank"))
     }
 
-    @Test fun missingRankIsNotInventedAndLastPageStops() {
+    @Test fun missingRankIsDerivedFromOrderAndLastPageStops() {
         val result=repository { currentRank(rankPayload(5,5)) }.comicRanking(5)
         assertNotNull(result.ranking)
-        assertEquals(RankPosition(null,""),result.ranking!!.positions["123"])
+        assertEquals(RankPosition(5,""),result.ranking!!.positions["123"])
         assertFalse(result.hasMore)
     }
 
