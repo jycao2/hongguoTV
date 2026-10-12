@@ -162,6 +162,9 @@ class Library(context: Context) {
     var frameMode: VideoFrameMode
         get() = state().settings.frame
         set(value) { if (value != frameMode) { state().settings = state().settings.copy(frame = value); put("frameMode", value.name) } }
+    var theme: String
+        get() = prefs.getString("theme", null) ?: "NIGHT"
+        set(value) { prefs.edit().putString("theme", value).apply() }
     fun snapshot() = state().snapshot()
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)

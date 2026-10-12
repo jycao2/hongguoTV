@@ -7,13 +7,21 @@ import android.graphics.drawable.GradientDrawable
 
 /** Shared native colors and shapes; no blur, bitmap backgrounds or focus animation. */
 object TvStyle {
-    val background=Color.rgb(11,15,21)
-    val surface=Color.rgb(23,30,40)
-    val raised=Color.rgb(32,42,54)
-    val accent=Color.rgb(255,137,100)
-    val text=Color.rgb(243,244,246)
-    val muted=Color.rgb(147,160,178)
-    val outline=Color.rgb(43,55,70)
+    enum class Theme(val label: String) { NIGHT("深夜影院"), PORCELAIN("暖玉白");
+        companion object { fun of(raw: String?) = entries.firstOrNull { it.name == raw } ?: NIGHT }
+    }
+    var theme = Theme.NIGHT
+        private set
+    fun apply(raw: String?) { theme = Theme.of(raw) }
+    fun toggle(): Theme { theme = if (theme == Theme.NIGHT) Theme.PORCELAIN else Theme.NIGHT; return theme }
+
+    val background get() = if (theme == Theme.NIGHT) Color.rgb(11,15,21) else Color.rgb(245,241,234)
+    val surface get() = if (theme == Theme.NIGHT) Color.rgb(23,30,40) else Color.rgb(255,255,255)
+    val raised get() = if (theme == Theme.NIGHT) Color.rgb(32,42,54) else Color.rgb(236,229,216)
+    val accent get() = if (theme == Theme.NIGHT) Color.rgb(255,137,100) else Color.rgb(196,83,46)
+    val text get() = if (theme == Theme.NIGHT) Color.rgb(243,244,246) else Color.rgb(58,52,44)
+    val muted get() = if (theme == Theme.NIGHT) Color.rgb(147,160,178) else Color.rgb(154,141,124)
+    val outline get() = if (theme == Theme.NIGHT) Color.rgb(43,55,70) else Color.rgb(227,220,205)
     const val POSTER_ASPECT=.7f
     fun shape(context: Context,color: Int,border: Int=Color.TRANSPARENT,radius: Int=10)=GradientDrawable().apply {
         setColor(color); cornerRadius=radius*context.resources.displayMetrics.density

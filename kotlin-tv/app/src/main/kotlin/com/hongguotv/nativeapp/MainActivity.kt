@@ -194,6 +194,7 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        TvStyle.apply(library.theme)
         updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && !tvTools.showing }
         connectivity=getSystemService(ConnectivityManager::class.java)
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback); networkRegistered=true }
@@ -683,6 +684,11 @@ class MainActivity: Activity() {
             library.autoNext=!library.autoNext
             autoNextButton.text="自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}"
         }
+        lateinit var themeButton: TextView
+        themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
+            library.theme=TvStyle.toggle().name; themeButton.text="系统风格  ·  ${TvStyle.theme.label}"
+            Toast.makeText(this,"下次进入应用生效",Toast.LENGTH_LONG).show()
+        }
         lateinit var backup: TextView
         backup=setting(device,"手机备份与恢复") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -717,7 +723,7 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV-updates。").setPositiveButton("关闭",null).show()
         }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton); val right=listOf(backup,hidden,clearCache,updates,license)
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton); val right=listOf(themeButton,backup,hidden,clearCache,updates,license)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
