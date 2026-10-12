@@ -479,8 +479,15 @@ class MainActivity: Activity() {
                 if(tab==2) {
                     val rank=position?.rank ?: Int.MAX_VALUE
                     val rankLabel=if(rank<=20) "第 $rank 名" else "名次暂无"
-                    val rankBg=if(rank<=3) accent else Color.argb(200,30,30,30)
-                    artwork.addView(text(rankLabel,14f).apply { setTypeface(null,Typeface.BOLD); setTextColor(white); setPadding(dp(8),dp(4),dp(8),dp(4)); background=rounded(rankBg,6) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
+                    val badgeBg=if(rank==1) accent else Color.argb(210,20,22,26)
+                    val styled=android.text.SpannableString(rankLabel)
+                    if(rank<=20) {
+                        val start=rankLabel.indexOf(' ')+1; val end=rankLabel.lastIndexOf(' ')
+                        styled.setSpan(android.text.style.RelativeSizeSpan(1.45f),start,end,0)
+                        styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD),start,end,0)
+                        if(rank in 2..3) styled.setSpan(android.text.style.ForegroundColorSpan(accent),start,end,0)
+                    }
+                    artwork.addView(TextView(this).apply { text=styled; textSize=11f; setTypeface(null,Typeface.BOLD); setTextColor(white); setPadding(dp(8),dp(4),dp(8),dp(4)); background=rounded(badgeBg,6) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
                     card.contentDescription="$rankLabel，${item.title}，${position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
                 }
                 card.addView(text(item.title,14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) },lp(-1,-2).apply { weight=1f })
