@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
 import android.app.Activity
@@ -17,6 +17,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.widget.*
 import android.text.TextUtils
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -24,6 +26,14 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
 import java.util.concurrent.Executors
+
+private const val TYPE_CARD=0
+private const val TYPE_FOOTER=1
+private const val FOOTER_NONE=0
+private const val FOOTER_LOADING=1
+private const val FOOTER_END=2
+private const val FOOTER_ERROR=3
+private const val FOOTER_MORE_HOT=4
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class MainActivity: Activity() {
@@ -58,14 +68,14 @@ class MainActivity: Activity() {
     private var collectionReturn: CatalogState?=null
     private var collectionFocus=""
     private var collectionBack: View?=null
-    private val pageSize=20
-    private var catalogScroll: ScrollView?=null
-    private var catalogBody: LinearLayout?=null
+    private val gridColumns=6
+    private val waterfallMaxPages=10
+    private var catalogRecycler: RecyclerView?=null
+    private var catalogAdapter: CatalogAdapter?=null
+    private var loadingMore=false
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
     private val scrollPositions=mutableMapOf<String,Int>()
-    private val catalogCards=linkedMapOf<String,View>()
-    private val cardImages=linkedMapOf<String,Pair<ImageView,String>>()
     private var prefetchAttemptAt=0L
     private var prefetchAttempts=0
     private var homeScreen: HomeScreen?=null
@@ -241,13 +251,11 @@ class MainActivity: Activity() {
     }
     private fun releaseCatalogViews() {
         homeScreen?.let { homePosition=it.capturePosition() }
-        catalogScroll?.let { scrollPositions[catalogPageKey]=it.scrollY }
-        catalogBody=null
-        homeScreen=null; selectionPreview=null; catalogScroll=null
+        (catalogRecycler?.layoutManager as? GridLayoutManager)?.let { scrollPositions[catalogPageKey]=it.findFirstVisibleItemPosition() }
+        homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
         nav.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         historyManage=null; rankRefresh=null; rankSubtitle=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; homeUpdates=null; resumeCards.clear()
-        catalogCards.clear(); cardImages.clear()
     }
     private fun <T> work(action: ()->T,done: (T)->Unit,failed: (Throwable)->Unit) {
         cancelWork()
@@ -397,9 +405,9 @@ class MainActivity: Activity() {
                 favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }; container.addView(favoriteStatus)
             }
         }
-        val body=column(); catalogBody=body; container.addView(body,lp(-1,0).apply { weight=1f })
+        val body=column(); container.addView(body,lp(-1,0).apply { weight=1f })
         if(localCatalog()) {
-            catalog=localItems(); ranking=null; page=page.coerceIn(1,maxOf(1,(catalog.size+pageSize-1)/pageSize)); hasMore=page*pageSize<catalog.size
+            catalog=localItems(); ranking=null; page=1; hasMore=false
         }
         if(load) {
             if(tab==0) catalogGrid(body,focusNav,focusType,loading=true)
@@ -440,7 +448,7 @@ class MainActivity: Activity() {
     }
     private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false) {
         if(tab==0 && page==1 && collection==null) { renderHome(body,focusNav,focusType,loading); return }
-        resumeCards.clear(); catalogCards.clear(); cardImages.clear(); collectionBack=null
+        collectionBack=null
         if(collection!=null) {
             val heading=row()
             collectionBack=addButton(heading,"‹ 返回首页") { leaveCollection(); showCatalog() }.apply {
@@ -453,111 +461,176 @@ class MainActivity: Activity() {
         }
         catalogPageKey="$tab:${collection.orEmpty()}:$page:$query"
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
-        val scroll=ScrollView(this).apply { isFillViewport=false; isVerticalScrollBarEnabled=false; clipToPadding=false }; catalogScroll=scroll
-        val list=column(); scroll.addView(list); body.addView(scroll,lp(-1,0).apply { weight=1f })
-        var restoringScroll=true
-        val displayed=if(localCatalog()) catalog.drop((page-1)*pageSize).take(pageSize) else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog.take(30)
+        val displayed=mutableListOf<Series>()
+        displayed+=if(localCatalog()) catalog else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog
         if(displayed.isEmpty()) {
-            message(list,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入关键词，用遥控器确认搜索" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
-            if((tab<=2 || localCatalog()) && page>1) addButton(list,"上一页") { page--; showCatalog(!localCatalog()) }
-            if((tab<=2 || localCatalog()) && hasMore) addButton(list,"下一页") { page++; showCatalog(!localCatalog()) }
-            if(resumeCards.isNotEmpty()) {
-                typeButtons.values.forEach { it.nextFocusDownId=resumeCards.first().id }
-                resumeCards.forEach { it.nextFocusDownId=it.id }
-            }
-            if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
+            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入关键词，用遥控器确认搜索" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
+            if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
         }
-        val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt()
-        displayed.chunked(count).forEach { items ->
-            val line=row(); line.gravity=Gravity.TOP
-            items.forEachIndexed { columnIndex,item ->
-                val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
-                val position=if(tab==2) ranking?.positions?.get(item.id) else null
-                val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
-                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover); cardImages[item.id]=image to item.cover
-                if(tab==2) {
-                    val rank=position?.rank
-                    val rankLabel=if(rank!=null) "第 $rank 名" else "名次暂无"
-                    val badgeBg=if(rank==1) accent else Color.argb(235,255,255,255)
-                    val badgeText=if(rank==1) white else Color.rgb(24,26,30)
-                    val styled=android.text.SpannableString(rankLabel)
-                    if(rank!=null) {
-                        val start=rankLabel.indexOf(' ')+1; val end=rankLabel.lastIndexOf(' ')
-                        styled.setSpan(android.text.style.RelativeSizeSpan(1.45f),start,end,0)
-                        styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD),start,end,0)
-                    }
-                    artwork.addView(TextView(this).apply { text=styled; textSize=11f; setTypeface(null,Typeface.BOLD); setTextColor(badgeText); setPadding(dp(8),dp(4),dp(8),dp(4)); background=rounded(badgeBg,6) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
-                    card.contentDescription="$rankLabel，${item.title}，${position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
-                }
-                card.addView(text(item.title,14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) },lp(-1,-2).apply { weight=1f })
-                val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
-                val badge=text(if(tab==3) library.favoriteLabel(item.id) else if(tab==2) position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge,12f,if(tab==2 || tab==3) accent else muted).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
-                card.addView(badge,lp(-1,-2)); if(tab==3) favoriteBadges[item.id]=badge
-                card.setOnClickListener { catalogFocus=item.id; openDetail(item,tab==4 || collection=="resume" || collection=="updates") }
-                card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
-                card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
-                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover); preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
-                // The row measures its tallest card, then stretches siblings to keep badges aligned.
-                line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card
-            }
-            list.addView(line,lp(-1,-2).apply { bottomMargin=dp(10) })
+        val adapter=CatalogAdapter(displayed)
+        val grid=GridLayoutManager(this,gridColumns)
+        grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position)) gridColumns else 1 }
+        val recycler=RecyclerView(this).apply {
+            id=View.generateViewId(); clipToPadding=false; isVerticalScrollBarEnabled=false; itemAnimator=null
+            layoutManager=grid; this.adapter=adapter
+            // Focus entering the grid lands on the first visible card, keeping the user's place.
+            isFocusable=true; isFocusableInTouchMode=true
+            setOnFocusChangeListener { _,focused -> if(focused) { val first=grid.findFirstVisibleItemPosition().coerceAtLeast(0); post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() } } }
         }
-        val paging=row(); paging.gravity=Gravity.CENTER
-        var prev: View?=null; var next: View?=null
-        if(tab<=2 || localCatalog()) {
-            prev=addButton(paging,"上一页") { if(page>1) { page--; catalogFocus=""; showCatalog(!localCatalog()) } }.apply { isEnabled=page>1; isFocusable=page>1; alpha=if(page>1) 1f else .4f }
-            paging.addView(text(if(localCatalog()) "第 $page / ${maxOf(1,(catalog.size+pageSize-1)/pageSize)} 页" else if(tab==2 && ranking!=null) "第 $page / ${ranking!!.totalPages} 页" else "第 $page 页",14f,muted).apply { gravity=Gravity.CENTER },lp(dp(if(tab==2) 135 else 95),dp(44)))
-            next=addButton(paging,"下一页") { if(hasMore) { page++; catalogFocus=""; showCatalog(!localCatalog()) } }.apply { isEnabled=hasMore; isFocusable=hasMore; alpha=if(hasMore) 1f else .4f }
-            if(collection=="hot" && !hasMore && collectionReturn?.hasMore==true) {
-                next=addButton(paging,"下一批热门") { collection=null; collectionReturn=null; page=2; catalogFocus=""; showCatalog(true) }
-            }
-            list.addView(paging,lp(-1,dp(50)))
+        catalogRecycler=recycler; catalogAdapter=adapter
+        adapter.footer=when {
+            localCatalog() -> if(collection=="hot" && collectionReturn?.hasMore==true) FOOTER_MORE_HOT else FOOTER_NONE
+            hasMore -> FOOTER_NONE
+            else -> FOOTER_END
         }
-        cards.forEachIndexed { index,card ->
-            card.nextFocusLeftId=if(index%count==0) card.id else cards[index-1].id
-            card.nextFocusRightId=if(index%count==count-1 || index==cards.lastIndex) card.id else cards[index+1].id
-            card.nextFocusUpId=if(index<count) (searchInput?.id ?: collectionBack?.id ?: typeButtons[library.contentType]?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: resumeCards.getOrNull(minOf(index,2))?.id ?: nav[tab].id) else cards[index-count].id
-            card.nextFocusDownId=if(index+count<cards.size) cards[index+count].id else if(index/count<cards.lastIndex/count) cards.last().id else next?.takeIf { it.isFocusable }?.id ?: prev?.takeIf { it.isFocusable }?.id ?: card.id
-        }
-        nav.forEach { it.nextFocusDownId=typeButtons[library.contentType]?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: cards.first().id }
-        rankRefresh?.nextFocusDownId=cards.first().id
-        historyManage?.nextFocusDownId=cards.first().id
-        favoriteCheck?.nextFocusDownId=cards.first().id
-        collectionBack?.nextFocusDownId=cards.first().id
-        resumeCards.forEachIndexed { index,v -> v.nextFocusDownId=cards[minOf(index,cards.lastIndex)].id }
-        if(resumeCards.isNotEmpty()) cards.take(count).forEachIndexed { index,v -> v.nextFocusUpId=resumeCards[minOf(index,resumeCards.lastIndex)].id }
-        else homeUpdates?.let { updates -> updates.nextFocusUpId=typeButtons[library.contentType]?.id ?: nav[0].id; updates.nextFocusDownId=cards.first().id; cards.take(count).forEach { it.nextFocusUpId=updates.id } }
-        typeButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: collectionBack?.id ?: resumeCards.firstOrNull()?.id ?: homeUpdates?.id ?: cards.first().id }
-        searchInput?.nextFocusDownId=cards.first().id
-        searchButton?.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id
-        searchActions.forEach { it.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id }
+        body.addView(recycler,lp(-1,0).apply { weight=1f })
+        nav.forEach { it.nextFocusDownId=typeButtons[library.contentType]?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: recycler.id }
+        rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id; favoriteCheck?.nextFocusDownId=recycler.id
+        collectionBack?.nextFocusDownId=recycler.id
+        typeButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: collectionBack?.id ?: recycler.id }
+        searchInput?.nextFocusDownId=recycler.id
+        searchButton?.nextFocusDownId=recycler.id
+        searchActions.forEach { it.nextFocusDownId=recycler.id }
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
-        else if(resumeCards.isNotEmpty() && (catalogFocus.isEmpty() || catalogFocus.startsWith("resume:"))) (resumeCards.firstOrNull { it.tag==catalogFocus } ?: resumeCards.first()).requestFocus()
-        else cards[displayed.indexOfFirst { it.id==catalogFocus }.coerceAtLeast(0)].requestFocus()
-        val savedScroll=scrollPositions[catalogPageKey]
-        scroll.post {
-            if(catalogScroll!==scroll) return@post
-            cards.forEach { view ->
-                val card=view as LinearLayout
-                val image=card.getChildAt(0)
-                val textHeight=card.paddingTop+card.paddingBottom+(1 until card.childCount).sumOf { card.getChildAt(it).measuredHeight }
-                val target=minOf(((width-dp(8))/TvStyle.POSTER_ASPECT).toInt(),(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
-                if(image.layoutParams.height!=target) image.layoutParams=image.layoutParams.apply { height=target }
+        else {
+            val found=displayed.indexOfFirst { it.id==catalogFocus }
+            val target=if(found>=0) found else scrollPositions[catalogPageKey]?.coerceIn(0,displayed.size-1) ?: 0
+            grid.scrollToPositionWithOffset(target,0)
+            recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(target)?.itemView?.requestFocus() }
+        }
+    }
+    private fun maybeLoadMore() {
+        val adapter=catalogAdapter ?: return
+        if(loadingMore || !hasMore || localCatalog() || screen!="catalog") return
+        if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
+        val requestTab=tab; val requestPage=page+1; val requestQuery=query; val requestType=library.contentType
+        loadingMore=true; adapter.updateFooter(FOOTER_LOADING)
+        work({
+            when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> repository.search(requestQuery,requestPage,requestType) }
+        }, { result ->
+            loadingMore=false
+            page=requestPage
+            hasMore=result.hasMore
+            result.ranking?.let { r -> ranking=ComicRanking((ranking?.positions.orEmpty())+r.positions,r.totalPages,r.updatedText.ifBlank { ranking?.updatedText.orEmpty() }) }
+            rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果漫剧热播榜" } ?: "来源：红果漫剧热播榜"
+            val known=catalog.mapTo(HashSet()) { it.id }
+            val fresh=result.items.filter { it.id !in known }
+            catalog=catalog+result.items
+            val current=catalogAdapter
+            if(current!=null) {
+                val visible=fresh.filter { tab!=0 || it.id !in library.hidden() }
+                val insertAt=current.displayed.size
+                current.displayed.addAll(visible)
+                if(visible.isNotEmpty()) current.notifyItemRangeInserted(insertAt,visible.size)
+                current.updateFooter(if(hasMore && page<waterfallMaxPages && catalog.size<waterfallMaxPages*20) FOOTER_NONE else FOOTER_END)
             }
-            scroll.post settle@{
-                if(catalogScroll!==scroll) return@settle
-                savedScroll?.let { scroll.scrollTo(0,it) }
-                (cards.firstOrNull { it.hasFocus() }?.parent as? View)?.let { line ->
-                    val y=when {
-                        line.top<scroll.scrollY -> line.top
-                        line.bottom>scroll.scrollY+scroll.height -> if(line.height>=scroll.height) line.top else line.bottom-scroll.height
-                        else -> scroll.scrollY
-                    }
-                    scroll.scrollTo(0,y.coerceAtLeast(0))
+        }, { problem ->
+            loadingMore=false
+            if(problem is SearchSessionExpiredException) {
+                page=1; catalogFocus=""
+                Toast.makeText(this,"搜索结果已过期，已回到第 1 页刷新",Toast.LENGTH_LONG).show()
+                showCatalog(true)
+            } else {
+                Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
+                catalogAdapter?.updateFooter(FOOTER_ERROR)
+            }
+        })
+    }
+    private inner class CardHolder(val card: LinearLayout,val image: ImageView,val rank: TextView,val title: TextView,val badge: TextView): RecyclerView.ViewHolder(card) {
+        var boundId=""
+    }
+    private inner class CatalogAdapter(val displayed: MutableList<Series>): RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        var footer=FOOTER_NONE
+        fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size
+        override fun getItemCount()=displayed.size+if(footer!=FOOTER_NONE) 1 else 0
+        override fun getItemViewType(position: Int)=if(isFooter(position)) TYPE_FOOTER else TYPE_CARD
+        fun updateFooter(next: Int) {
+            if(footer==next) { if(next!=FOOTER_NONE) notifyItemChanged(displayed.size); return }
+            val had=footer!=FOOTER_NONE; footer=next
+            if(next==FOOTER_NONE) notifyItemRemoved(displayed.size)
+            else if(had) notifyItemChanged(displayed.size)
+            else notifyItemInserted(displayed.size)
+        }
+        override fun onCreateViewHolder(parent: ViewGroup,viewType: Int): RecyclerView.ViewHolder {
+            if(viewType==TYPE_FOOTER) {
+                val frame=FrameLayout(this@MainActivity)
+                frame.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
+                return object: RecyclerView.ViewHolder(frame) {}
+            }
+            val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card)
+            val artwork=FrameLayout(this@MainActivity)
+            val image=ImageView(this@MainActivity).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            artwork.addView(image,FrameLayout.LayoutParams(-1,-1))
+            val rank=TextView(this@MainActivity).apply { textSize=11f; setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(4),dp(8),dp(4)) }
+            artwork.addView(rank,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
+            val title=text("",14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
+            val badge=text("",12f).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
+            val gridWidth=parent.width.takeIf { it>0 } ?: (resources.displayMetrics.widthPixels*.9f).toInt()
+            val natural=((gridWidth/gridColumns-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt()
+            val chrome=dp(13)+dp(7)+title.lineHeight*2+maxOf(dp(19),badge.lineHeight)
+            // Reserve room for the end-of-list footer so a focused footer never pushes the last row's badges off screen.
+            val posterHeight=if(parent.height>0) minOf(natural,(parent.height-chrome-dp(52)-dp(4)).coerceAtLeast(dp(48))) else natural
+            card.addView(artwork,lp(-1,posterHeight))
+            card.addView(title,lp(-1,-2))
+            card.addView(badge,lp(-1,-2))
+            card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
+            return CardHolder(card,image,rank,title,badge)
+        }
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
+            if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
+            holder as CardHolder
+            val item=displayed[position]; holder.boundId=item.id
+            val card=holder.card
+            card.tag=item.id; card.contentDescription=item.title
+            loadCover(holder.image,item.cover)
+            val rankPosition=if(tab==2) ranking?.positions?.get(item.id) else null
+            if(tab==2) {
+                val rank=rankPosition?.rank
+                val rankLabel=if(rank!=null) "第 $rank 名" else "名次暂无"
+                val styled=android.text.SpannableString(rankLabel)
+                if(rank!=null) {
+                    val start=rankLabel.indexOf(' ')+1; val end=rankLabel.lastIndexOf(' ')
+                    styled.setSpan(android.text.style.RelativeSizeSpan(1.45f),start,end,0)
+                    styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD),start,end,0)
                 }
-                restoringScroll=false
+                holder.rank.text=styled
+                holder.rank.setTextColor(if(rank==1) white else Color.rgb(24,26,30))
+                holder.rank.background=rounded(if(rank==1) accent else Color.argb(235,255,255,255),6)
+                holder.rank.visibility=View.VISIBLE
+                card.contentDescription="$rankLabel，${item.title}，${rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
+            } else holder.rank.visibility=View.GONE
+            holder.title.text=item.title
+            val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
+            holder.badge.text=if(tab==3) library.favoriteLabel(item.id) else if(tab==2) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.setTextColor(if(tab==2 || tab==3) accent else muted)
+            if(tab==3) favoriteBadges[item.id]=holder.badge
+            card.setOnClickListener { catalogFocus=item.id; openDetail(item,tab==4 || collection=="resume" || collection=="updates") }
+            card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
+            card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
+            card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
+            card.nextFocusUpId=if(position<gridColumns) searchInput?.id ?: collectionBack?.id ?: typeButtons[library.contentType]?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
+        }
+        override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+            (holder as? CardHolder)?.let { h -> if(h.boundId.isNotEmpty() && favoriteBadges[h.boundId]===h.badge) favoriteBadges.remove(h.boundId) }
+        }
+        private fun bindFooter(frame: FrameLayout) {
+            frame.removeAllViews()
+            if(footer==FOOTER_MORE_HOT) {
+                frame.addView(button("下一批热门") { collection=null; collectionReturn=null; page=2; catalogFocus=""; showCatalog(true) },FrameLayout.LayoutParams(-2,-2,Gravity.CENTER))
+                return
             }
+            val label=when(footer) {
+                FOOTER_LOADING -> "正在加载…"
+                FOOTER_ERROR -> "加载失败，继续浏览会自动重试"
+                else -> if(tab==2) "已展示全部 ${displayed.size} 部" else "已加载全部，试试搜索"
+            }
+            val hint=text(label,14f,muted).apply {
+                gravity=Gravity.CENTER; setPadding(0,dp(8),0,dp(8)); isFocusable=true; isFocusableInTouchMode=true
+                setOnFocusChangeListener { _,focused -> setTextColor(if(focused) white else muted) }
+            }
+            frame.addView(hint,FrameLayout.LayoutParams(-1,-2))
         }
     }
     private fun selectionStatus(series: Series): String {
@@ -609,16 +682,19 @@ class MainActivity: Activity() {
         if(screen!="catalog") return
         val home=homeScreen
         if(home!=null) { home.updateShelves(homeShelves(),requestFocus=true); home.refreshSelection(); return }
-        if(removed && (localCatalog() || tab==0)) {
-            val oldIds=catalogCards.keys.toList(); val index=oldIds.indexOf(changedId).coerceAtLeast(0)
-            if(localCatalog()) {
-                catalog=localItems(); page=page.coerceIn(1,maxOf(1,(catalog.size+pageSize-1)/pageSize)); hasMore=page*pageSize<catalog.size
+        val adapter=catalogAdapter
+        if(removed && (localCatalog() || tab==0) && adapter!=null) {
+            val index=adapter.displayed.indexOfFirst { it.id==changedId }
+            if(localCatalog()) catalog=localItems()
+            if(index>=0) {
+                adapter.displayed.removeAt(index)
+                adapter.notifyItemRemoved(index)
+                if(adapter.displayed.isEmpty()) { catalogFocus=""; showCatalog(); return }
+                val next=minOf(index,adapter.displayed.size-1)
+                catalogFocus=adapter.displayed[next].id
+                val recycler=catalogRecycler
+                recycler?.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(next)?.itemView?.requestFocus() }
             }
-            val remaining=if(localCatalog()) catalog.drop((page-1)*pageSize).take(pageSize) else catalog.filterNot { it.id in library.hidden() }
-            catalogFocus=remaining.getOrNull(index.coerceAtMost((remaining.size-1).coerceAtLeast(0)))?.id.orEmpty()
-            val y=catalogScroll?.scrollY ?: 0; scrollPositions[catalogPageKey]=y
-            artwork.cancelPage(); favoriteBadges.clear()
-            catalogBody?.let { body -> body.removeAllViews(); catalogGrid(body,false) }
         } else {
             catalog.firstOrNull { it.id==changedId }?.let { selectionPreview?.show(it,selectionStatus(it)) }
             favoriteBadges[changedId]?.text=library.favoriteLabel(changedId)

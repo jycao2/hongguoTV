@@ -30,6 +30,7 @@ android {
 }
 dependencies {
     implementation("androidx.core:core:1.8.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.google.zxing:core:3.5.3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
