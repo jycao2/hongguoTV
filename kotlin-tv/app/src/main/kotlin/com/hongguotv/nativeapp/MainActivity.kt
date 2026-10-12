@@ -477,8 +477,11 @@ class MainActivity: Activity() {
                 val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
                 val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover); cardImages[item.id]=image to item.cover
                 if(tab==2) {
-                    val rankLabel=position?.rank?.let { "第 $it 名" } ?: "名次暂无"
-                    artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(if((position?.rank ?: Int.MAX_VALUE)<=3) accent else TvStyle.badgeSurface) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
+                    val rank=position?.rank ?: Int.MAX_VALUE
+                    val rankLabel=if(rank<=20) "第 $rank 名" else "名次暂无"
+                    val rankBg=when { rank<=3 -> accent; rank<=10 -> TvStyle.raised; else -> TvStyle.outline }
+                    val rankText=if(rank<=3) white else TvStyle.text
+                    artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setTextColor(rankText); setShadowLayer(4f,1f,1f,Color.BLACK); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(rankBg) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
                     card.contentDescription="$rankLabel，${item.title}，${position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
                 }
                 card.addView(text(item.title,14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) },lp(-1,-2).apply { weight=1f })
