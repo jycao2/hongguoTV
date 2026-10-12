@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parent.parent
 target = Path(sys.argv[1]).resolve()
 def git(*args, cwd=root): return subprocess.check_output(['git', *args], cwd=cwd)
 remote = git('remote', 'get-url', 'origin', cwd=target).decode().strip()
-if remote not in ('git@github.com:N3urda/hongguoTV-updates.git', 'https://github.com/N3urda/hongguoTV-updates.git'):
+if remote not in ('git@github.com:jycao2/hongguoTV-updates.git', 'https://github.com/jycao2/hongguoTV-updates.git'):
     raise SystemExit('Target must be the dedicated public update repository')
 paths = git('ls-tree', '-r', '--name-only', '-z', 'HEAD', '--', 'kotlin-tv', 'LICENSE', 'scripts/build-kotlin.sh', 'server/vendor/hongguo.cjs', 'server/vendor/LICENSE.drpys').decode().split('\0')
 paths = [p for p in paths if p and not p.startswith('kotlin-tv/distribution/')]
@@ -26,7 +26,7 @@ for source, name in [('kotlin-tv/distribution/release.yml', '.github/workflows/r
 (target / '.gitignore').write_text('local.properties\nkeystore.properties\n*.jks\n*.keystore\n.gradle/\n.kotlin/\nbuild/\noutputs/\n')
 (target / 'README.md').write_text('''# 红果 TV · 原生客户端与自动更新
 
-[下载最新版 APK](https://github.com/N3urda/hongguoTV-updates/releases/latest) · [构建状态](https://github.com/N3urda/hongguoTV-updates/actions/workflows/release.yml)
+[下载最新版 APK](https://github.com/jycao2/hongguoTV-updates/releases/latest) · [构建状态](https://github.com/jycao2/hongguoTV-updates/actions/workflows/release.yml)
 
 Android 8.0+，Kotlin / Media3，单 APK，无需部署服务。非官方、自用电视客户端。
 

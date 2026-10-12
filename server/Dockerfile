@@ -1,5 +1,5 @@
 FROM node:22-bookworm-slim
-LABEL org.opencontainers.image.source="https://github.com/N3urda/hongguoTV" \
+LABEL org.opencontainers.image.source="https://github.com/jycao2/hongguoTV" \
       org.opencontainers.image.description="HongguoTV home content bridge" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 WORKDIR /app

@@ -5,7 +5,7 @@ from pathlib import Path
 root=Path.cwd(); out=root/'outputs'; out.mkdir(exist_ok=True)
 def run(*args): return subprocess.check_output(args,text=True).strip()
 version=os.environ['HONGGUOTV_VERSION_NAME']; code=int(os.environ['HONGGUOTV_VERSION_CODE']); tag=os.environ['UPDATE_TAG']
-assert re.fullmatch(r'0\.9\.0\+\d+',version) and re.fullmatch(r'kotlin-v0\.9\.0-build\.\d+',tag)
+assert re.fullmatch(r'0\.9\.1\+\d+',version) and re.fullmatch(r'kotlin-v0\.9\.1-build\.\d+',tag)
 assert code==10000+int(version.split('+')[1])
 apk=out/f'hongguotv-kotlin-{tag.removeprefix("kotlin-v")}-android8.apk'; shutil.copy2(root/'kotlin-tv/app/build/outputs/apk/release/app-release.apk',apk)
 buildtools=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
@@ -51,7 +51,7 @@ for p in assets:
 latest=subprocess.run(['gh','release','view','--json','tagName'],text=True,capture_output=True)
 make_latest=True
 if latest.returncode==0:
- m=re.fullmatch(r'kotlin-v0\.9\.0-build\.(\d+)',json.loads(latest.stdout)['tagName'])
+ m=re.fullmatch(r'kotlin-v0\.9\.1-build\.(\d+)',json.loads(latest.stdout)['tagName'])
  if m and int(m[1])>int(version.split('+')[1]): make_latest=False
 run('gh','release','edit',tag,'--draft=false','--latest='+str(make_latest).lower(),'--notes-file',str(notes))
 print(json.dumps({'tag':tag,'version_code':code,'sha256':manifest['apk']['sha256']}))

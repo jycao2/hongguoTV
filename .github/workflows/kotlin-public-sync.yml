@@ -30,7 +30,7 @@ jobs:
       - name: Export approved native sources and push
         run: |
           set -euo pipefail
-          git clone --depth 1 git@github.com:N3urda/hongguoTV-updates.git "$RUNNER_TEMP/public-tv"
+          git clone --depth 1 git@github.com:jycao2/hongguoTV-updates.git "$RUNNER_TEMP/public-tv"
           python3 scripts/sync-kotlin-public.py "$RUNNER_TEMP/public-tv"
           cd "$RUNNER_TEMP/public-tv"
           git config user.name 'hongguoTV release'

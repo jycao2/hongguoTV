@@ -1,6 +1,6 @@
 services:
   bridge:
-    image: ghcr.io/n3urda/hongguotv-bridge:${HONGGUOTV_VERSION:-0.1.1}
+    image: ghcr.io/jycao2/hongguotv-bridge:${HONGGUOTV_VERSION:-0.1.1}
     ports:
       - "${BRIDGE_BIND_IP:-0.0.0.0}:${BRIDGE_PORT:-8787}:8787"
     environment:

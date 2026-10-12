@@ -27,7 +27,7 @@ HONGGUOTV_VERSION=0.1.1
 
 ## 使用 GitHub 预构建镜像
 
-镜像地址：`ghcr.io/n3urda/hongguotv-bridge:0.1.1`，同时提供 `latest`。根目录的 `compose.yaml` 默认固定到 `0.1.1`，Docker 根据宿主机架构选择镜像。
+镜像地址：`ghcr.io/jycao2/hongguotv-bridge:0.1.1`，同时提供 `latest`。根目录的 `compose.yaml` 默认固定到 `0.1.1`，Docker 根据宿主机架构选择镜像。
 
 当前仓库与容器包按私有访问使用，需要有包读取权限的 GitHub 账号先登录 GHCR。可使用 classic PAT 的 `read:packages` 权限；通过 Docker 的交互式密码提示输入，不要把令牌写入命令历史或 Compose 文件：
 
