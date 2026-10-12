@@ -10,7 +10,8 @@ assert code==10000+int(version.split('+')[1])
 apk=out/f'hongguotv-kotlin-{tag.removeprefix("kotlin-v")}-android8.apk'; shutil.copy2(root/'kotlin-tv/app/build/outputs/apk/release/app-release.apk',apk)
 buildtools=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
 signature=run(str(buildtools/'apksigner'),'verify','--print-certs',str(apk))
-assert '3579f7a8a91bbbc44688db60fb16a5561921784af23fa92f39b849086d76ca98' in signature
+# Original release key was lost; channel re-keyed 2026-10. Installed builds must be reinstalled once.
+assert '35f31788e416d7f6f690b595cba379697803a7e0f7626f7ea69677adac231bf5' in signature
 badging=run(str(buildtools/'aapt'),'dump','badging',str(apk))
 assert f"versionCode='{code}'" in badging and f"versionName='{version}'" in badging and "sdkVersion:'26'" in badging
 commit=run('git','rev-parse','HEAD')
