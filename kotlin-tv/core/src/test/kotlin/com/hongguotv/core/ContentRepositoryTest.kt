@@ -270,4 +270,34 @@ class ContentRepositoryTest {
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(2,paths.size)
     }
+
+    private fun relatedItem(id: String,name: String)=JSONObject().put("series_id",id).put("series_name",name)
+        .put("series_cover","https://example.com/$id.jpg").put("episode_cnt",10).put("episode_right_text","全 10 集")
+    private fun detailHtml(series: JSONObject,recommended: JSONArray): String {
+        val recommendations=JSONObject().put("videoList",JSONArray())
+            .put("recommendationGroups",JSONObject().put("related_list",recommended))
+        val args=JSONArray().put("detail_page").put(JSONArray().put(JSONObject().put("key","recommendations")
+            .put("routerDataFnName","p").put("routerDataFnArgs",JSONArray().put(recommendations.toString()))))
+        val attribute=args.toString().replace("&","&amp;").replace("\"","&quot;")
+        return """<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script><script data-fn-args="$attribute"></script>"""
+    }
+
+    @Test fun detailRelatedHoistsSameNameSeasonsAndSkipsCurrentSeries() {
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("vid_list",JSONArray().put("900").put("901"))
+        val html=detailHtml(series,JSONArray()
+            .put(relatedItem("111","别人的剧"))
+            .put(relatedItem("222","测试剧"))
+            .put(relatedItem("333","测试剧 第二季"))
+            .put(relatedItem("123","测试剧")))
+        val detail=repository { html }.detail("123")
+        assertEquals(listOf("900","901"),detail.episodes)
+        assertEquals(listOf("222","333","111"),detail.related.map { it.id })
+    }
+
+    @Test fun detailWithoutRecommendationPayloadStillLoadsEpisodes() {
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":{"series_id":"123","series_name":"测试剧","vid_list":["900","901"]}}}};</script>"""
+        val detail=repository { html }.detail("123")
+        assertEquals(listOf("900","901"),detail.episodes)
+        assertTrue(detail.related.isEmpty())
+    }
 }

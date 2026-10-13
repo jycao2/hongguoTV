@@ -17,7 +17,7 @@ data class Series(val id: String, val title: String, val cover: String = "", val
     fun toJson() = JSONObject().put("id",id).put("title",title).put("cover",cover).put("description",description).put("badge",badge).put("tags",tags)
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),o.str("title"),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
 }
-data class Detail(val series: Series, val episodes: List<String>)
+data class Detail(val series: Series, val episodes: List<String>, val related: List<Series> = emptyList())
 data class RankPosition(val rank: Int?, val heat: String)
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)
 data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null)
@@ -126,12 +126,40 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val o=router("$site/detail?series_id=$id").optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
+        val html=text("$site/detail?series_id=$id")
+        val loader=extractRouter(html).getJSONObject("loaderData")
+        val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
         val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
         val episodes=(0 until raw.length()).map { raw.getString(it) }
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
-        return Detail(card(o).copy(id=id),episodes)
+        val series=card(o).copy(id=id)
+        return Detail(series,episodes,related(html,series))
     }
+    // The detail page embeds its recommendation payload as an HTML-escaped JSON array inside the
+    // `data-fn-args` attribute, separate from _ROUTER_DATA. Same-name entries (other seasons) sort first.
+    private fun related(html: String,current: Series): List<Series> {
+        val marker="data-fn-args=\""
+        val start=html.indexOf(marker); if(start<0) return emptyList()
+        val from=start+marker.length; val end=html.indexOf('"',from); if(end<0) return emptyList()
+        val args=runCatching {
+            JSONArray(decodeEntities(html.substring(from,end)))
+                .optJSONArray(1)?.optJSONObject(0)?.optJSONArray("routerDataFnArgs")?.optString(0).orEmpty()
+        }.getOrNull() ?: return emptyList()
+        if(args.isEmpty()) return emptyList()
+        val groups=runCatching { JSONObject(args).optJSONObject("recommendationGroups") }.getOrNull() ?: return emptyList()
+        val rows=groups.optJSONArray("related_list") ?: groups.optJSONArray("hot_list") ?: return emptyList()
+        val items=valid(rows.objects().map(::card)).filter { it.id!=current.id }
+        val key=current.title.trim()
+        if(key.isEmpty()) return items
+        return items.sortedBy { item ->
+            when {
+                item.title.equals(key,ignoreCase=true) -> 0
+                item.title.startsWith(key) || key.startsWith(item.title) -> 1
+                else -> 2
+            }
+        }
+    }
+    private fun decodeEntities(value: String) = value.replace("&quot;","\"").replace("&lt;","<").replace("&gt;",">").replace("&#39;","'").replace("&amp;","&")
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
         VendorConstants.regenerate()

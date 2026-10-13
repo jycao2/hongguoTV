@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
 import android.app.Activity
@@ -900,7 +900,50 @@ class MainActivity: Activity() {
             repeat(10-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
             content.addView(line,lp(-1,dp(49)))
         }
-        episodes.forEachIndexed { i,v -> v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id; v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id; if(i>=10) v.nextFocusUpId=episodes[i-10].id; v.nextFocusDownId=if(i+10<episodes.size) episodes[i+10].id else v.id }
+        val relatedCards=mutableListOf<View>()
+        if(data.related.isNotEmpty()) {
+            val section=column()
+            val heading=row(); heading.setPadding(0,dp(20),0,dp(9))
+            heading.addView(View(this).apply { background=TvStyle.shape(this@MainActivity,TvStyle.accent,radius=2) },lp(dp(3),dp(14)).apply { rightMargin=dp(8) })
+            heading.addView(text("相关推荐",16f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            heading.addView(text("左右查看更多",10f,muted))
+            section.addView(heading)
+            val horizontal=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
+            val line=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.TOP }
+            val width=((resources.displayMetrics.widthPixels*.9f-dp(70))/6).toInt().coerceAtLeast(dp(100))
+            val posterHeight=((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
+            data.related.take(12).forEach { series ->
+                val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; id=View.generateViewId(); isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(4),dp(4),dp(4),dp(8)); background=TvStyle.card(this@MainActivity,false); contentDescription="相关推荐，${series.title}" }
+                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+                card.addView(image,lp(-1,posterHeight))
+                card.addView(text(series.title,14f).apply { minLines=2; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(5),dp(3),0) })
+                card.addView(text(series.badge.ifBlank { series.tags },12f,muted).apply { minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(2),0,0) })
+                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) loadCover(image,series.cover) }
+                card.setOnClickListener { openDetail(series) }
+                if(relatedCards.size<6) loadCover(image,series.cover)
+                line.addView(card,lp(width,-2).apply { rightMargin=dp(14) })
+                relatedCards+=card
+            }
+            horizontal.addView(line); section.addView(horizontal)
+            content.addView(section,lp(-1,-2).apply { topMargin=dp(4) })
+        }
+        val lastRowStart=((episodes.size-1)/10)*10
+        episodes.forEachIndexed { i,v ->
+            v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id
+            v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id
+            if(i>=10) v.nextFocusUpId=episodes[i-10].id
+            v.nextFocusDownId=when {
+                i+10<episodes.size -> episodes[i+10].id
+                relatedCards.isNotEmpty() && i>=lastRowStart -> relatedCards[(i-lastRowStart).coerceAtMost(relatedCards.lastIndex)].id
+                else -> v.id
+            }
+        }
+        relatedCards.forEachIndexed { i,v ->
+            v.nextFocusLeftId=relatedCards[(i-1).coerceAtLeast(0)].id
+            v.nextFocusRightId=relatedCards[(i+1).coerceAtMost(relatedCards.lastIndex)].id
+            v.nextFocusUpId=episodes.getOrNull((lastRowStart+i).coerceAtMost(episodes.lastIndex))?.id ?: play.id
+            v.nextFocusDownId=v.id
+        }
         if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
