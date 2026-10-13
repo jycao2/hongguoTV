@@ -1,17 +1,22 @@
 // Derived from drpys 22261ad; GPL-3.0. See kotlin-tv/NOTICE.md.
 package com.hongguotv.core
 
+import java.util.Base64
 import kotlin.random.Random
 
 internal object VendorConstants {
     const val VIDEO_UA = "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
     const val APP_UA = "com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)"
-    // 进程级随机设备身份：原硬编码身份（iid 1905892595382586 / device_id 1905892595378490）来自公开抓包样本，
-    // 已被平台封禁（播放接口 Code 110001、签名搜索接口空响应）。每次启动生成新身份避免共享身份被连坐；
+    // 设备身份与进程指纹：原硬编码值来自公开抓包样本，已被平台封禁。
+    // 现每次 API 调用前由 ContentRepository 调用 regenerate() 刷新，避免同一身份被连坐。
     // var 以便测试固定身份、复现确定性签名。
     var installIid: String = randomInstallId()
     var installDeviceId: String = randomInstallId()
+    var processNonce: String = randomNonce()
+    var processStarted: Long = System.currentTimeMillis()
+    fun regenerate() { installIid = randomInstallId(); installDeviceId = randomInstallId(); processNonce = randomNonce(); processStarted = System.currentTimeMillis() }
     private fun randomInstallId(): String = buildString(16) { append('1'); repeat(15) { append(Random.nextInt(10)) } }
+    private fun randomNonce(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(Random.nextBytes(18))
     val device: Map<String, String>
         get() = linkedMapOf(
         "iid" to installIid,

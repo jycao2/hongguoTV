@@ -85,6 +85,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         return CatalogPage(items,items.isNotEmpty() && page<100)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
+        VendorConstants.regenerate()
         val values=VendorConstants.device.toMutableMap()
         for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
         values["version_name"]="7.2.2.32"
@@ -133,6 +134,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
+        VendorConstants.regenerate()
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/",VendorConstants.device,payload)
         val data=JSONObject(text(signed.url,signed))

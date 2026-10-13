@@ -5,9 +5,11 @@ import org.junit.Before
 import org.junit.Test
 class SignerTest {
     @Before fun pinIdentity() {
-        // 预言机按原抓包身份生成；运行时身份已改为进程级随机（原身份被平台封禁）
+        // 预言机按原抓包身份生成；运行时身份已改为每次 API 调用前随机（原身份被平台封禁）
         VendorConstants.installIid = "1905892595382586"
         VendorConstants.installDeviceId = "1905892595378490"
+        VendorConstants.processNonce = "Ai6svO3PyrwDOUSmO6ZcResxu"
+        VendorConstants.processStarted = 1728388016635L
     }
     @Test fun matchesPinnedJavaScriptOracleAcrossTimestampVariants() {
         val rows = JSONArray(javaClass.getResource("/signing.json")!!.readText())
