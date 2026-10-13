@@ -1,4 +1,4 @@
-import java.util.Properties
+﻿import java.util.Properties
 
 plugins { id("com.android.application"); kotlin("android") }
 val signingProperties = Properties().apply { val config = rootProject.file("keystore.properties"); if (config.exists()) config.inputStream().use { load(it) } }
@@ -11,8 +11,8 @@ android {
         applicationId = "com.hongguotv.nativeapp"
         minSdk = 26
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 11
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.9.2"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.9.3"
     }
     buildFeatures { buildConfig = true }
     signingConfigs {
