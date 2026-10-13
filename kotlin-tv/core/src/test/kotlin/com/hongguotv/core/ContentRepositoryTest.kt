@@ -163,7 +163,7 @@ class ContentRepositoryTest {
         val requests=mutableListOf<Request>()
         val repo=repository { request ->
             requests+=request
-            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(11,"999")
                 .put("search_id","comic-session").put("passback","comic-cursor").put("next_offset",25))).toString()
             else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"203"}}]}}};</script>"""
         }
@@ -182,7 +182,7 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository(clock={ now }) { request ->
             requests++
-            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(11,"999")
                 .put("search_id","session").put("passback","cursor"))).toString()
             else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"203"}}]}}};</script>"""
         }
@@ -232,11 +232,11 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository { request ->
             requests++
-            assertEquals("19",request.url.queryParameter("tab_type"))
+            assertEquals("11",request.url.queryParameter("tab_type"))
             assertEquals(if(requests==1) "0" else "20",request.url.queryParameter("offset"))
             assertEquals("修仙",request.url.queryParameter("query"))
             JSONObject().put("code",0).put("search_tabs",JSONArray()
-                .put(searchTab(11,"111")).put(searchTab(19,"999"))).toString()
+                .put(searchTab(19,"111")).put(searchTab(11,"999"))).toString()
         }
         repo.search("修仙",1,ContentType.COMIC)
         assertEquals(listOf("999"),repo.search("修仙",2,ContentType.COMIC).items.map { it.id })
@@ -244,7 +244,7 @@ class ContentRepositoryTest {
 
     @Test fun emptyComicSearchDoesNotFallBackToShortResults() {
         var requests=0
-        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":19,"data":[],"has_more":false}]}""" }
+        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":11,"data":[],"has_more":false}]}""" }
         assertTrue(repo.search("无结果",1,ContentType.COMIC).items.isEmpty())
         assertEquals(1,requests)
     }
@@ -253,7 +253,7 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository { request ->
             requests++
-            if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}"""
+            if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":19,"data":[]}]}"""
             else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}}]}}};</script>"""
         }
         assertTrue(repo.search("修仙",1,ContentType.COMIC).items.isEmpty())
@@ -299,5 +299,20 @@ class ContentRepositoryTest {
         val detail=repository { html }.detail("123")
         assertEquals(listOf("900","901"),detail.episodes)
         assertTrue(detail.related.isEmpty())
+    }
+
+    @Test fun detailCollectsSameNameSeasonsFromWebsiteSearchOrderedBySeason() {
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧 第二季").put("vid_list",JSONArray().put("900"))
+        val repo=repository { request ->
+            if(request.url.encodedPath=="/detail") detailHtml(series,JSONArray())
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[
+                {"video_data":{"series_id":"222","series_name":"测试剧 第三季","genre":"203"}},
+                {"video_data":{"series_id":"111","series_name":"别人的剧","genre":"203"}},
+                {"video_data":{"series_id":"333","series_name":"测试剧 第一季","genre":"203"}},
+                {"video_data":{"series_id":"444","series_name":"测试剧 第十季","genre":"203"}},
+                {"video_data":{"series_id":"123","series_name":"测试剧 第二季","genre":"203"}}]}}};</script>"""
+        }
+        val detail=repo.detail("123")
+        assertEquals(listOf("333","222","444"),detail.sameName.map { it.id })
     }
 }

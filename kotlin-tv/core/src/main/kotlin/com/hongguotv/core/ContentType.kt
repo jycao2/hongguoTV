@@ -2,8 +2,8 @@
 package com.hongguotv.core
 
 enum class ContentType(val storedValue: String, val label: String, val searchTab: Int) {
-    COMIC("comic","漫剧",19),
-    SHORT("short","短剧",11);
+    COMIC("comic","漫剧",11),
+    SHORT("short","短剧",19);
 
     companion object {
         fun fromStored(value: String?) = entries.firstOrNull { it.storedValue==value } ?: COMIC
