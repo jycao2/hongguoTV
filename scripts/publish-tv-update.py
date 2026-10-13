@@ -44,8 +44,8 @@ sha_path = os.path.join(OUTPUTS, "SHA256SUMS")
 with open(sha_path, "w") as f:
     f.write(f"{sha256}  {APK_NAME}\n")
 
-subprocess.run(["gh", "release", "create", TAG, "--title", TAG, "--notes",
-    f"hongguoTV {VERSION_NAME}\n\n{notes}", "--latest"], check=True)
+subprocess.run(["gh", "release", "create", TAG, "--title", f"红果 TV {VERSION_NAME}", "--notes",
+    f"红果 TV {VERSION_NAME}\n\n{notes}", "--latest"], check=True)
 for asset in [apk_path, json_path, sha_path]:
     subprocess.run(["gh", "release", "upload", TAG, asset, "--clobber"], check=True)
 print(f"Published {TAG}: {APK_NAME} ({size} bytes, sha256={sha256[:16]}...)")
