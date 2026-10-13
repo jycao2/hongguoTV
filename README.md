@@ -2,9 +2,9 @@
 
 当前分支提供 **Kotlin 原生独立 APK**：安装后联网即可使用，无需 Node / Docker。最低 Android 8.0，电视遥控器操作。
 
-**[下载原生版 APK](https://github.com/jycao2/hongguoTV-updates/releases/latest)** · [原生版说明与构建](kotlin-tv/README.md)
+**[下载原生版 APK](https://github.com/jycao2/hongguoTV/releases/latest)** · [原生版说明与构建](kotlin-tv/README.md)
 
-0.9.0 增加应用内更新：推送原生代码后自动同步至公开发布仓库、构建签名 APK；电视在浏览时检查并下载新版，确认系统安装即可，无需逐次传文件。播放中不检查，覆盖安装保留本机记录。见 [自动更新说明](kotlin-tv/AUTO_UPDATES.md)。
+当前原生版为 0.9.3，支持应用内更新：推送 main 后 CI 自动构建、签名并发布到本仓库 Release，按提交记录自动生成更新日志；电视在浏览时检查并下载新版，确认系统安装即可，无需逐次传文件。播放中不检查，覆盖安装保留本机记录。原生版另具备双系统风格（深夜影院 / 暖玉白）、详情页同名剧情推荐、清理缓存、片库瀑布流等功能，见 [自动更新说明](kotlin-tv/AUTO_UPDATES.md) 和各版本更新记录。
 
 原生工程位于 `kotlin-tv/`，包名 `com.hongguotv.nativeapp`，可与旧版并存。以下为保留的 React Native 版说明。
 
