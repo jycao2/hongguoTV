@@ -74,7 +74,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             return webSearch(keyword,page,COMIC_WEB_GENRE)
         }
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
-        return webSearch(keyword,page,null)
+        return webSearch(keyword,page,SHORT_WEB_GENRE)
     }
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
         val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
@@ -211,8 +211,10 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         return StreamInfo(url,key,quality)
     }
     companion object {
-        // Website search mixes genres; video_data.genre 203 marks 漫剧 (205 is 短剧), observed 2026-10.
-        private const val COMIC_WEB_GENRE="203"
+        // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
+        // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
+        private const val COMIC_WEB_GENRE="205"
+        private const val SHORT_WEB_GENRE="203"
         private val SeasonPattern=Regex("第([0-9零〇一二三四五六七八九十百千]+)(?:季|部)")
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")

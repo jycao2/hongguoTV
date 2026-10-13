@@ -163,9 +163,9 @@ class ContentRepositoryTest {
         val requests=mutableListOf<Request>()
         val repo=repository { request ->
             requests+=request
-            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(11,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","comic-session").put("passback","comic-cursor").put("next_offset",25))).toString()
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"203"}}]}}};</script>"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"205"}}]}}};</script>"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         repo.search("修仙",2,ContentType.COMIC)
@@ -182,9 +182,9 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository(clock={ now }) { request ->
             requests++
-            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(11,"999")
+            if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","session").put("passback","cursor"))).toString()
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"203"}}]}}};</script>"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"205"}}]}}};</script>"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         now=300001L
@@ -198,20 +198,20 @@ class ContentRepositoryTest {
     @Test fun comicSearchFallsBackToWebsiteAndKeepsOnlyComicGenreRows() {
         val repo=repository { request ->
             if(request.url.host.endsWith("fqnovel.com")) ""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"203"}}]}}};</script>"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}}};</script>"""
         }
         val result=repo.search("修仙",1,ContentType.COMIC)
         assertEquals(listOf("222"),result.items.map { it.id })
         assertTrue(result.hasMore)
     }
 
-    @Test fun shortSearchFallsBackToWebsiteWithoutGenreFilter() {
+    @Test fun shortSearchFallsBackToWebsiteAndKeepsOnlyShortGenreRows() {
         val repo=repository { request ->
             if(request.url.host.endsWith("fqnovel.com")) ""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"203"}}]}}};</script>"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}}};</script>"""
         }
         val result=repo.search("总裁",1,ContentType.SHORT)
-        assertEquals(listOf("111","222"),result.items.map { it.id })
+        assertEquals(listOf("111"),result.items.map { it.id })
     }
 
     @Test fun shortHomeStillUsesCategoryAndStopsOnLastPage() {
@@ -232,11 +232,11 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository { request ->
             requests++
-            assertEquals("11",request.url.queryParameter("tab_type"))
+            assertEquals("19",request.url.queryParameter("tab_type"))
             assertEquals(if(requests==1) "0" else "20",request.url.queryParameter("offset"))
             assertEquals("修仙",request.url.queryParameter("query"))
             JSONObject().put("code",0).put("search_tabs",JSONArray()
-                .put(searchTab(19,"111")).put(searchTab(11,"999"))).toString()
+                .put(searchTab(11,"111")).put(searchTab(19,"999"))).toString()
         }
         repo.search("修仙",1,ContentType.COMIC)
         assertEquals(listOf("999"),repo.search("修仙",2,ContentType.COMIC).items.map { it.id })
@@ -244,7 +244,7 @@ class ContentRepositoryTest {
 
     @Test fun emptyComicSearchDoesNotFallBackToShortResults() {
         var requests=0
-        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":11,"data":[],"has_more":false}]}""" }
+        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":19,"data":[],"has_more":false}]}""" }
         assertTrue(repo.search("无结果",1,ContentType.COMIC).items.isEmpty())
         assertEquals(1,requests)
     }
@@ -253,8 +253,8 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository { request ->
             requests++
-            if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":19,"data":[]}]}"""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"205"}}]}}};</script>"""
+            if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}}]}}};</script>"""
         }
         assertTrue(repo.search("修仙",1,ContentType.COMIC).items.isEmpty())
         assertEquals(2,requests)
@@ -265,7 +265,7 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             paths+=request.url.encodedPath
             if(paths.size==1) throw IOException("offline")
-            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"456","series_name":"测试短剧"}]}}}};</script>"""
+            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"456","series_name":"测试短剧","genre":"203"}]}}}};</script>"""
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(2,paths.size)
