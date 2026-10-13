@@ -141,7 +141,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.9.3-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.9.4-android8.apk
 ```
 
 ## 工程结构
