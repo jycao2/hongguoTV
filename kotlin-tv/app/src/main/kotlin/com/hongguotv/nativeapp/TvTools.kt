@@ -18,6 +18,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.hongguotv.core.EpisodeTarget
 import com.hongguotv.core.PhoneSearchServer
 import com.hongguotv.core.LibraryTransferServer
+import com.hongguotv.core.BackdropTransferServer
 import com.hongguotv.core.BackupData
 import java.net.Inet4Address
 import java.util.concurrent.Executors
@@ -160,6 +161,32 @@ class TvTools(private val activity: Activity) {
                     instructions.addView(label(session.url,12f)); row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
                 }
             } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启备份传输，请检查网络后重试。" } }
+        }
+    }
+    fun backdropTransfer(anchor: View?,onImage: (ByteArray,String)->Unit) {
+        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
+        val network=connectivity.activeNetwork; val capabilities=connectivity.getNetworkCapabilities(network)
+        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
+        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+            info("自定义背景","请让电视和手机连接同一无线网后重试。",anchor); return
+        }
+        val content=column(); val status=label("正在生成二维码…"); content.addView(status)
+        val next=AlertDialog.Builder(activity).setTitle("自定义背景").setView(ScrollView(activity).apply { addView(content) }).setNegativeButton("关闭",null).create()
+        open(next,anchor)
+        worker.execute {
+            try {
+                val session=BackdropTransferServer(address,{ bytes,ext -> main.post { if(dialog===next) next.dismiss(); onImage(bytes,ext) } },
+                    { main.post { if(dialog===next) { content.removeAllViews(); content.addView(label("二维码已过期，请关闭后重新打开。")) } } })
+                main.post {
+                    if(dialog!==next) { session.close(); return@post }
+                    phone=session; content.removeAllViews()
+                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
+                    val instructions=column()
+                    instructions.addView(label("手机扫码，或用浏览器打开下方地址，上传图片设为电视背景。\n手机和电视需连接同一无线网；关闭窗口即失效，最长 5 分钟。",16f))
+                    instructions.addView(label(session.url,12f)); row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                }
+            } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启图片上传，请检查网络后重试。" } }
         }
     }
 }

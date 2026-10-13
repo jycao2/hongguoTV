@@ -315,4 +315,92 @@ class ContentRepositoryTest {
         val detail=repo.detail("123")
         assertEquals(listOf("333","222","444"),detail.sameName.map { it.id })
     }
+
+    private fun currentRealRank(payload: JSONObject) = script("mergeLoaderData",JSONArray()
+        .put("rank_hot-real-drama/page").put(JSONArray().put(JSONObject().put("key","content")
+            .put("routerDataFnName","p").put("routerDataFnArgs",JSONArray().put(payload.toString())))))
+
+    @Test fun realRankingParsesTheShortDramaBoard() {
+        val payload=rankPayload(1,5)
+        payload.getJSONArray("rankList").getJSONObject(0).put("rank",1).put("heatText","9999万热度")
+        val repo=repository { request ->
+            assertEquals("/rank/hot-real-drama",request.url.encodedPath)
+            """<script>_ROUTER_DATA={"loaderData":{"rank_hot-real-drama/page":{"rankKey":"real","pageNum":1,"updatedText":"今日已更新"}}};</script>"""+currentRealRank(payload)
+        }
+        val result=repo.realRanking(1)
+        assertNotNull(result.ranking)
+        assertEquals(RankPosition(1,"9999万热度"),result.ranking!!.positions["123"])
+        assertEquals("今日已更新",result.ranking!!.updatedText)
+        assertTrue(result.hasMore)
+    }
+
+    @Test fun realRankingRejectsTheComicBoardPayload() {
+        val repo=repository { currentRank(rankPayload()) }
+        assertThrows(IOException::class.java) { repo.realRanking(1) }
+    }
+
+    @Test fun renderedRealRankingWorksWithoutStreamedPayload() {
+        val repo=repository {
+            """<script>_ROUTER_DATA={"loaderData":{"rank_hot-real-drama/page":{"rankKey":"real","pageNum":2,"updatedText":"今日已更新"}}};</script>
+                <article aria-labelledby="rank-title-456"><span class="pc-badge-number-example">22</span>
+                <h2 id="rank-title-456">短剧</h2><p class="pc-metrics-example"><span>100万热度</span></p></article>
+                <nav aria-label="榜单分页"><a href="/rank/hot-real-drama">1</a><span aria-current="page">2</span><a href="/rank/hot-real-drama?page=5">5</a></nav>"""
+        }
+        val result=repo.realRanking(2)
+        assertEquals(RankPosition(22,"100万热度"),result.ranking!!.positions["456"])
+        assertEquals(5,result.ranking!!.totalPages)
+        assertEquals("今日已更新",result.ranking!!.updatedText)
+    }
+
+    private fun selector(slug: String,name: String,vararg ids: String)=JSONObject().put("selector_item_id",slug).put("show_name",name)
+        .put("category_json_ids",JSONArray().apply { ids.forEach { put(it) } })
+
+    private fun categoryHtml(recommendList: JSONArray = JSONArray(),selectorList: JSONArray? = null,apiIds: JSONArray? = null,totalPages: Int = 1): String {
+        val section=JSONObject().put("recommendList",recommendList).put("pagination",JSONObject().put("totalPages",totalPages))
+        if(selectorList!=null) section.put("selectorList",selectorList)
+        if(apiIds!=null) section.put("apiQuery",JSONObject().put("category_json_ids",apiIds))
+        return """<script>_ROUTER_DATA={"loaderData":{"category_$":${section}}};</script>"""
+    }
+
+    @Test fun genresComeFromTheCategorySelectorAndAreCached() {
+        var requests=0
+        val repo=repository { request ->
+            requests++
+            assertEquals("/category/real-drama",request.url.encodedPath)
+            categoryHtml(selectorList=JSONArray().put(JSONObject().put("row_name","全部分类").put("items",JSONArray()
+                .put(selector("romance","爱情","5000")).put(selector("costume","古装","5007")))))
+        }
+        val genres=repo.genres(ContentType.SHORT)
+        assertEquals(listOf("romance","costume"),genres.map { it.slug })
+        assertEquals(listOf("爱情","古装"),genres.map { it.name })
+        assertEquals(listOf("5000"),genres.first().ids)
+        assertEquals(genres,repo.genres(ContentType.SHORT))
+        assertEquals(1,requests)
+    }
+
+    @Test fun genreHomeUsesTheSlugPathAndValidatesAppliedIds() {
+        val rows=JSONArray().put(JSONObject().put("series_id","456").put("series_name","爱情短剧"))
+        val repo=repository { request ->
+            assertEquals("/category/real-drama/romance",request.url.encodedPath)
+            assertEquals("2",request.url.queryParameter("page"))
+            categoryHtml(rows,apiIds=JSONArray().put("5000"),totalPages=9)
+        }
+        val page=repo.home(2,ContentType.SHORT,Genre("romance","爱情",listOf("5000")))
+        assertEquals("456",page.items.single().id)
+        assertTrue(page.hasMore)
+    }
+
+    @Test fun genreHomeFailsWhenTheSiteIgnoresTheFilter() {
+        val repo=repository { categoryHtml(apiIds=JSONArray()) }
+        assertThrows(IOException::class.java) { repo.home(1,ContentType.SHORT,Genre("romance","爱情",listOf("5000"))) }
+    }
+
+    @Test fun comicGenresUseTheComicCategoryPath() {
+        val rows=JSONArray().put(JSONObject().put("series_id","789").put("series_name","脑洞漫剧"))
+        val repo=repository { request ->
+            assertEquals("/category/comic-drama/creative",request.url.encodedPath)
+            categoryHtml(rows,apiIds=JSONArray().put("755"))
+        }
+        assertEquals("789",repo.home(1,ContentType.COMIC,Genre("creative","脑洞",listOf("755"))).items.single().id)
+    }
 }

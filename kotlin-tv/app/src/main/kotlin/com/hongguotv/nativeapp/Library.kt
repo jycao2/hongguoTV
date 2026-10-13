@@ -165,6 +165,16 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    // Per-series intro/outro skips stay on this device, outside the backup, like the theme.
+    private var marksCache: LinkedHashMap<String, SkipMark>? = null
+    private fun marks(): LinkedHashMap<String, SkipMark> =
+        marksCache ?: SkipMarks.decode(prefs.getString("skipMarks", null)).also { marksCache = it }
+    fun skipMark(id: String): SkipMark? = marks()[id]
+    fun setSkipMark(id: String, mark: SkipMark?) {
+        val next = SkipMarks.set(marks(), id, mark)
+        marksCache = next
+        prefs.edit().putString("skipMarks", SkipMarks.encode(next)).apply()
+    }
     fun snapshot() = state().snapshot()
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
