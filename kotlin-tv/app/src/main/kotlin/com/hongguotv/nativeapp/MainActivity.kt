@@ -1432,7 +1432,11 @@ class MainActivity: Activity() {
             main.post {
                 if(isDestroyed) return@post
                 if(bitmap==null) { Toast.makeText(this@MainActivity,"图片无法使用，请换一张试试",Toast.LENGTH_LONG).show(); return@post }
-                backdropBitmap=bitmap; backdropView?.setImageBitmap(bitmap)
+                backdropBitmap=bitmap
+                backdropView?.let {
+                    if(it.parent==null && screen!="player") root.addView(it,0,FrameLayout.LayoutParams(-1,-1))
+                    it.setImageBitmap(bitmap)
+                }
                 Toast.makeText(this@MainActivity,"背景已更新",Toast.LENGTH_SHORT).show()
             }
         }
