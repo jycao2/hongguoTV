@@ -36,8 +36,8 @@ class BackdropTransferServerTest {
         assertNull(BackdropTransferServer.imageType(byteArrayOf(1,2)))
     }
     @Test fun `wrong type foreign origin duplicate headers and bad magic do not consume the session`() {
-        var uploaded=false
-        BackdropTransferServer("127.0.0.1",{ _,_ -> uploaded=true }).use { server ->
+        val latch=CountDownLatch(1); var uploaded=false
+        BackdropTransferServer("127.0.0.1",{ _,_ -> uploaded=true; latch.countDown() }).use { server ->
             assertTrue(request(server,host="evil.example").startsWith("HTTP/1.1 404"))
             assertTrue(request(server,"/wrong").startsWith("HTTP/1.1 404"))
             assertTrue(request(server,"/upload",png,"Origin: http://evil.example\r\n").startsWith("HTTP/1.1 403"))
@@ -47,7 +47,7 @@ class BackdropTransferServerTest {
             assertTrue(request(server,"/upload",ByteArray(64)).startsWith("HTTP/1.1 400"))
             assertFalse(uploaded)
             assertTrue(request(server,"/upload",jpg).startsWith("HTTP/1.1 200"))
-            assertTrue(uploaded)
+            assertTrue(latch.await(2,TimeUnit.SECONDS)); assertTrue(uploaded)
         }
     }
     @Test fun `oversized uploads are rejected and expiry closes idle sessions`() {
