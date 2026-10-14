@@ -25,7 +25,7 @@ def changelog():
         return "本次为重新构建，无新增提交。"
     return f"更新日志（自 {base} 起）：\n{log}" if base else f"更新日志：\n{log}"
 
-notes = changelog()
+notes = os.environ.get("RELEASE_NOTES", "").strip() or changelog()
 manifest = {
     "schema": 1,
     "packageName": "com.hongguotv.nativeapp",
