@@ -34,8 +34,19 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.9.4+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.9.4-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.10.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.10.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          {
+            echo "RELEASE_NOTES<<RELEASE_NOTES_END"
+            echo "- 新增短剧热播榜，排行榜页支持漫剧/短剧切换"
+            echo "- 新增题材浏览，首页可按题材筛选短剧与漫剧"
+            echo "- 新增片头片尾跳过，按剧记忆，开播自动跳过并支持片尾提前连播"
+            echo "- 新增长按右键 3 倍速快进，松开恢复原倍速"
+            echo "- 新增自定义系统背景，手机扫码或浏览器上传图片"
+            echo "- 修复海报卡片四周留白边距，改为铺满裁剪"
+            echo "- 播放控制面板按钮调整为一行齐平"
+            echo "RELEASE_NOTES_END"
+          } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK
         env:
           HONGGUOTV_STORE_PASSWORD: ${{ secrets.HONGGUOTV_STORE_PASSWORD }}

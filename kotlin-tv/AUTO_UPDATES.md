@@ -28,9 +28,9 @@
 
 ## 版本规则与本地构建
 
-- 云端 `versionCode = 10000 + release workflow run_number`，单调递增；显示版本为 `0.9.4+run_number`；Release 标签为 `kotlin-v0.9.4-build.run_number`，标题为「红果 TV 0.9.4+run_number」。
-- 发布新版本前，将 `.github/workflows/release.yml` 中的版本号（当前 0.9.4）递增，并同步 `kotlin-tv/app/build.gradle.kts` 的默认 `versionName` 与 `kotlin-tv/README.md` 构建输出示例；调整版本显示名称时仍维持 versionCode 单调递增规则。
+- 云端 `versionCode = 10000 + release workflow run_number`，单调递增；显示版本为 `0.10.0+run_number`；Release 标签为 `kotlin-v0.10.0-build.run_number`，标题为「红果 TV 0.10.0+run_number」。
+- 发布新版本前，将 `.github/workflows/release.yml` 中的版本号（当前 0.10.0）递增，并同步 `kotlin-tv/app/build.gradle.kts` 的默认 `versionName` 与 `kotlin-tv/README.md` 构建输出示例；调整版本显示名称时仍维持 versionCode 单调递增规则。
 - 已发布构建重跑会因标签已存在而失败，不会覆盖原 APK；旧构建重跑也不能取代更新的 latest。
-- 本地未传环境变量时生成 0.9.4 / versionCode 12，供首次验证。复现云端源码时，应从该 Release 的 `update.json` 读取版本，传入 `HONGGUOTV_VERSION_CODE` 和 `HONGGUOTV_VERSION_NAME`；本地低版本号的 APK 无法覆盖较高云端版本。正式分发以云端签名包为准。
+- 本地未传环境变量时生成 0.10.0 / versionCode 12，供首次验证。复现云端源码时，应从该 Release 的 `update.json` 读取版本，传入 `HONGGUOTV_VERSION_CODE` 和 `HONGGUOTV_VERSION_NAME`；本地低版本号的 APK 无法覆盖较高云端版本。正式分发以云端签名包为准。
 
 电视系统没有安装器、禁止未知来源或无法访问 GitHub 时，自动更新不能完成；旧版仍可继续使用。最低 API 26 不等于 Android 8 实体电视已验收。
