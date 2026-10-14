@@ -45,6 +45,7 @@ class MainActivity: Activity() {
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository()
+    private val danmakuRepo=DanmakuRepository(repository.http)
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
     private var prefetchHttp: okhttp3.OkHttpClient?=null
@@ -95,6 +96,8 @@ class MainActivity: Activity() {
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
     private var playerView: PlayerView?=null
+    private var danmakuView: DanmakuView?=null
+    private var danmakuLoader: DanmakuLoader?=null
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
     private var favoriteStatus: TextView?=null
@@ -187,6 +190,7 @@ class MainActivity: Activity() {
             if(screen=="player") {
                 if(sleepTimer.poll()) stopForSleep()
                 if(hud.visibility==View.VISIBLE) updatePlaybackText()
+                danmakuLoader?.let { loader -> if(player?.isPlaying==true) { val position=currentPosition(); io.execute { runCatching { loader.loadUpTo(position) } } } }
                 maybePrefetch()
                 val p=player; val data=detail
                 if(p!=null && data!=null && playbackReady && !playError && outroSkipSeconds>0 && !outroTriggered && p.isPlaying) {
@@ -822,6 +826,11 @@ class MainActivity: Activity() {
             library.autoSeason=!library.autoSeason
             autoSeasonButton.text="系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}"
         }
+        lateinit var danmakuButton: TextView
+        danmakuButton=setting(playback,"官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}") {
+            library.danmaku=!library.danmaku
+            danmakuButton.text="官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}"
+        }
         lateinit var themeButton: TextView
         themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
             library.theme=TvStyle.toggle().name; recreate()
@@ -1043,7 +1052,7 @@ class MainActivity: Activity() {
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
         val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
         val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
-        saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews()
+        saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews(); stopDanmaku()
         if(reuse) {
             cancelRecovery(); cancelPrefetch(); tvTools.close()
             episodePanel?.dismiss(); episodePanel=null; speedDialog?.dismiss(); speedDialog=null
@@ -1072,6 +1081,9 @@ class MainActivity: Activity() {
                 setKeepContentOnPlayerReset(true); setShutterBackgroundColor(Color.BLACK); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             }
             playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1))
+            val danmakuLayer=DanmakuView(this)
+            danmakuView=danmakuLayer
+            root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
@@ -1107,7 +1119,7 @@ class MainActivity: Activity() {
                             return
                         }
                         playbackReady=true
-                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-playbackStarted}") }
+                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-playbackStarted}"); startDanmaku() }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
                     syncMediaSession()
@@ -1127,7 +1139,7 @@ class MainActivity: Activity() {
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }
                 override fun onPlaybackParametersChanged(parameters: PlaybackParameters) { if(active()) syncMediaSession() }
-                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) { if(active()) syncMediaSession() }
+                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) { if(active()) { syncMediaSession(); danmakuView?.seekTo(newPosition.positionMs) } }
                 override fun onPlayerError(error: PlaybackException) { if(active()) playerFailure(error) }
             }
             playerListener=listener; p.addListener(listener)
@@ -1313,7 +1325,7 @@ class MainActivity: Activity() {
             val seriesId=detail?.series?.id.orEmpty()
             val mark=library.skipMark(seriesId)
             fun skipLabel(seconds: Int)=if(seconds>0) "$seconds 秒" else "关闭"
-            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}","跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}","从头播放"),more,{ choice ->
+            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}","跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}","从头播放","弹幕 ${if(library.danmaku) "开启" else "关闭"}"),more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
                         0 -> showSpeedPicker(more)
@@ -1323,6 +1335,7 @@ class MainActivity: Activity() {
                         4 -> showSkipPicker(more,true)
                         5 -> showSkipPicker(more,false)
                         6 -> { seekTo(0); hidePanel() }
+                        7 -> { library.danmaku=!library.danmaku; if(library.danmaku) startDanmaku() else stopDanmaku() }
                     }
                 }
             })
@@ -1501,6 +1514,23 @@ class MainActivity: Activity() {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
         library.save(WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis()))
     }
+    /** Starts the official-comment overlay for the current episode; safe to call repeatedly. */
+    private fun startDanmaku() {
+        val layer=danmakuView ?: return
+        val data=detail ?: return
+        val p=player
+        if(!library.danmaku || p==null || !playbackReady || playError || p.duration<=0) return
+        danmakuLoader=null
+        val loader=DanmakuLoader(danmakuRepo,data.series.id,data.episodes[episodeIndex],p.duration)
+        danmakuLoader=loader
+        layer.bind(loader,{ currentPosition() })
+        val startPosition=currentPosition()
+        io.execute { runCatching { loader.loadUpTo(startPosition) } }
+    }
+    private fun stopDanmaku() {
+        danmakuLoader=null
+        danmakuView?.unbind()
+    }
     private fun releasePlayer() {
         cancelRecovery(); cancelPrefetch(); mediaSession.deactivate(); tvTools.close()
         ffActive=false; outroSkipSeconds=0; outroTriggered=false
@@ -1510,6 +1540,7 @@ class MainActivity: Activity() {
         main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         playerListener?.let { player?.removeListener(it) }; playerListener=null
         video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
+        stopDanmaku(); danmakuView=null
         closeTransport(playbackHttp); playbackHttp=null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
