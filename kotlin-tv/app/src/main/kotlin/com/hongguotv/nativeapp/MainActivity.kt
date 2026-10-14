@@ -196,7 +196,7 @@ class MainActivity: Activity() {
                         if(library.autoNext && episodeIndex<data.episodes.lastIndex) {
                             Toast.makeText(this@MainActivity,"已跳过片尾，播放下一集",Toast.LENGTH_SHORT).show()
                             playEpisode(episodeIndex+1)
-                        }
+                        } else if(continueToNextSeason()) { /* season jump in progress */ }
                     }
                 }
                 val now=android.os.SystemClock.elapsedRealtime()
@@ -817,6 +817,11 @@ class MainActivity: Activity() {
             library.autoNext=!library.autoNext
             autoNextButton.text="自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}"
         }
+        lateinit var autoSeasonButton: TextView
+        autoSeasonButton=setting(playback,"系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}") {
+            library.autoSeason=!library.autoSeason
+            autoSeasonButton.text="系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}"
+        }
         lateinit var themeButton: TextView
         themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
             library.theme=TvStyle.toggle().name; recreate()
@@ -865,7 +870,7 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
         }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton); val right=listOf(themeButton,backdropButton,backup,hidden,clearCache,updates,license)
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton); val right=listOf(themeButton,backdropButton,backup,hidden,clearCache,updates,license)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
@@ -1004,7 +1009,7 @@ class MainActivity: Activity() {
             content.addView(section,lp(-1,-2).apply { topMargin=dp(4) })
             extraRows+=cards
         }
-        recommendationRow("同名剧情推荐",data.sameName)
+        recommendationRow("系列剧推荐",data.sameName)
         recommendationRow("相关推荐",data.related)
         val lastRowStart=((episodes.size-1)/10)*10
         val firstRow=extraRows.firstOrNull()
@@ -1110,7 +1115,8 @@ class MainActivity: Activity() {
                         saveProgress(true)
                         if(sleepTimer.episodeEnded()) stopForSleep()
                         else if(foreground && requestedAutoplay && !pausedForLifecycle && library.autoNext && episodeIndex<data.episodes.lastIndex) playEpisode(episodeIndex+1)
-                        else { requestedAutoplay=false; p.pause(); playbackText.text="本集已结束"; showPanel() }
+                        else if(foreground && requestedAutoplay && !pausedForLifecycle && continueToNextSeason()) { /* season jump in progress */ }
+                        else { requestedAutoplay=false; p.pause(); showEndedPanel() }
                     }
                 }
                 override fun onRenderedFirstFrame() {
@@ -1323,6 +1329,52 @@ class MainActivity: Activity() {
         }.apply { tag="playback-settings" }
         play.requestFocus()
     }
+    /** Season finale auto-continues into the next season only when both the master autoplay and the season switch are on. */
+    private fun continueToNextSeason(): Boolean {
+        val data=detail ?: return false
+        if(!library.autoNext || !library.autoSeason || episodeIndex<data.episodes.lastIndex) return false
+        val next=data.nextSeason ?: return false
+        Toast.makeText(this,"即将播放《${next.title}》",Toast.LENGTH_SHORT).show()
+        openDetail(next,resume=true,autoplay=true)
+        return true
+    }
+    private fun showEndedPanel() {
+        val data=detail
+        if(playError || data==null || !library.autoNext || !library.autoSeason || episodeIndex<data.episodes.lastIndex) {
+            playbackText.text="本集已结束"; showPanel(); return
+        }
+        val cached=library.cachedHome(library.contentType)?.items.orEmpty().filter { it.id!=data.series.id }
+        if(cached.isNotEmpty()) { showRecommendationPanel(cached); return }
+        playbackText.text="本集已结束"; showPanel()
+        // The home cache can be empty on a cold start that went straight into playback; fetch once and upgrade the panel.
+        work({ repository.home(1,library.contentType) }, { page ->
+            if(screen=="player" && player?.playbackState==Player.STATE_ENDED && detail?.series?.id==data.series.id) {
+                val items=page.items.filter { it.id!=data.series.id }
+                if(items.isNotEmpty()) showRecommendationPanel(items)
+            }
+        }, { /* keep the plain ended panel */ })
+    }
+    private fun showRecommendationPanel(items: List<Series>) {
+        if(playError || screen!="player") return
+        panel=true; controls.visibility=View.VISIBLE; controls.removeAllViews()
+        controls.addView(text("《${detail?.series?.title}》已播完 · 为你推荐热门${library.contentType.label}",14f,muted).apply { setPadding(dp(4),0,0,dp(8)) })
+        val strip=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
+        val line=row(); strip.addView(line); controls.addView(strip)
+        items.take(10).forEach { item ->
+            val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(8)); focusStyle(card)
+            val image=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            card.addView(image,lp(dp(96),(dp(96)/TvStyle.POSTER_ASPECT).toInt()))
+            loadCover(image,item.cover)
+            card.addView(text(item.title,12f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(2),dp(4),dp(2),0) },lp(dp(96),-2))
+            card.contentDescription=item.title
+            card.setOnClickListener { openDetail(item) }
+            line.addView(card,lp(-2,-2).apply { rightMargin=dp(10) })
+        }
+        val actions=row().apply { setPadding(0,dp(10),0,0) }; controls.addView(actions)
+        addButton(actions,"返回详情") { returnToDetail(true) }
+        line.getChildAt(0)?.requestFocus()
+        showHud()
+    }
     private fun showSkipPicker(anchor: TextView,intro: Boolean) {
         val data=detail ?: return
         val options=listOf(0,15,30,45,60,90,120)
@@ -1468,7 +1520,7 @@ class MainActivity: Activity() {
     private fun goBack() {
         if(!library.isLoaded) { finish(); return }
         when(screen) {
-            "player" -> if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
+            "player" -> if(player?.playbackState==Player.STATE_ENDED) returnToDetail() else if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
             else -> if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else finish() } else nav.getOrNull(tab)?.requestFocus()
         }

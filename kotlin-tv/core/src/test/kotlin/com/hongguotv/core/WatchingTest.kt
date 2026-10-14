@@ -65,6 +65,17 @@ class WatchingTest {
         val latest=Detail(series("6","仙途第四季"),emptyList(),sameName=listOf(series("1","仙途"),series("2","仙途第二季")))
         assertTrue(latest.newerSeasons.isEmpty())
     }
+    @Test fun `next season picks the immediately following season in order`() {
+        fun series(id: String,title: String)=Series(id,title)
+        val first=Detail(series("1","仙途"),emptyList(),sameName=listOf(series("6","仙途第四季"),series("5","仙途第三季"),series("2","仙途第二季")))
+        assertEquals("2",first.nextSeason?.id)
+        val third=Detail(series("5","仙途第三季"),emptyList(),sameName=listOf(series("2","仙途第二季"),series("6","仙途第四季")))
+        assertEquals("6",third.nextSeason?.id)
+        val latest=Detail(series("6","仙途第四季"),emptyList(),sameName=listOf(series("2","仙途第二季")))
+        assertNull(latest.nextSeason)
+        val untitled=Detail(series("9","仙途"),emptyList(),sameName=listOf(series("8","仙途")))
+        assertNull(untitled.nextSeason)
+    }
     @Test fun `resume follows episode identity after reordering and completed episode advances`() {
         val episodes=listOf("new","a","b","c")
         assertEquals(ResumeTarget(2,52000),ResumePlayback.target(episodes,"b",52000,false))

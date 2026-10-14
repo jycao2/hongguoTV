@@ -23,6 +23,8 @@ data class Detail(val series: Series, val episodes: List<String>, val related: L
         val current=seasonNumber(series.title).let { if(it==Int.MAX_VALUE) 1 else it }
         return sameName.filter { val n=seasonNumber(it.title); n!=Int.MAX_VALUE && n>current }
     }
+    /** The immediately following season, so auto-play continues in order instead of jumping to the latest. */
+    val nextSeason: Series? get() = newerSeasons.minByOrNull { seasonNumber(it.title) }
 }
 data class RankPosition(val rank: Int?, val heat: String)
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)

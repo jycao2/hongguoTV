@@ -155,6 +155,9 @@ class Library(context: Context) {
     var autoNext: Boolean
         get() = state().settings.autoNext
         set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }
+    var autoSeason: Boolean
+        get() = state().settings.autoSeason
+        set(value) { if (value != autoSeason) { state().settings = state().settings.copy(autoSeason = value); put("autoSeason", value) } }
     var contentType: ContentType
         get() = state().settings.type
         set(value) { if (value != contentType) { state().settings = state().settings.copy(type = value); put("contentType", value.storedValue) } }

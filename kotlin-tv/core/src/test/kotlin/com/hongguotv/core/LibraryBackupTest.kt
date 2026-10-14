@@ -34,6 +34,12 @@ class LibraryBackupTest {
         val history=LibraryBackup.merge(local.copy(history=records),data().copy(history=listOf(progress("201",201))),false).history
         assertEquals(200,history.size); assertEquals("201",history.first().series.id); assertFalse(history.any { it.series.id=="1" })
     }
+    @Test fun `auto season setting round trips and legacy backups default to enabled`() {
+        val off=data().copy(settings=BackupSettings().copy(autoSeason=false))
+        assertEquals(off,LibraryBackup.decode(LibraryBackup.encode(off)))
+        val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("autoSeason")
+        assertTrue(LibraryBackup.decode(legacy.toString()).settings.autoSeason)
+    }
     @Test fun `invalid format ranges settings duplicates and oversized nesting are rejected`() {
         fun reject(change: (JSONObject)->Unit) { val o=JSONObject(LibraryBackup.encode(data())); change(o); assertTrue(o.toString(),runCatching { LibraryBackup.decode(o.toString()) }.isFailure) }
         reject { it.put("version",2) }; reject { it.put("format","other") }
