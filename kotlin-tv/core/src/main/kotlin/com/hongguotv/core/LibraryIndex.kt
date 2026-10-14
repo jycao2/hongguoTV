@@ -71,13 +71,14 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
         watchedIds = watchedIds - id
     }
     fun clearHistory() { historyRows = emptyList(); progressById.clear(); watchedIds = emptySet() }
-    fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean): Boolean {
+    fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean, newSeason: Series? = null): Boolean {
         if (!favorite(id)) return false
         val previous = updateRows[id]
-        val next = previous?.observe(count, now, acknowledge) ?: FavoriteUpdate.first(count, now)
+        var next = previous?.observe(count, now, acknowledge) ?: FavoriteUpdate.first(count, now)
+        if (!acknowledge) next = next.observeNewSeason(newSeason?.id, newSeason?.title, now)
         if (previous == next) return false
         updateRows = updateRows + (id to next)
-        updateCount += (if (next.added > 0) 1 else 0) - (if ((previous?.added ?: 0) > 0) 1 else 0)
+        updateCount += (if (next.hasUpdate) 1 else 0) - (if (previous?.hasUpdate == true) 1 else 0)
         return true
     }
     fun snapshot() = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds)

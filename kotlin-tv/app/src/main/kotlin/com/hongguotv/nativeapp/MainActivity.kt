@@ -344,7 +344,7 @@ class MainActivity: Activity() {
     private fun localItems(): List<Series> = when(collection) {
         "hot" -> collectionReturn?.items.orEmpty().filterNot { it.id in library.hidden() }
         "later" -> library.later()
-        "updates" -> library.favorites().filter { (library.favoriteUpdate(it.id)?.added ?: 0)>0 }
+        "updates" -> library.favorites().filter { library.favoriteUpdate(it.id)?.hasUpdate == true }
         "resume" -> library.history().filterNot { library.watched(it.series.id) }.map { it.series }
         else -> if(tab==3) library.favorites() else library.history().map { it.series }
     }
@@ -712,7 +712,7 @@ class MainActivity: Activity() {
     }
     private fun homeShelves(): List<HomeScreen.Shelf> {
         val recent=library.history().filterNot { library.watched(it.series.id) }
-        val updates=library.favorites().filter { (library.favoriteUpdate(it.id)?.added ?: 0)>0 }
+        val updates=library.favorites().filter { library.favoriteUpdate(it.id)?.hasUpdate == true }
         val later=library.later(); val hidden=library.hidden(); val hot=catalog.filterNot { it.id in hidden }
         return listOf(
             HomeScreen.Shelf("resume","接着看",recent.take(8).map { p -> HomeScreen.Entry(p.series,

@@ -118,7 +118,9 @@ class Library(context: Context) {
     fun favoriteUpdate(id: String) = state().favoriteUpdate(id)
     fun updatedFavorites() = state().updatedFavorites()
     fun favoriteLabel(id: String): String = favoriteUpdate(id)?.let {
-        if (it.added > 0) "新增 ${it.added} 集 · 更新至 ${it.total} 集" else "更新至 ${it.total} 集"
+        val season = if (it.hasNewSeason) "《${it.newSeasonTitle ?: "新季"}》已上线" else ""
+        val episodes = if (it.added > 0) "新增 ${it.added} 集 · 更新至 ${it.total} 集" else "更新至 ${it.total} 集"
+        listOf(season, episodes).filter { it.isNotEmpty() }.joinToString(" · ")
     } ?: "尚未检查更新"
     fun toggle(series: Series) = state().toggle(series).also { persist("favorites", "favoriteUpdates") }
     fun toggleLater(series: Series) = state().toggleLater(series).also { persist("later") }
@@ -130,8 +132,8 @@ class Library(context: Context) {
     fun clearSearches() { state().clearSearches(); persist("searches") }
     fun removeHistory(id: String) { state().removeHistory(id); persist("progress", "watched") }
     fun clearHistory() { state().clearHistory(); persist("progress", "watched") }
-    fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean = false) {
-        if (state().observeFavorite(id, count, now, acknowledge)) persist("favoriteUpdates")
+    fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean = false, newSeason: Series? = null) {
+        if (state().observeFavorite(id, count, now, acknowledge, newSeason)) persist("favoriteUpdates")
     }
     fun cachedHome(type: ContentType): CatalogPage? {
         state()

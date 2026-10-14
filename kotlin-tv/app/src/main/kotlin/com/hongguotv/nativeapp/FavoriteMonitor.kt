@@ -53,12 +53,13 @@ class FavoriteMonitor(private val library: Library, source: ContentRepository, p
             lastChangedId = null
             job = worker.submit {
                 if (ticket != epoch) return@submit
-                val result = runCatching { owned.run { repository.detail(item.id).episodes.size } }
+                val result = runCatching { owned.run { repository.detail(item.id) } }
                 main.post {
                     if (ticket != epoch) return@post
                     job = null
-                    result.onSuccess { count ->
-                        library.observeFavorite(item.id, count, started)
+                    result.onSuccess { detail ->
+                        library.observeFavorite(item.id, detail.episodes.size, started,
+                            newSeason = detail.newerSeasons.lastOrNull())
                         lastChangedId = item.id
                         consecutiveFailures = 0
                     }.onFailure { failures++; consecutiveFailures++ }
