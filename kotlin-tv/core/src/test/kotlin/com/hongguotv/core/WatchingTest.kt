@@ -56,6 +56,20 @@ class WatchingTest {
         assertEquals(2,decoded.added)
         assertFalse(decoded.hasNewSeason)
     }
+    @Test fun `acknowledged season does not resurface but a newer season still notifies`() {
+        val marked=FavoriteUpdate.first(80,100).observeNewSeason("456","第二季",200)
+        val acked=marked.observe(80,300,acknowledge=true)
+        assertFalse(acked.hasNewSeason)
+        assertEquals(acked,acked.observeNewSeason("456","第二季",400))
+        val persisted=FavoriteUpdate.decode(acked.json())!!
+        assertEquals(persisted,persisted.observeNewSeason("456","第二季",500))
+        val next=persisted.observeNewSeason("789","第三季",600)
+        assertTrue(next.hasNewSeason)
+        assertEquals("789",next.newSeasonId)
+        // The monitor always reports the newest season, so remembering the latest acked id is enough.
+        val reacked=next.observe(80,700,acknowledge=true)
+        assertEquals(reacked,reacked.observeNewSeason("789","第三季",800))
+    }
     @Test fun `detail newer seasons only list finite seasons beyond the current one`() {
         fun series(id: String,title: String)=Series(id,title)
         val first=Detail(series("1","仙途"),emptyList(),sameName=listOf(series("2","仙途第二季"),series("3","仙途"),series("4","其他剧")))

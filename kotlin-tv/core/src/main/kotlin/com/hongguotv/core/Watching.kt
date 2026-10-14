@@ -30,7 +30,7 @@ object ResumePlayback {
 
 /** Seen count is a high-water mark, so temporary catalog shrinkage is not a new update. */
 data class FavoriteUpdate(val total: Int,val seen: Int,val checkedAt: Long,
-    val newSeasonId: String? = null,val newSeasonTitle: String? = null) {
+    val newSeasonId: String? = null,val newSeasonTitle: String? = null,val ackedSeasonId: String? = null) {
     val added get()=(total-seen).coerceAtLeast(0)
     val hasNewSeason get()=!newSeasonId.isNullOrBlank()
     val hasUpdate get()=added>0 || hasNewSeason
@@ -38,16 +38,18 @@ data class FavoriteUpdate(val total: Int,val seen: Int,val checkedAt: Long,
         require(count>0)
         if(now<checkedAt) return this
         return FavoriteUpdate(count,if(acknowledge) maxOf(seen,count) else seen,now,
-            if(acknowledge) null else newSeasonId,if(acknowledge) null else newSeasonTitle)
+            if(acknowledge) null else newSeasonId,if(acknowledge) null else newSeasonTitle,
+            if(acknowledge) newSeasonId ?: ackedSeasonId else ackedSeasonId)
     }
     fun observeNewSeason(seasonId: String?,seasonTitle: String?,now: Long): FavoriteUpdate {
         if(now<checkedAt) return this
         if(seasonId.isNullOrBlank() || !seasonId.matches(Regex("[0-9]{1,30}"))) return this
-        if(seasonId==newSeasonId) return this
-        return FavoriteUpdate(total,seen,now,seasonId,seasonTitle?.ifBlank { null })
+        // A season the user already saw must not re-surface on the next periodic check.
+        if(seasonId==newSeasonId || seasonId==ackedSeasonId) return this
+        return FavoriteUpdate(total,seen,now,seasonId,seasonTitle?.ifBlank { null },ackedSeasonId)
     }
     fun json()=JSONObject().put("total",total).put("seen",seen).put("checkedAt",checkedAt)
-        .put("newSeasonId",newSeasonId).put("newSeasonTitle",newSeasonTitle)
+        .put("newSeasonId",newSeasonId).put("newSeasonTitle",newSeasonTitle).put("ackedSeasonId",ackedSeasonId)
     companion object {
         fun first(count: Int,now: Long): FavoriteUpdate { require(count>0); return FavoriteUpdate(count,count,now) }
         fun decode(value: JSONObject?)=runCatching {
@@ -56,8 +58,10 @@ data class FavoriteUpdate(val total: Int,val seen: Int,val checkedAt: Long,
             require(total>0 && seen>0 && time>=0)
             val seasonId=value.optString("newSeasonId").ifBlank { null }
             val seasonTitle=value.optString("newSeasonTitle").ifBlank { null }
+            val ackedId=value.optString("ackedSeasonId").ifBlank { null }
             require(seasonId==null || seasonId.matches(Regex("[0-9]{1,30}")))
-            FavoriteUpdate(total,seen,time,seasonId,seasonTitle)
+            require(ackedId==null || ackedId.matches(Regex("[0-9]{1,30}")))
+            FavoriteUpdate(total,seen,time,seasonId,seasonTitle,ackedId)
         }.getOrNull()
     }
 }

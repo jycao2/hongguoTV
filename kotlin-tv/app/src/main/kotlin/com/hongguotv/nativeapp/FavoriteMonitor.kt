@@ -28,10 +28,12 @@ class FavoriteMonitor(private val library: Library, source: ContentRepository, p
         if (running || destroyed || !library.isLoaded) return
         val now = System.currentTimeMillis()
         val favorites = library.favorites()
-        val items = favorites.filter { force || library.favoriteUpdate(it.id)?.let { now - it.checkedAt !in 0 until 3_600_000L } != false }
+        // Keep automatic checks under ~40 requests/hour no matter how large the library grows.
+        val windowHours = favorites.size / 40 + 1
+        val items = favorites.filter { force || library.favoriteUpdate(it.id)?.let { now - it.checkedAt !in 0 until windowHours * 3_600_000L } != false }
         lastChangedId = null
         if (items.isEmpty()) {
-            status = if (favorites.isEmpty()) "收藏后可检查新集" else "最近一小时已检查，可手动刷新"
+            status = if (favorites.isEmpty()) "收藏后可检查新集" else "最近 $windowHours 小时内已检查，可手动刷新"
             changed(); return
         }
         val ticket = ++epoch
@@ -64,7 +66,8 @@ class FavoriteMonitor(private val library: Library, source: ContentRepository, p
                         consecutiveFailures = 0
                     }.onFailure { failures++; consecutiveFailures++ }
                     completed++
-                    next()
+                    // Pace serial requests so a large library does not burst against the site.
+                    main.postDelayed({ next() }, 1_500L)
                 }
             }
         }
