@@ -1300,11 +1300,10 @@ class MainActivity: Activity() {
         val play=addButton(transport,if(player?.playWhenReady==true) "暂停" else "播放") { togglePlayback() }.also { transportPlay=it }
         addButton(transport,"上一集") { if(episodeIndex>0) playEpisode(episodeIndex-1) }.apply { isEnabled=episodeIndex>0; isFocusable=episodeIndex>0; alpha=if(episodeIndex>0) 1f else .4f }
         addButton(transport,"下一集") { if(episodeIndex<(detail?.episodes?.lastIndex ?: 0)) playEpisode(episodeIndex+1) }.apply { val enabled=episodeIndex<(detail?.episodes?.lastIndex ?: 0); isEnabled=enabled; isFocusable=enabled; alpha=if(enabled) 1f else .4f }
-        val options=row().apply { setPadding(0,dp(8),0,0) }; controls.addView(options)
         lateinit var episodes: TextView
-        episodes=addButton(options,"选集") { showEpisodePanel(episodes) }
+        episodes=addButton(transport,"选集") { showEpisodePanel(episodes) }
         lateinit var more: TextView
-        more=addButton(options,"播放设置") {
+        more=addButton(transport,"播放设置") {
             val seriesId=detail?.series?.id.orEmpty()
             val mark=library.skipMark(seriesId)
             fun skipLabel(seconds: Int)=if(seconds>0) "$seconds 秒" else "关闭"
