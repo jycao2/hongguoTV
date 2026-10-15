@@ -9,6 +9,11 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.12.2 新增
+
+- **弹幕展示行数上限扩展至 10 行**：原 1-5 行，现 1-10 行可选，默认 3 行不变。
+- **设置页滚动修复**：页脚版本信息接入遥控焦点链，设置页可以正常滚动到底部。
+
 ## 0.12.1 新增
 
 - **更新检查镜像 CDN 兜底链**：github.com 不可达时自动尝试 gh-proxy.com / ghfast.top / gh-proxy.net，解决国内网络无法检测新版的问题。
@@ -173,7 +178,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.12.1-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.12.2-android8.apk
 ```
 
 ## 工程结构
