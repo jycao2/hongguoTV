@@ -860,12 +860,15 @@ class MainActivity: Activity() {
             library.theme=TvStyle.toggle().name; recreate()
         }
         lateinit var backdropButton: TextView
-        fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else "默认"}"
+        fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
         backdropButton=setting(device,backdropLabel()) {
             tvTools.choose("自定义背景",listOf("手机上传图片","恢复默认背景"),backdropButton,{ choice ->
                 when(choice) {
                     0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext); backdropButton.post { backdropButton.text=backdropLabel() } }
-                    1 -> { clearBackdrop(); backdropButton.text=backdropLabel() }
+                    1 -> tvTools.choose("恢复默认背景",listOf("强制欣赏","默认风格"),backdropButton,{ style ->
+                        resetBackdrop(if(style==0) "forced" else "plain")
+                        backdropButton.text=backdropLabel()
+                    })
                 }
             })
         }
@@ -1551,16 +1554,10 @@ class MainActivity: Activity() {
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }
     private fun formatTime(millis: Long): String { val seconds=(millis.coerceAtLeast(0)/1000); return "%02d:%02d".format(seconds/60,seconds%60) }
     private fun backdropFile()=filesDir.listFiles()?.firstOrNull { it.name.startsWith("backdrop.") }
-    /** Decode the picked image to screen size and lay a theme-colored scrim over it so text stays readable. */
-    private fun decodeBackdrop(bytes: ByteArray): Bitmap? {
+    /** Scale [raw] to fill the screen and lay a theme-colored scrim over it so text stays readable. */
+    private fun frameBackdrop(raw: Bitmap): Bitmap? {
         val width=resources.displayMetrics.widthPixels; val height=resources.displayMetrics.heightPixels
         if(width<=0 || height<=0) return null
-        val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
-        BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
-        if(bounds.outWidth<=0 || bounds.outHeight<=0) return null
-        var sample=1
-        while(bounds.outWidth/(sample*2)>=width && bounds.outHeight/(sample*2)>=height) sample*=2
-        val raw=BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply { inSampleSize=sample }) ?: return null
         val scale=maxOf(width.toFloat()/raw.width,height.toFloat()/raw.height)
         val drawWidth=(raw.width*scale).toInt(); val drawHeight=(raw.height*scale).toInt()
         val scaled=if(drawWidth==raw.width && drawHeight==raw.height) raw else Bitmap.createScaledBitmap(raw,drawWidth,drawHeight,true)
@@ -1572,10 +1569,33 @@ class MainActivity: Activity() {
         if(scaled!==raw) raw.recycle()
         return output
     }
+    private fun decodeBackdrop(bytes: ByteArray): Bitmap? {
+        val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
+        if(bounds.outWidth<=0 || bounds.outHeight<=0) return null
+        var sample=1
+        val width=resources.displayMetrics.widthPixels; val height=resources.displayMetrics.heightPixels
+        while(bounds.outWidth/(sample*2)>=width && bounds.outHeight/(sample*2)>=height) sample*=2
+        val raw=BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply { inSampleSize=sample }) ?: return null
+        return frameBackdrop(raw)
+    }
+    /** The bundled "强制欣赏" backdrop: first-launch default, selectable from 恢复默认背景. */
+    private fun decodeForcedBackdrop(): Bitmap? =
+        BitmapFactory.decodeResource(resources,R.drawable.backdrop_forced)?.let { frameBackdrop(it) }
+    /** Built-in backdrop style: "forced" (bundled picture, default) or "plain" (theme color only). */
+    private fun backdropStyle()=getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).getString("backdropStyle","forced") ?: "forced"
     private fun loadBackdrop() {
         io.execute {
             val bitmap=backdropFile()?.let { runCatching { decodeBackdrop(it.readBytes()) }.getOrNull() }
-            main.post { if(!isDestroyed) { backdropBitmap=bitmap; backdropView?.setImageBitmap(bitmap) } }
+                ?: if(backdropStyle()=="forced") runCatching { decodeForcedBackdrop() }.getOrNull() else null
+            main.post {
+                if(isDestroyed) return@post
+                backdropBitmap=bitmap
+                backdropView?.let {
+                    if(bitmap==null) { (it.parent as? android.view.ViewGroup)?.removeView(it); it.setImageDrawable(null) }
+                    else { if(it.parent==null && screen!="player") root.addView(it,0,FrameLayout.LayoutParams(-1,-1)); it.setImageBitmap(bitmap) }
+                }
+            }
         }
     }
     private fun saveBackdrop(bytes: ByteArray,extension: String) {
@@ -1597,10 +1617,12 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun clearBackdrop() {
+    /** Drop any uploaded picture and switch back to one of the built-in styles. */
+    private fun resetBackdrop(style: String) {
         io.execute { filesDir.listFiles()?.filter { it.name.startsWith("backdrop.") }?.forEach { it.delete() } }
-        backdropBitmap=null; backdropView?.setImageDrawable(null)
-        Toast.makeText(this,"已恢复默认背景",Toast.LENGTH_SHORT).show()
+        getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).edit().putString("backdropStyle",style).apply()
+        loadBackdrop()
+        Toast.makeText(this,if(style=="forced") "已恢复为强制欣赏" else "已恢复默认背景",Toast.LENGTH_SHORT).show()
     }
     private fun saveProgress(completed: Boolean=false) {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
