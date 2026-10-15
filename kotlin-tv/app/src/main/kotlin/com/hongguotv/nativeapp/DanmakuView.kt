@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
 import com.hongguotv.core.Danmaku
+import com.hongguotv.core.DanmakuEmoji
 import com.hongguotv.core.DanmakuLoader
 import com.hongguotv.core.DanmakuPrefs
 
@@ -18,7 +19,7 @@ import com.hongguotv.core.DanmakuPrefs
  * comment is dropped, matching common danmaku behavior.
  */
 class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_000L) : View(context) {
-    private data class Active(val danmaku: Danmaku, val width: Float, val track: Int)
+    private data class Active(val danmaku: Danmaku, val text: String, val width: Float, val track: Int)
 
     private val active = ArrayList<Active>()
     var loader: DanmakuLoader? = null
@@ -155,12 +156,14 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
 
     private fun emit(comment: Danmaku, position: Long) {
         if (pxPerMs <= 0f) return
-        val textWidth = paint.measureText(comment.text)
+        // Expand emoji codes once here: measure and draw must see the same text.
+        val text = DanmakuEmoji.display(comment.text)
+        val textWidth = paint.measureText(text)
         val widthF = width.toFloat()
         for (track in 0 until tracks) {
             val last = active.lastOrNull { it.track == track }
             if (last == null || x(last, position) + last.width < widthF - gapPx) {
-                active.add(Active(comment, textWidth, track))
+                active.add(Active(comment, text, textWidth, track))
                 return
             }
         }
@@ -175,7 +178,7 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
         for (item in active) {
             val x = x(item, position)
             if (x > widthF || x + item.width < 0) continue
-            canvas.drawText(item.danmaku.text, x, item.track * trackHeight + paint.textSize, paint)
+            canvas.drawText(item.text, x, item.track * trackHeight + paint.textSize, paint)
         }
     }
 
