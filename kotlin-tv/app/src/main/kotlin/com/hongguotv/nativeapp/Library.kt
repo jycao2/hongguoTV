@@ -161,6 +161,18 @@ class Library(context: Context) {
     var danmaku: Boolean
         get() = state().settings.danmaku
         set(value) { if (value != danmaku) { state().settings = state().settings.copy(danmaku = value); put("danmaku", value) } }
+    var danmakuOpacity: Int
+        get() = state().settings.danmakuOpacity
+        set(value) { val next = DanmakuPrefs.opacity(value); if (next != danmakuOpacity) { state().settings = state().settings.copy(danmakuOpacity = next); put("danmakuOpacity", next) } }
+    var danmakuFont: Int
+        get() = state().settings.danmakuFont
+        set(value) { val next = DanmakuPrefs.font(value); if (next != danmakuFont) { state().settings = state().settings.copy(danmakuFont = next); put("danmakuFont", next) } }
+    var danmakuSpeed: Int
+        get() = state().settings.danmakuSpeed
+        set(value) { val next = DanmakuPrefs.speed(value); if (next != danmakuSpeed) { state().settings = state().settings.copy(danmakuSpeed = next); put("danmakuSpeed", next) } }
+    var danmakuRows: Int
+        get() = state().settings.danmakuRows
+        set(value) { val next = DanmakuPrefs.rows(value); if (next != danmakuRows) { state().settings = state().settings.copy(danmakuRows = next); put("danmakuRows", next) } }
     var contentType: ContentType
         get() = state().settings.type
         set(value) { if (value != contentType) { state().settings = state().settings.copy(type = value); put("contentType", value.storedValue) } }
@@ -190,7 +202,9 @@ class Library(context: Context) {
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates")
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
-            "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku }))
+            "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
+            "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
+            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }))
         flush()
     }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */

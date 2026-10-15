@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.view.View
 import com.hongguotv.core.Danmaku
 import com.hongguotv.core.DanmakuLoader
+import com.hongguotv.core.DanmakuPrefs
 
 /**
  * Lightweight rolling-comment overlay. The playback position is the clock: a comment enters
@@ -16,7 +17,7 @@ import com.hongguotv.core.DanmakuLoader
  * to the first track whose previous comment has fully entered; when every track is busy the
  * comment is dropped, matching common danmaku behavior.
  */
-class DanmakuView(context: Context, textSizeSp: Float = 20f, private val crossMs: Long = 9_000L) : View(context) {
+class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_000L) : View(context) {
     private data class Active(val danmaku: Danmaku, val width: Float, val track: Int)
 
     private val active = ArrayList<Active>()
@@ -31,16 +32,47 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, private val crossMs
     private var pxPerMs = 0f
     private var tracks = 1
     private var trackHeight = 0f
+    private val baseTextSize = textSizeSp * resources.displayMetrics.scaledDensity
+    private val baseCrossMs = crossMs
+    private var currentCrossMs = crossMs
+    private var maxTracks = Int.MAX_VALUE
     private val gapPx = 24 * resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = textSizeSp * resources.displayMetrics.scaledDensity
+        textSize = baseTextSize
         setShadowLayer(textSize / 6f, 0f, 0f, Color.BLACK)
     }
 
     init {
         isFocusable = false
         visibility = GONE
+    }
+
+    /**
+     * Applies the user's rendering preferences. Layout-affecting changes (font size, row cap)
+     * clear on-screen comments; opacity and speed apply to what is already flying.
+     */
+    fun applyPrefs(opacityPct: Int, font: Int, speed: Int, rows: Int) {
+        val oldTextSize = paint.textSize
+        val oldMaxTracks = maxTracks
+        paint.alpha = DanmakuPrefs.opacity(opacityPct) * 255 / 100
+        paint.textSize = baseTextSize * DanmakuPrefs.fontScale(font)
+        paint.setShadowLayer(paint.textSize / 6f, 0f, 0f, Color.BLACK)
+        currentCrossMs = (baseCrossMs * DanmakuPrefs.speedScale(speed)).toLong().coerceAtLeast(1)
+        maxTracks = DanmakuPrefs.rows(rows)
+        relayout()
+        if (paint.textSize != oldTextSize || maxTracks != oldMaxTracks) {
+            active.clear()
+            dirty = true
+        }
+        invalidate()
+    }
+
+    private fun relayout() {
+        if (width <= 0 || height <= 0 || currentCrossMs <= 0) return
+        pxPerMs = width.toFloat() / currentCrossMs
+        trackHeight = paint.textSize * 1.5f
+        tracks = (height / trackHeight).toInt().coerceAtLeast(1).coerceAtMost(maxTracks)
     }
 
     /**
@@ -78,9 +110,7 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, private val crossMs
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        pxPerMs = if (crossMs > 0) w.toFloat() / crossMs else 0f
-        trackHeight = paint.textSize * 1.5f
-        tracks = (h / trackHeight).toInt().coerceAtLeast(1)
+        relayout()
         active.clear()
         lastEmit = -1L
     }

@@ -40,6 +40,20 @@ class LibraryBackupTest {
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("autoSeason")
         assertTrue(LibraryBackup.decode(legacy.toString()).settings.autoSeason)
     }
+    @Test fun `danmaku prefs round trip and out of range values normalize`() {
+        val custom=data().copy(settings=BackupSettings().copy(danmakuOpacity=60,danmakuFont=0,danmakuSpeed=4,danmakuRows=5))
+        assertEquals(custom,LibraryBackup.decode(LibraryBackup.encode(custom)))
+        val legacy=JSONObject(LibraryBackup.encode(data()))
+        legacy.getJSONObject("settings").apply { remove("danmakuOpacity"); remove("danmakuFont"); remove("danmakuSpeed"); remove("danmakuRows") }
+        val restored=LibraryBackup.decode(legacy.toString()).settings
+        assertEquals(DanmakuPrefs.OPACITY_DEFAULT,restored.danmakuOpacity); assertEquals(DanmakuPrefs.FONT_DEFAULT,restored.danmakuFont)
+        assertEquals(DanmakuPrefs.SPEED_DEFAULT,restored.danmakuSpeed); assertEquals(DanmakuPrefs.ROWS_DEFAULT,restored.danmakuRows)
+        val wild=JSONObject(LibraryBackup.encode(data()))
+        wild.getJSONObject("settings").apply { put("danmakuOpacity",5); put("danmakuFont",99); put("danmakuSpeed",-3); put("danmakuRows",42) }
+        val normalized=LibraryBackup.decode(wild.toString()).settings
+        assertEquals(DanmakuPrefs.OPACITY_DEFAULT,normalized.danmakuOpacity); assertEquals(DanmakuPrefs.FONT_LABELS.lastIndex,normalized.danmakuFont)
+        assertEquals(0,normalized.danmakuSpeed); assertEquals(DanmakuPrefs.ROWS_DEFAULT,normalized.danmakuRows)
+    }
     @Test fun `invalid format ranges settings duplicates and oversized nesting are rejected`() {
         fun reject(change: (JSONObject)->Unit) { val o=JSONObject(LibraryBackup.encode(data())); change(o); assertTrue(o.toString(),runCatching { LibraryBackup.decode(o.toString()) }.isFailure) }
         reject { it.put("version",2) }; reject { it.put("format","other") }
