@@ -13,7 +13,7 @@ object DanmakuPrefs {
     const val FONT_DEFAULT = 2
     const val SPEED_DEFAULT = 2
     const val ROWS_MIN = 1
-    const val ROWS_MAX = 5
+    const val ROWS_MAX = 10
     const val ROWS_DEFAULT = 3
     val FONT_LABELS = listOf("小", "较小", "适中", "大", "较大")
     val SPEED_LABELS = listOf("慢", "较慢", "适中", "快", "较快")

@@ -903,19 +903,26 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
         }
+        // The page footer must be focusable and chained: without it the D-pad stalls on the
+        // last setting row and the ScrollView never reveals anything below the two columns.
+        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与进度保存在本机",12f,muted).apply {
+            id=View.generateViewId(); isFocusable=true; setPadding(dp(2),dp(18),0,dp(10))
+            setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
+        }
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+(if(library.danmaku) danmakuPrefRows else emptyList())
             val right=listOf(themeButton,backdropButton,backup,hidden,clearCache,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
-                view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
+                view.nextFocusDownId=items.getOrNull(index+1)?.id ?: settingsFooter.id
             } }
             left.forEachIndexed { i,v -> v.nextFocusLeftId=v.id; v.nextFocusRightId=right.getOrNull(i)?.id ?: v.id }
             right.forEachIndexed { i,v -> v.nextFocusLeftId=left.getOrNull(i)?.id ?: v.id; v.nextFocusRightId=v.id }
+            settingsFooter.nextFocusUpId=left.last().id
             nav.forEach { it.nextFocusDownId=qualityButton.id }
         }
         rechainSettings()
-        parent.addView(text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与进度保存在本机",12f,muted).apply { setPadding(dp(2),dp(18),0,dp(10)) })
+        parent.addView(settingsFooter)
         nav[tab].requestFocus()
     }
     private fun runSearch(value: String,type: ContentType=library.contentType) {
