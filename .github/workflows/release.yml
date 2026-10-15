@@ -35,13 +35,11 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.12.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.12.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.12.1+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.12.1-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 新增官方弹幕：播放页接入平台官方弹幕源，支持开关与实时滚动"
-            echo "- 设置页与播放设置面板新增弹幕偏好：不透明度 21-100%、字体大小（5 档）、移动速度（5 档）、展示行数 1-5 行"
-            echo "- 平台 [大笑]/[笑哭]/[捂脸]/[爱慕] 等表情代码自动展开为真实 emoji 显示"
+            echo "- 更新检查新增镜像 CDN 兜底链：github.com 不可达时自动尝试 gh-proxy.com / ghfast.top / gh-proxy.net，解决国内网络无法检测新版的问题"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK

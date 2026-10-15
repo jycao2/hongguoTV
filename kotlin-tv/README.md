@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.12.1 新增
+
+- **更新检查镜像 CDN 兜底链**：github.com 不可达时自动尝试 gh-proxy.com / ghfast.top / gh-proxy.net，解决国内网络无法检测新版的问题。
+
 ## 0.12.0 新增
 
 - **官方弹幕**：播放页接入平台官方弹幕源，支持开关与实时滚动。
@@ -169,7 +173,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.12.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.12.1-android8.apk
 ```
 
 ## 工程结构
