@@ -2,12 +2,20 @@
 
 这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 8.0 / API 26。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
 
-- 应用名称：红果 TV 原生版
+- 应用名称：红果TV
 - 包名：`com.hongguotv.nativeapp`，与旧版 `com.hongguotv` 可以并存。
 - 收藏和历史独立保存在本机，不自动迁移旧版数据。
 - APK 不含 JNI 库，可由 Android 在 ARM32、ARM64、x86、x86_64 上运行；视频解码能力依赖设备。
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
+
+## 0.12.0 新增
+
+- **官方弹幕**：播放页接入平台官方弹幕源，支持开关与实时滚动。
+- **弹幕偏好**：设置页与播放设置面板新增弹幕设置，可配置不透明度 21-100%、字体大小（5 档）、移动速度（5 档）、展示行数 1-5 行，修改即时生效。
+- **弹幕 emoji 展开**：平台 `[大笑]/[笑哭]/[捂脸]/[爱慕]` 等表情代码自动展开为真实 emoji 显示；官方图片贴纸占位符自动剥离，避免渲染成缺字方框。
+
+沿用 0.9.2 起的新发布签名，可覆盖安装 0.9.x 并保留本机记录。
 
 ## 0.11.0 新增
 
@@ -161,7 +169,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.11.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.12.0-android8.apk
 ```
 
 ## 工程结构
