@@ -9,6 +9,11 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.13.0 新增
+
+- **内置背景「强制欣赏」**：首次启动默认展示；「自定义背景 → 恢复默认背景」改为两个选项：强制欣赏 / 默认风格。
+- **背景加载修复**：解码晚于首帧渲染时背景层不显示的竞态问题。
+
 ## 0.12.2 新增
 
 - **弹幕展示行数上限扩展至 10 行**：原 1-5 行，现 1-10 行可选，默认 3 行不变。
@@ -178,7 +183,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.12.2-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.13.0-android8.apk
 ```
 
 ## 工程结构
