@@ -55,8 +55,8 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
                 val last = preferences.getLong("last_attempt", 0)
                 val update = available
                 when {
-                    ready && update != null && promptedCode != update.versionCode && !deferred(update) -> { promptedCode = update.versionCode; show(activity.currentFocus) }
-                    update != null && !ready && now >= retryAfter -> download(false)
+                    ready && update != null && promptedCode != update.versionCode -> { promptedCode = update.versionCode; show(activity.currentFocus) }
+                    update != null && !ready && now >= retryAfter -> download()
                     now < last || now - last >= 6 * 60 * 60 * 1000L -> check(false)
                 }
             }
@@ -69,6 +69,10 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             permissionRequested = false
             if (activity.packageManager.canRequestPackageInstalls()) install()
             else { status = "安装权限未开启，可在这里再次安装"; show(anchor) }
+        } else if (available != null && !busy) {
+            // A pending update must not be escapable via Home-and-return either.
+            promptedCode = available?.versionCode ?: promptedCode
+            show(activity.currentFocus)
         }
     }
     fun pause() {
@@ -84,10 +88,9 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         Thread({ repository.close() }, "hongguotv-update-cleanup").start()
     }
     private fun updateStatus(text: String) { status = text; statusView?.text = text }
-    private fun deferred(update: AppUpdate) = preferences.getLong("deferred_code", 0) == update.versionCode && preferences.getLong("deferred_until", 0) > System.currentTimeMillis()
     private fun renderActions() {
         dialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
-            text = when { busy -> "处理中…"; ready -> "安装新版"; available != null -> "下载新版"; else -> "检查更新" }
+            text = when { busy -> "处理中…"; ready -> "立即安装"; available != null -> "下载新版"; else -> "检查更新" }
             // Keep D-pad focus stable while the request runs; action methods reject duplicates.
             isEnabled = true
         }
@@ -96,34 +99,40 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (!active) return
         anchor = from
         dialog?.dismiss()
+        // Forced mode: once a newer build exists the dialog cannot be dismissed until installed.
+        val forcing = available != null
         val dp = activity.resources.displayMetrics.density
         val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding((24*dp).toInt(), (12*dp).toInt(), (24*dp).toInt(), 0) }
         statusView = TextView(activity).apply { text = status; textSize = 17f; setTextColor(TvStyle.text) }
         body.addView(statusView)
-        body.addView(CheckBox(activity).apply {
-            text = "自动检查并下载更新"; isChecked = auto
-            setOnCheckedChangeListener { _, enabled ->
-                preferences.edit().putBoolean("automatic", enabled).apply()
-                if (!enabled && busy) { interrupt(); updateStatus("自动更新已关闭，可手动检查"); renderActions() }
-            }
-        })
+        if (!forcing) {
+            body.addView(CheckBox(activity).apply {
+                text = "自动检查并下载更新"; isChecked = auto
+                setOnCheckedChangeListener { _, enabled ->
+                    preferences.edit().putBoolean("automatic", enabled).apply()
+                    if (!enabled && busy) { interrupt(); updateStatus("自动更新已关闭，可手动检查"); renderActions() }
+                }
+            })
+        }
         body.addView(TextView(activity).apply {
-            text = "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"; textSize = 13f; setTextColor(TvStyle.muted)
+            text = if (forcing) "发现新版本，更新后才能继续使用。收藏与观看记录保留。" else "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"
+            textSize = 13f; setTextColor(TvStyle.muted)
             setPadding(0, (8*dp).toInt(), 0, (8*dp).toInt())
         })
-        val next = AlertDialog.Builder(activity).setTitle("版本与更新 · ${BuildConfig.VERSION_NAME}").setView(ScrollView(activity).apply { addView(body) })
-            .setNegativeButton("稍后", null).setPositiveButton("检查更新", null).create()
+        val builder = AlertDialog.Builder(activity).setTitle("版本与更新 · ${BuildConfig.VERSION_NAME}").setView(ScrollView(activity).apply { addView(body) })
+            .setPositiveButton("检查更新", null)
+        if (!forcing) builder.setNegativeButton("稍后", null)
+        val next = builder.create()
+        next.setCancelable(false)
+        if (forcing) next.setCanceledOnTouchOutside(false)
         dialog = next
         next.setOnDismissListener {
             if (dialog === next) { dialog = null; statusView = null }
             if (from?.isAttachedToWindow == true) from.requestFocus()
         }
         next.show()
-        next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { when { ready -> install(); available != null -> download(true); else -> check(true) } }
-        next.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
-            available?.let { preferences.edit().putLong("deferred_code", it.versionCode).putLong("deferred_until", System.currentTimeMillis()+24*60*60*1000L).apply() }
-            next.dismiss()
-        }
+        next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { when { ready -> install(); available != null -> download(); else -> check(true) } }
+        next.getButton(AlertDialog.BUTTON_NEGATIVE)?.setOnClickListener { next.dismiss() }
         renderActions()
         next.getButton(AlertDialog.BUTTON_POSITIVE).post { if (dialog === next) next.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus() }
     }
@@ -152,11 +161,11 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
                 worker.execute { apk.delete() }
             } else {
                 updateStatus("发现 ${update.versionName} · ${"%.1f".format(update.size/1048576.0)} MB\n${update.notes}")
-                if (manual || auto) download(manual)
+                if (manual || auto) download()
             }
         }
     }
-    private fun download(manual: Boolean) {
+    private fun download() {
         val update = available ?: return
         if (busy || !active || !idle()) return
         updateStatus("正在下载 ${update.versionName}…")
@@ -166,7 +175,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             validateApk(update)
         }) {
             ready = true; updateStatus("${update.versionName} 已下载并校验\n${update.notes}\n\n确认后由系统覆盖安装，保留本机记录。")
-            if (idle() && dialog == null && (manual || !deferred(update))) { promptedCode = update.versionCode; show(activity.currentFocus) }
+            if (idle() && dialog == null) { promptedCode = update.versionCode; show(activity.currentFocus) }
         }
     }
     @Suppress("DEPRECATION")
