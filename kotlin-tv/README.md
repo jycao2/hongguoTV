@@ -9,6 +9,11 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.17.0 新增
+
+- **收藏分组**：收藏页顶部可按分组筛选，长按剧卡片选择「设置分组」，支持手机输入自定义分组名（分组数据随备份导出）。
+- **向下适配**：最低支持 Android 7.0（API 24），覆盖更多老电视/盒子。
+
 ## 0.16.0 新增
 
 - **启动提醒式更新**：检测到新版本后每次启动应用都会弹出更新提示，可手动关闭，不更新也可继续使用（播放中不打扰）。
@@ -192,7 +197,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.16.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.17.0-android8.apk
 ```
 
 ## 工程结构

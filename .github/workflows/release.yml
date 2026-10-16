@@ -35,13 +35,12 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.16.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.16.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.17.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.17.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- TV版搜索新增 A-Z 首拼联想输入：遥控器按字母键拼出剧名首拼，自动联想中文候选词，选中即搜索"
-            echo "- 应用更新改为启动提醒：检测到新版本后每次启动应用都会弹出更新提示，可手动关闭，不更新也可继续使用"
-            echo "- 修复手机输入在部分手机浏览器中提示「来源不匹配」、无法发送剧名的问题"
+            echo "- 收藏新增分组功能：收藏页顶部可按分组筛选，长按剧卡片选择「设置分组」，支持手机输入自定义分组名"
+            echo "- 支持 Android 7.0（API 24）及以上设备，覆盖更多老电视/盒子"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK

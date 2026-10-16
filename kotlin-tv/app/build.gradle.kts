@@ -12,7 +12,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.16.0"
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.17.0"
     }
     buildFeatures { buildConfig = true }
     signingConfigs {
