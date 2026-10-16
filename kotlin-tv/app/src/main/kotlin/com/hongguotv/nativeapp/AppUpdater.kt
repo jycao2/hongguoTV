@@ -69,7 +69,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         active = true; main.removeCallbacks(poll); main.postDelayed(poll, 8000)
         if (permissionRequested) {
             permissionRequested = false
-            if (activity.packageManager.canRequestPackageInstalls()) install()
+            if (Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()) install()
             else { status = "安装权限未开启，可在这里再次安装"; show(anchor) }
         } else if (!checkedThisSession && auto) {
             // Nag semantics need a fresh verdict on every app start, not the 6-hour poll cadence;
@@ -198,7 +198,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (busy || !active || !ready) return
         work({ validateApk(update) }) {
             try {
-                if (!activity.packageManager.canRequestPackageInstalls()) {
+                if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
                     permissionRequested = true
                     activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
                 } else {
