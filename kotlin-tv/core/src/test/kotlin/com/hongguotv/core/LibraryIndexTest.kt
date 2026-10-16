@@ -88,4 +88,47 @@ class LibraryIndexTest {
         assertTrue(state.history().isEmpty())
         assertEquals(0, state.updatedFavorites())
     }
+
+    @Test fun `favorite groups assign normalize and clear on unfavorite`() {
+        val state = LibraryIndex(data())
+        assertTrue(state.groups().isEmpty())
+        assertFalse(state.setGroup("999", "追剧"))
+        assertTrue(state.setGroup("1", " 追剧 "))
+        assertTrue(state.setGroup("2", "追剧"))
+        assertTrue(state.setGroup("3", "漫剧"))
+        assertEquals(listOf("追剧", "漫剧"), state.groups())
+        assertEquals("追剧", state.groupOf("1"))
+        assertFalse(state.setGroup("1", "追剧"))
+        assertTrue(state.setGroup("1", "漫剧"))
+        assertEquals(listOf("漫剧", "追剧"), state.groups())
+        assertTrue(state.setGroup("3", null))
+        assertNull(state.groupOf("3"))
+        assertFalse(state.setGroup("3", null))
+        assertTrue(state.setGroup("4", "ab" + "长".repeat(20)))
+        assertEquals("ab" + "长".repeat(10), state.groupOf("4"))
+        assertFalse(state.toggle(series(1)))
+        assertNull(state.groupOf("1"))
+        val saved = state.snapshot()
+        assertEquals(state.groupsSnapshot(), saved.favoriteGroups)
+        assertEquals(state.groupsSnapshot(), LibraryIndex(saved).groupsSnapshot())
+    }
+
+    @Test fun `favorite group cap rejects new names beyond twenty`() {
+        val state = LibraryIndex(data())
+        repeat(20) { assertTrue(state.setGroup("${it + 1}", "组$it")) }
+        assertFalse(state.setGroup("21", "组 20"))
+        assertTrue(state.setGroup("21", "组0"))
+        assertTrue(state.setGroup("1", "组1"))
+        assertEquals(20, state.groups().size)
+    }
+
+    @Test fun `favorite groups survive disk round trip and ignore orphan keys`() {
+        val state = LibraryIndex(data())
+        state.setGroup("1", "追剧")
+        val values = mapOf("favorites" to LibraryDisk.series(state.favorites()),
+            "favoriteGroups" to LibraryDisk.groups(state.groupsSnapshot() + ("999" to "孤儿")))
+        val restored = LibraryDisk.decode(values)
+        assertEquals(mapOf("1" to "追剧"), restored.groupsSnapshot())
+        assertEquals(emptyMap<String, String>(), LibraryDisk.decode(mapOf("favoriteGroups" to "bad")).groupsSnapshot())
+    }
 }

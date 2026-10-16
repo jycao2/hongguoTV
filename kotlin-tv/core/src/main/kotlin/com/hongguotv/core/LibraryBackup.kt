@@ -13,7 +13,7 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows)
 }
-data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet())
+data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap())
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
@@ -26,9 +26,12 @@ object LibraryBackup {
     private fun cleanText(value: String,max: Int)=value.map { if(it.isISOControl()) ' ' else it }.joinToString("").take(max)
     fun seriesJson(series: Series)=series.copy(title=cleanText(series.title,200),cover=cleanCover(series.cover),description="",badge=cleanText(series.badge,100),tags=cleanText(series.tags,200)).toJson()
     fun encode(data: BackupData): String {
+        val groups=JSONObject()
+        data.favoriteGroups.forEach { (key,name) -> val clean=cleanText(name,20); if(clean.isNotBlank()) groups.put(key,clean) }
         val result=JSONObject().put("format","hongguotv.library").put("version",1).put("createdAt",System.currentTimeMillis())
             .put("later",JSONArray(data.later.map(::seriesJson))).put("hidden",JSONArray(data.hidden.toList()))
             .put("favorites",JSONArray(data.favorites.map(::seriesJson))).put("history",JSONArray(data.history.map { it.json() }))
+            .put("favoriteGroups",groups)
             .put("watched",JSONArray(data.watched.intersect((data.favorites.map { it.id }+data.history.map { it.series.id }).toSet()).take(500)))
             .put("searches",JSONArray(SearchHistory.encode(data.searches.map { it.copy(query=cleanText(it.query,80)) }))).put("settings",data.settings.json()).toString()
         require(result.toByteArray(Charsets.UTF_8).size<=MAX_BYTES) { "备份超过 2 MB 限制" }
@@ -64,6 +67,16 @@ object LibraryBackup {
         require(hidden.length()<=500)
         val hiddenIds=(0 until hidden.length()).map { id(hidden.getString(it)) }.toSet()
         val favorites=o.rows("favorites",500).map(::series)
+        val groupsJson=o.optJSONObject("favoriteGroups")
+        val favoriteGroups=mutableMapOf<String,String>()
+        if(groupsJson!=null) {
+            require(groupsJson.length()<=500) { "分组数量超过上限" }
+            groupsJson.keys().forEach { key ->
+                val name=groupsJson.get(key)
+                require(name is String && name.isNotBlank() && name.length<=20 && name.none(Char::isISOControl)) { "分组名称无效" }
+                favoriteGroups[id(key)]=name
+            }
+        }
         val history=o.rows("history",200).map { row ->
             val duration=row.number("duration",604_800_000)
             BackupProgress(series(row.getJSONObject("series")),id(row.string("episodeId",30)),row.number("episodeIndex",100_000).toInt(),row.number("position",604_800_000).let { if(duration>0) minOf(it,duration) else it },duration,row.get("completed").also { require(it is Boolean) } as Boolean,row.number("updatedAt",4_102_444_800_000))
@@ -84,7 +97,7 @@ object LibraryBackup {
         val danmakuFont=DanmakuPrefs.font(settings.optInt("danmakuFont",DanmakuPrefs.FONT_DEFAULT))
         val danmakuSpeed=DanmakuPrefs.speed(settings.optInt("danmakuSpeed",DanmakuPrefs.SPEED_DEFAULT))
         val danmakuRows=DanmakuPrefs.rows(settings.optInt("danmakuRows",DanmakuPrefs.ROWS_DEFAULT))
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows),later,hiddenIds)
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows),later,hiddenIds,favoriteGroups)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {
@@ -101,6 +114,8 @@ object LibraryBackup {
         incoming.watched.filter { id -> id !in records && local.favorites.none { it.id==id } }.forEach { watched.add(it) }
         val history=records.values.sortedByDescending { it.updatedAt }.take(200)
         val retained=(favorites.map { it.id }+history.map { it.series.id }).toSet()
-        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet())
+        val favoriteIds=favorites.map { it.id }.toSet()
+        val favoriteGroups=(local.favoriteGroups+incoming.favoriteGroups).filterKeys { it in favoriteIds }
+        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet(),favoriteGroups)
     }
 }

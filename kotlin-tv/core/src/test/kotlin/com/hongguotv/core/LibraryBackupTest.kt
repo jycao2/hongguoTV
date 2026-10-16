@@ -54,6 +54,26 @@ class LibraryBackupTest {
         assertEquals(DanmakuPrefs.OPACITY_DEFAULT,normalized.danmakuOpacity); assertEquals(DanmakuPrefs.FONT_LABELS.lastIndex,normalized.danmakuFont)
         assertEquals(0,normalized.danmakuSpeed); assertEquals(DanmakuPrefs.ROWS_DEFAULT,normalized.danmakuRows)
     }
+    @Test fun `favorite groups round trip merge and legacy backups`() {
+        val original=data().copy(favoriteGroups=mapOf("1" to "追剧"))
+        assertEquals(original,LibraryBackup.decode(LibraryBackup.encode(original)))
+        val legacy=JSONObject(LibraryBackup.encode(data())); legacy.remove("favoriteGroups")
+        assertTrue(LibraryBackup.decode(legacy.toString()).favoriteGroups.isEmpty())
+        val messy=data().copy(favoriteGroups=mapOf("1" to "你\n好" + "长".repeat(30)))
+        assertEquals("你 好" + "长".repeat(17),LibraryBackup.decode(LibraryBackup.encode(messy)).favoriteGroups.getValue("1"))
+        val blank=data().copy(favoriteGroups=mapOf("1" to "   "))
+        assertTrue(LibraryBackup.decode(LibraryBackup.encode(blank)).favoriteGroups.isEmpty())
+        val local=data().copy(favoriteGroups=mapOf("1" to "本地"))
+        val incoming=data().copy(favorites=listOf(series("2")),history=emptyList(),watched=emptySet(),favoriteGroups=mapOf("1" to "导入","2" to "新剧","3" to "孤儿"))
+        assertEquals(mapOf("1" to "导入","2" to "新剧"),LibraryBackup.merge(local,incoming,false).favoriteGroups)
+    }
+    @Test fun `invalid favorite groups are rejected`() {
+        fun reject(change: (JSONObject)->Unit) { val o=JSONObject(LibraryBackup.encode(data())); change(o); assertTrue(o.toString(),runCatching { LibraryBackup.decode(o.toString()) }.isFailure) }
+        reject { it.getJSONObject("favoriteGroups").put("1","x".repeat(21)) }
+        reject { it.getJSONObject("favoriteGroups").put("notAnId","a") }
+        reject { it.getJSONObject("favoriteGroups").put("1","") }
+        reject { it.getJSONObject("favoriteGroups").put("1",1) }
+    }
     @Test fun `invalid format ranges settings duplicates and oversized nesting are rejected`() {
         fun reject(change: (JSONObject)->Unit) { val o=JSONObject(LibraryBackup.encode(data())); change(o); assertTrue(o.toString(),runCatching { LibraryBackup.decode(o.toString()) }.isFailure) }
         reject { it.put("version",2) }; reject { it.put("format","other") }

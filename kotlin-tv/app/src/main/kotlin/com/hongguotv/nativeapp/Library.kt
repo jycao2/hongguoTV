@@ -98,6 +98,7 @@ class Library(context: Context) {
                 "later" -> state.later().let { rows -> { LibraryDisk.series(rows) } }
                 "progress" -> state.history().let { rows -> { LibraryDisk.history(rows) } }
                 "favoriteUpdates" -> state.updates().let { rows -> { LibraryDisk.updates(rows) } }
+                "favoriteGroups" -> state.groupsSnapshot().let { rows -> { LibraryDisk.groups(rows) } }
                 "searches" -> state.searches().let { rows -> { SearchHistory.encode(rows) } }
                 "watched" -> state.watched().let { ids -> { ids } }
                 "hidden" -> state.hidden().let { ids -> { ids } }
@@ -117,6 +118,9 @@ class Library(context: Context) {
     fun hidden() = state().hidden()
     fun favoriteUpdate(id: String) = state().favoriteUpdate(id)
     fun updatedFavorites() = state().updatedFavorites()
+    fun groups() = state().groups()
+    fun groupOf(id: String) = state().groupOf(id)
+    fun setGroup(id: String, group: String?): Boolean = state().setGroup(id, group).also { if (it) persist("favoriteGroups") }
     fun favoriteLabel(id: String): String = favoriteUpdate(id)?.let {
         val season = if (it.hasNewSeason) "《${it.newSeasonTitle ?: "新季"}》已上线" else ""
         val episodes = if (it.added > 0) "新增 ${it.added} 集 · 更新至 ${it.total} 集" else "更新至 ${it.total} 集"
@@ -199,7 +203,7 @@ class Library(context: Context) {
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
         index = LibraryIndex(merged, state().updates())
-        persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates")
+        persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
