@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.14.0 新增
+
+- **强制更新**：检测到新版本后弹出不可关闭的更新窗口，更新完成后才能继续使用（播放中不打扰）。
+
 ## 0.13.0 新增
 
 - **内置背景「强制欣赏」**：首次启动默认展示；「自定义背景 → 恢复默认背景」改为两个选项：强制欣赏 / 默认风格。
@@ -183,7 +187,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.13.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.14.0-android8.apk
 ```
 
 ## 工程结构
