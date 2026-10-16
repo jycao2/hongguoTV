@@ -164,6 +164,23 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         }
         return CatalogPage(valid(list),tab.optBoolean("has_more",false) && page<100)
     }
+    /** Pinyin-initial suggestions from the signed app API; every failure returns an empty list so the TV keyboard keeps working. */
+    fun suggest(query: String): List<String> {
+        val key=query.trim().lowercase()
+        if(key.isEmpty() || key.length>20 || !key.matches(Regex("[a-z0-9]+"))) return emptyList()
+        return runCatching {
+            VendorConstants.regenerate()
+            val values=VendorConstants.device.toMutableMap()
+            for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
+            values["version_name"]="7.2.2.32"
+            values["query"]=key
+            val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
+            val data=JSONObject(text(signed.url,signed))
+            if(data.optInt("code",-1)!=0) return emptyList()
+            val rows=data.optJSONObject("data")?.optJSONArray("query_result") ?: return emptyList()
+            (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
+        }.getOrElse { emptyList() }
+    }
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
         val html=text("$site/detail?series_id=$id")

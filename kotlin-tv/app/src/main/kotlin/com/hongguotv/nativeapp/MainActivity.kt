@@ -163,6 +163,12 @@ class MainActivity: Activity() {
     private var searchInput: View?=null
     private var searchButton: View?=null
     private val searchActions=mutableListOf<View>()
+    private var azFirst: View?=null
+    private val azLastRow=mutableListOf<View>()
+    private var suggestRow: LinearLayout?=null
+    private var suggestFirst: View?=null
+    private var suggestTicket=0
+    private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
     private var detail: Detail?=null
     private var episodeIndex=0
@@ -286,6 +292,7 @@ class MainActivity: Activity() {
         (catalogRecycler?.layoutManager as? GridLayoutManager)?.let { scrollPositions[catalogPageKey]=it.findFirstVisibleItemPosition() }
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
         nav.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
+        azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; homeUpdates=null; resumeCards.clear()
     }
@@ -402,7 +409,7 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
         }
         if(tab==1) {
-            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入${library.contentType.label}名称或关键词"; setText(query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
+            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入${library.contentType.label}名称，或用字母键拼首拼"; setText(query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons.getValue(library.contentType).id; searchButton?.nextFocusUpId=input.nextFocusUpId
@@ -413,6 +420,34 @@ class MainActivity: Activity() {
             searchActions.addAll(listOf(recent,phone))
             typeButtons.values.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
+            input.addTextChangedListener(object: android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int) {}
+                override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) { scheduleSuggest() }
+            })
+            val keyViews=mutableListOf<TextView>()
+            (('A'..'Z').map { it.toString() }+listOf("删除","清空")).chunked(7).forEach { rowKeys ->
+                val line=row().apply { setPadding(0,0,0,dp(4)) }
+                rowKeys.forEach { key ->
+                    val view=button(key) { onAzKey(key) }
+                    view.textSize=13f; view.minHeight=dp(36); view.setPadding(dp(4),dp(6),dp(4),dp(6))
+                    keyViews+=view
+                    line.addView(view,lp(0,-2).apply { weight=1f; rightMargin=dp(6) })
+                }
+                container.addView(line)
+            }
+            keyViews.forEachIndexed { index,key ->
+                key.nextFocusLeftId=keyViews[if(index%7==0) index else index-1].id
+                key.nextFocusRightId=keyViews[if(index%7==6) index else index+1].id
+                key.nextFocusUpId=if(index<7) input.id else keyViews[index-7].id
+                key.nextFocusDownId=if(index+7<keyViews.size) keyViews[index+7].id else key.id
+            }
+            azFirst=keyViews.first(); azLastRow.addAll(keyViews.takeLast(7))
+            val suggestScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
+            val suggestLine=row()
+            suggestScroll.addView(suggestLine)
+            suggestRow=suggestLine
+            container.addView(suggestScroll,lp(-1,-2).apply { bottomMargin=dp(4) })
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
             heading.addView(text("${rankBoard.label}热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -514,7 +549,7 @@ class MainActivity: Activity() {
         val displayed=mutableListOf<Series>()
         displayed+=if(localCatalog()) catalog else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog
         if(displayed.isEmpty()) {
-            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入关键词，用遥控器确认搜索" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
+            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
         }
@@ -540,9 +575,10 @@ class MainActivity: Activity() {
         collectionBack?.nextFocusDownId=recycler.id; genreClear?.nextFocusDownId=recycler.id
         typeButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: recycler.id }
         genreButton?.nextFocusDownId=genreClear?.id ?: recycler.id
-        searchInput?.nextFocusDownId=recycler.id
-        searchButton?.nextFocusDownId=recycler.id
-        searchActions.forEach { it.nextFocusDownId=recycler.id }
+        searchInput?.nextFocusDownId=azFirst?.id ?: recycler.id
+        searchButton?.nextFocusDownId=azFirst?.id ?: recycler.id
+        searchActions.forEach { it.nextFocusDownId=azFirst?.id ?: recycler.id }
+        azLastRow.forEach { it.nextFocusDownId=suggestFirst?.id ?: recycler.id }
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else {
             val found=displayed.indexOfFirst { it.id==catalogFocus }
@@ -661,7 +697,7 @@ class MainActivity: Activity() {
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
-            card.nextFocusUpId=if(position<gridColumns) searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            card.nextFocusUpId=if(position<gridColumns) azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
             if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
@@ -933,6 +969,46 @@ class MainActivity: Activity() {
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
         if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
         library.rememberSearch(clean,type); query=clean; tab=1; page=1; catalogFocus=""; showCatalog(true)
+    }
+    private fun onAzKey(key: String) {
+        val input=searchInput as? EditText ?: return
+        when(key) {
+            "删除" -> { val length=input.text.length; if(length>0) input.text.delete(length-1,length) }
+            "清空" -> input.setText("")
+            else -> if(input.text.length<20) input.append(key.lowercase())
+        }
+        input.setSelection(input.text.length)
+        scheduleSuggest()
+    }
+    private fun scheduleSuggest() {
+        main.removeCallbacks(pendingSuggest)
+        main.postDelayed(pendingSuggest,300)
+    }
+    private fun fetchSuggest() {
+        if(isDestroyed || tab!=1 || screen!="catalog") return
+        val key=(searchInput as? EditText)?.text?.toString()?.trim().orEmpty()
+        if(key.isEmpty() || !key.matches(Regex("[a-zA-Z0-9]+"))) { suggestTicket++; renderSuggest(emptyList()); return }
+        val ticket=++suggestTicket
+        io.execute {
+            val words=repository.suggest(key)
+            main.post { if(!isDestroyed && ticket==suggestTicket && tab==1 && screen=="catalog") renderSuggest(words) }
+        }
+    }
+    private fun renderSuggest(words: List<String>) {
+        val container=suggestRow ?: return
+        val refocus=container.hasFocus()
+        container.removeAllViews(); suggestFirst=null
+        val views=words.map { word -> button(word) { runSearch(word) }.apply { textSize=14f; minHeight=dp(36) } }
+        views.forEachIndexed { index,view ->
+            container.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) })
+            view.nextFocusLeftId=views[if(index==0) 0 else index-1].id
+            view.nextFocusRightId=views[if(index==views.size-1) index else index+1].id
+            view.nextFocusUpId=azLastRow.firstOrNull()?.id ?: searchInput?.id ?: View.NO_ID
+            view.nextFocusDownId=catalogRecycler?.id ?: View.NO_ID
+        }
+        suggestFirst=views.firstOrNull()
+        azLastRow.forEach { it.nextFocusDownId=suggestFirst?.id ?: catalogRecycler?.id ?: View.NO_ID }
+        if(refocus) (suggestFirst ?: azLastRow.firstOrNull() ?: searchInput)?.requestFocus()
     }
     private fun showSearchHistory(anchor: View) {
         val history=library.searches()

@@ -403,4 +403,33 @@ class ContentRepositoryTest {
         }
         assertEquals("789",repo.home(1,ContentType.COMIC,Genre("creative","脑洞",listOf("755"))).items.single().id)
     }
+
+    @Test fun suggestParsesQueryResultWordsAndDeduplicates() {
+        val repo=repository { request ->
+            assertEquals("/reading/bookapi/search/suggest/v",request.url.encodedPath)
+            assertEquals("jywn",request.url.queryParameter("query"))
+            """{"code":0,"data":{"query_key":"jywn","query_result":["家有五女"," 今夜为你无眠 ","家有五女",""]}}"""
+        }
+        assertEquals(listOf("家有五女","今夜为你无眠"),repo.suggest(" JYWN "))
+    }
+
+    @Test fun suggestFallsBackToEmptyOnBlankBodyErrorCodeOrNetworkFailure() {
+        var requests=0
+        val blank=repository { requests++; "" }
+        assertTrue(blank.suggest("jywn").isEmpty())
+        val rejected=repository { requests++; """{"code":-1}""" }
+        assertTrue(rejected.suggest("jywn").isEmpty())
+        val offline=repository { requests++; throw IOException("offline") }
+        assertTrue(offline.suggest("jywn").isEmpty())
+        assertEquals(3,requests)
+    }
+
+    @Test fun suggestSkipsNonAlphabetInputWithoutARequest() {
+        var requests=0
+        val repo=repository { requests++; """{"code":0,"data":{"query_result":["a"]}}""" }
+        assertTrue(repo.suggest("").isEmpty())
+        assertTrue(repo.suggest("家有").isEmpty())
+        assertTrue(repo.suggest("a".repeat(21)).isEmpty())
+        assertEquals(0,requests)
+    }
 }
