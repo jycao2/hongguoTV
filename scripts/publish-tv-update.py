@@ -31,7 +31,7 @@ manifest = {
     "packageName": "com.hongguotv.nativeapp",
     "versionCode": VERSION_CODE,
     "versionName": VERSION_NAME,
-    "minSdk": 26,
+    "minSdk": 24,
     "tag": TAG,
     "apk": {"name": APK_NAME, "size": size, "sha256": sha256},
     "notes": notes,
