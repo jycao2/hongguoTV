@@ -118,7 +118,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             })
         }
         body.addView(TextView(activity).apply {
-            text = if (updatePending) "发现新版本，建议尽快更新；每次启动应用都会提示，直到完成更新。收藏与观看记录保留。" else "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"
+            text = if (updatePending) "发现新版本，点击即可更新" else "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"
             textSize = 13f; setTextColor(TvStyle.muted)
             setPadding(0, (8*dp).toInt(), 0, (8*dp).toInt())
         })
