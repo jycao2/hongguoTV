@@ -32,6 +32,10 @@ class AppUpdatesTest {
         }
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("tag", "../../other").toString()) }
     }
+    @Test fun minSdkFloorMatchesAppModule() {
+        assertEquals(24, AppUpdate.parse(json().put("minSdk", 24).toString()).minSdk)
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("minSdk", 23).toString()) }
+    }
     @Test fun rejectOtherPackageAndInvalidSchema() {
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("packageName", "other.app").toString()) }
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("schema", 2).toString()) }
