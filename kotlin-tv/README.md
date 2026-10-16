@@ -9,6 +9,11 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.15.0 新增
+
+- **启动提醒式更新**：检测到新版本后每次启动应用都会弹出更新提示，可手动关闭，不更新也可继续使用（播放中不打扰）。
+- **手机输入修复**：修复部分手机浏览器发送剧名时提示「来源不匹配」的问题。
+
 ## 0.14.0 新增
 
 - **强制更新**：检测到新版本后弹出不可关闭的更新窗口，更新完成后才能继续使用（播放中不打扰）。
@@ -187,7 +192,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.14.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.15.0-android8.apk
 ```
 
 ## 工程结构
