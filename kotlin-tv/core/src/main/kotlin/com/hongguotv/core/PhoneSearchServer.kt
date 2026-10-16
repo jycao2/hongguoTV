@@ -13,6 +13,15 @@ import java.security.SecureRandom
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** The random token in the URL path is the real access gate; Origin is only defense in depth.
+ *  In-app WebViews and privacy tools often post forms with "null" or port-less origins,
+ *  so only a genuinely different host counts as foreign. */
+internal fun foreignOrigin(origin: String?, localAddress: String): Boolean {
+    if(origin == null || origin == "null") return false
+    val host = runCatching { java.net.URI(origin).host }.getOrNull() ?: return true
+    return host.removePrefix("[").removeSuffix("]") != localAddress
+}
+
 /** A one-use, short-lived LAN form. No cookies, platform credentials or external resources. */
 class PhoneSearchServer(
     address: String,
@@ -80,7 +89,7 @@ class PhoneSearchServer(
             return respond(socket,200,"""<h1>在电视上搜索</h1><p>输入剧名，电视会按当前选择的漫剧或短剧分类搜索。</p><form method="post" action="/$token/submit"><input name="query" maxlength="80" required autofocus placeholder="输入剧名或关键词" autocomplete="off"><button>发送到电视</button></form><p>页面仅在电视的手机输入窗口打开期间有效，最长 5 分钟。</p>""")
         }
         if(request[0]!="POST" || request[1]!="/$token/submit") return respond(socket,405,"不支持的操作")
-        if(headers["origin"]!=null && headers["origin"]!="http://$host") return respond(socket,403,"来源不匹配")
+        if(foreignOrigin(headers["origin"], localAddress)) return respond(socket,403,"来源不匹配")
         if(headers.containsKey("transfer-encoding") || headers["content-type"]?.substringBefore(';')!="application/x-www-form-urlencoded") return respond(socket,400,"请求格式错误")
         val length=headers["content-length"]?.toIntOrNull()?.takeIf { it in 1..4096 } ?: return respond(socket,413,"输入内容过长")
         val body=ByteArray(length); var offset=0

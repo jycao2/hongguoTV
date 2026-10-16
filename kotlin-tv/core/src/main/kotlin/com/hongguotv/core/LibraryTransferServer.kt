@@ -68,7 +68,7 @@ class LibraryTransferServer(address: String,private val backup: String,private v
         }
         if(stopped.get() || System.nanoTime()>=deadline) return respond(socket,410,"二维码已过期")
         if(headers["host"]!=host || request[1] !in listOf("/$token","/$token/download","/$token/import")) return respond(socket,404,"页面不存在")
-        if(headers["origin"]!=null && headers["origin"]!="http://$host") return respond(socket,403,"来源不匹配")
+        if(foreignOrigin(headers["origin"], local.hostAddress)) return respond(socket,403,"来源不匹配")
         if(headers["sec-fetch-site"]=="cross-site") return respond(socket,403,"来源不匹配")
         if(request[0]=="GET" && request[1]=="/$token") return respond(socket,200,page())
         if(request[0]=="GET" && request[1]=="/$token/download") {

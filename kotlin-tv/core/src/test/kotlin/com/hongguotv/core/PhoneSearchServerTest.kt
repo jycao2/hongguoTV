@@ -39,6 +39,17 @@ class PhoneSearchServerTest {
             assertFalse(submitted)
         }
     }
+    @Test fun `in-app webview origin variants can still submit`() {
+        val received=CountDownLatch(1); var query=""
+        PhoneSearchServer("127.0.0.1",{ query=it;received.countDown() }).use { server ->
+            // A port-less origin must pass the origin gate and reach body validation (400, not 403).
+            assertTrue(request(server,"POST",URI(server.url).path+"/submit","query=","Origin: http://127.0.0.1\r\n").startsWith("HTTP/1.1 400"))
+            // In-app WebViews and privacy tools often post forms with Origin: null.
+            val reply=request(server,"POST",URI(server.url).path+"/submit","query="+URLEncoder.encode("测试","UTF-8"),"Origin: null\r\n")
+            assertTrue(reply.startsWith("HTTP/1.1 200"))
+            assertTrue(received.await(2,TimeUnit.SECONDS)); assertEquals("测试",query)
+        }
+    }
     @Test fun `invalid and oversized input does not consume the session`() {
         PhoneSearchServer("127.0.0.1",{}).use { server ->
             for(body in listOf("query=","query="+"x".repeat(81),"query=a&query=b","query=hello%0Aworld","query=%zz")) {
