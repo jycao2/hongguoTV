@@ -45,6 +45,13 @@ class MainActivity: Activity() {
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository()
+    private val randomRecommender by lazy {
+        val raw=getSharedPreferences("random_pool", MODE_PRIVATE).getString("pool", null)
+        val items=raw?.let { RandomPoolSnapshot.decode(it, System.currentTimeMillis()) } ?: emptyList()
+        RandomRecommender(repository, items)
+    }
+    private var randomReplenishing=false
+    private var randomDialog: AlertDialog?=null
     private val danmakuRepo=DanmakuRepository(repository.http)
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
@@ -402,6 +409,7 @@ class MainActivity: Activity() {
             }
             if(tab==0) {
                 genreButton=addButton(types,genre?.let { "题材 · ${it.name}" } ?: "题材") { showGenrePicker() }.apply { nextFocusUpId=nav[tab].id }
+                addButton(types,"随机") { showRandomPicks() }.apply { nextFocusUpId=nav[tab].id }
             }
             if(inlineHomeFilters()) {
                 top.addView(Space(this),lp(0,1).apply { weight=1f })
@@ -611,7 +619,7 @@ class MainActivity: Activity() {
     }
     private fun maybeLoadMore() {
         val adapter=catalogAdapter ?: return
-        if(loadingMore || !hasMore || localCatalog() || screen!="catalog") return
+        if(randomDialog?.isShowing==true || loadingMore || !hasMore || localCatalog() || screen!="catalog") return
         if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
         val requestTab=tab; val requestPage=page+1; val requestQuery=query; val requestType=library.contentType
         val requestBoard=rankBoard; val requestGenre=if(requestTab==0) genre else null
@@ -1055,6 +1063,65 @@ class MainActivity: Activity() {
         if(history.isEmpty()) { tvTools.info("搜索历史","搜索过的剧名会保存在这里，最多保留 20 条。",anchor); return }
         tvTools.choose("搜索历史",history.map { "${it.type.label} · ${it.query}" },anchor,{ index -> runSearch(history[index].query,history[index].type) },"清空历史") {
             tvTools.confirm("清空搜索历史","清除本机保存的搜索词？",anchor) { library.clearSearches() }
+        }
+    }
+    private fun showRandomPicks() {
+        if(randomDialog?.isShowing==true) return
+        val picks=randomRecommender.pick(12)
+        if(picks.isNotEmpty()) { showRandomDialog(picks); return }
+        // 池空或近期都展示过：先补充再展示
+        showRandomDialog(emptyList(), loading = true)
+        replenishRandomPool {
+            val next=randomRecommender.pick(12)
+            if(next.isNotEmpty()) showRandomDialog(next) else randomDialog?.dismiss().also { Toast.makeText(this,"暂时无法随机荐剧，请稍后重试",Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    private fun replenishRandomPool(onDone: () -> Unit) {
+        if(randomReplenishing) return
+        randomReplenishing=true
+        io.execute {
+            val added=runCatching { randomRecommender.replenish() }.getOrDefault(0)
+            if(added>0) {
+                val encoded=RandomPoolSnapshot.encode(randomRecommender.snapshot(), System.currentTimeMillis())
+                getSharedPreferences("random_pool", MODE_PRIVATE).edit().putString("pool", encoded).apply()
+            }
+            main.post { randomReplenishing=false; if(!isDestroyed) onDone() }
+        }
+    }
+
+    private fun showRandomDialog(items: List<Series>, loading: Boolean=false) {
+        randomDialog?.dismiss()
+        val body=column().apply { setPadding(dp(16),dp(12),dp(16),dp(8)) }
+        val title=text(if(loading) "正在随机挑选…" else "随机荐剧",20f).apply { setTypeface(null,Typeface.BOLD); setPadding(0,0,0,dp(10)) }
+        body.addView(title)
+        val content=FrameLayout(this)
+        body.addView(content,lp(-1,dp(420)).apply { bottomMargin=dp(10) })
+        val dlg=AlertDialog.Builder(this).setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("换一批",null).setNegativeButton("关闭",null).create()
+        randomDialog=dlg
+        dlg.show()
+        if(items.isEmpty() && !loading) {
+            content.addView(text("候选池为空，正在补充…",15f,muted).apply { setPadding(0,dp(20),0,0) })
+        } else if(items.isNotEmpty()) {
+            val randomAdapter=CatalogAdapter(items.toMutableList())
+            val grid=GridLayoutManager(this,3)
+            val recycler=RecyclerView(this).apply { clipToPadding=false; itemAnimator=null }
+            recycler.layoutManager=grid; recycler.adapter=randomAdapter
+            content.addView(recycler,lp(-1,-1))
+        }
+        // 「换一批」按钮
+        dlg.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            text="换一批"
+            setOnClickListener {
+                dlg.dismiss()
+                val picks=randomRecommender.pick(12)
+                if(picks.isNotEmpty()) showRandomDialog(picks)
+                else { showRandomDialog(emptyList(), loading = true); replenishRandomPool { val n=randomRecommender.pick(12); if(n.isNotEmpty()) showRandomDialog(n) } }
+            }
+        }
+        if(loading) {
+            // 补充完成后调用方会重新 showRandomDialog(items) 覆盖这个 loading 框
         }
     }
     private fun showGenrePicker() {

@@ -35,11 +35,13 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.18.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.18.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.19.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.19.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 新增下载统计"
+            echo "- 新增「随机荐剧」：首页一键抽取 12 部剧，支持「换一批」"
+            echo "- 候选池本地缓存 300 部、7 天有效，弹层秒开"
+            echo "- 加权抽取：热播榜保质量 + 全题材随机页，片源更丰富"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK
