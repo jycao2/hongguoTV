@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.19.1 新增
+
+- **更新修复**：修复 Android 9 电视/盒子自动更新误报「包名、版本或签名不匹配」无法安装的问题（API 28/29 平台缺陷适配）。
+
 ## 0.19.0 新增
 
 - **随机荐剧**：首页新增「随机」按钮，一键抽取 12 部剧，支持「换一批」；候选池本地缓存 300 部、7 天有效，热播榜与全题材随机页加权抽取，片源更丰富。
@@ -209,7 +213,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.19.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.19.1-android8.apk
 ```
 
 ## 工程结构
