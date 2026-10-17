@@ -1,6 +1,6 @@
 # 红果 TV 原生独立版
 
-这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 7.0 / API 24。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
+这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 8.0 / API 26。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
 
 - 应用名称：红果TV
 - 包名：`com.hongguotv.nativeapp`，与旧版 `com.hongguotv` 可以并存。
@@ -9,10 +9,14 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.17.1 新增
+
+- **更新修复**：回退最低系统要求至 Android 8.0（API 26），修复 0.16.0 及更早版本无法检测到新版、误报「更新信息格式不正确」的问题，旧客户端自动更新恢复。
+
 ## 0.17.0 新增
 
 - **收藏分组**：收藏页顶部可按分组筛选，长按剧卡片选择「设置分组」，支持手机输入自定义分组名（分组数据随备份导出）。
-- **向下适配**：最低支持 Android 7.0（API 24），覆盖更多老电视/盒子。
+- **向下适配**：最低支持 Android 7.0（API 24），覆盖更多老电视/盒子（0.17.1 起因更新链路兼容性回退为 Android 8.0）。
 
 ## 0.16.0 新增
 
@@ -89,7 +93,7 @@
 
 - 应用内更新：浏览时自动检查、下载本仓库 Release 中的新版，校验文件和签名后由系统确认安装；设置中可手动检查或关闭自动下载。播放与后台会取消更新请求。
 - 推送 `main` 分支的原生代码后，CI 自动验证、签名并发布 APK、源码及更新元数据到本仓库 Release。电视无需 GitHub 凭据。
-- 首次仍需手动安装这版；Android 7 及以上首次需开启本应用的安装权限，之后每次确认系统安装。覆盖安装保留本机记录。
+- 首次仍需手动安装这版；Android 8 首次需开启本应用的安装权限，之后每次确认系统安装。覆盖安装保留本机记录。
 
 [自动更新、发布配置与版本规则](AUTO_UPDATES.md)。云端构建编号从 10001 起递增；0.9.2 起因原密钥遗失换用新发布签名，此后各版本沿用同一新密钥。
 
@@ -197,7 +201,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.17.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.17.1-android8.apk
 ```
 
 ## 工程结构
@@ -222,7 +226,7 @@ node kotlin-tv/tools/signing-oracle.cjs
 
 ## 验证边界
 
-当前版本通过 `core` 模块 JVM 单元测试与 Release lint；已在 Android TV 模拟器和 Android 实体电视上验证首页、搜索、详情、连续播放、主题切换和应用内更新。各版本交付证据见对应 `RELEASE_*.md` 记录。最低 API 24 配置和静态检查不等同于所有实体电视验收；遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
+当前版本通过 `core` 模块 JVM 单元测试与 Release lint；已在 Android TV 模拟器和 Android 实体电视上验证首页、搜索、详情、连续播放、主题切换和应用内更新。各版本交付证据见对应 `RELEASE_*.md` 记录。最低 API 26 配置和静态检查不等同于所有实体电视验收；遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
 
 内容来自第三方接口；接口、签名、内容可用性或地区网络变化可能需要更新 APK。此版本不是内容平台官方客户端。
 
