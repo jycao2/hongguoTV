@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.18.0 新增
+
+- **新增下载统计**。
+
 ## 0.17.1 新增
 
 - **更新修复**：回退最低系统要求至 Android 8.0（API 26），修复 0.16.0 及更早版本无法检测到新版、误报「更新信息格式不正确」的问题，旧客户端自动更新恢复。
@@ -201,7 +205,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.17.1-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.18.0-android8.apk
 ```
 
 ## 工程结构
@@ -223,6 +227,17 @@ keyPassword=your-password
 # 重新生成签名对照样本才需要 Node
 node kotlin-tv/tools/signing-oracle.cjs
 ```
+
+## 隐私与匿名统计
+
+0.18.0 起，应用每次启动向自建的腾讯云函数（`*.tencentscf.com`，仅 HTTPS）发送**一次**匿名 GET，用于估算装机量和活跃量，因为 GitHub Release 下载次数会被 CDN 缓存放大，无法反映真实设备数。
+
+- 上报内容只有三项：首次启动随机生成的匿名安装 ID（32 位随机 UUID，仅存于本机 `install_stats` 偏好中）、应用版本名、versionCode。
+- **不收集** IP、设备型号、系统版本、位置、观看/收藏内容或任何账号信息；云函数不解析请求来源 IP，只把上述三项写入一行日志。
+- 请求超时仅 3-5 秒，失败静默丢弃，不重试、不缓存、不阻塞应用启动；无独立开关，因为不含个人信息且单次请求对使用无影响。
+- 日志保留 7 天，统计仅做随机 ID 去重计数（累计安装 / DAU / WAU / MAU / 版本分布）。云函数与查询方式见 `../deploy/scf-stats/`。
+
+除此之外，APK 不包含第三方统计/广告/崩溃上报 SDK。
 
 ## 验证边界
 
