@@ -384,7 +384,8 @@ class MainActivity: Activity() {
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
-        top.addView(brand,lp(dp(120),dp(44)))
+        brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
+        top.addView(brand,lp(dp(172),dp(44)))
         listOf("首页","搜索","排行榜","收藏","最近观看","设置").forEachIndexed { index,label ->
             val item=addButton(top,label,index==tab) { switchTab(index) }
             fun paint(focused: Boolean) {
@@ -428,9 +429,7 @@ class MainActivity: Activity() {
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons.getValue(library.contentType).id; searchButton?.nextFocusUpId=input.nextFocusUpId
             lateinit var recent: TextView
             recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
-            lateinit var phone: TextView
-            phone=addButton(searchRow,"手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }; phone.nextFocusUpId=input.nextFocusUpId
-            searchActions.addAll(listOf(recent,phone))
+            searchActions.addAll(listOf(recent))
             typeButtons.values.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
             input.addTextChangedListener(object: android.text.TextWatcher {
@@ -438,24 +437,53 @@ class MainActivity: Activity() {
                 override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) {}
                 override fun afterTextChanged(s: android.text.Editable?) { scheduleSuggest() }
             })
-            val keyViews=mutableListOf<TextView>()
-            (('A'..'Z').map { it.toString() }+listOf("删除","清空")).chunked(7).forEach { rowKeys ->
+            fun azKey(label: String): TextView {
+                val view=button(label) { onAzKey(label) }
+                view.textSize=13f; view.minHeight=dp(36); view.setPadding(dp(4),dp(6),dp(4),dp(6))
+                return view
+            }
+            // 字母键盘在左（每行7键），数字键盘在右（1-9三行+0一行），左右区域同行互访
+            val keyboardRow=row()
+            val letterColumn=column()
+            val letterRows=((('A'..'Z').map { it.toString() })+listOf("删除","清空")).chunked(7).map { rowKeys ->
                 val line=row().apply { setPadding(0,0,0,dp(4)) }
-                rowKeys.forEach { key ->
-                    val view=button(key) { onAzKey(key) }
-                    view.textSize=13f; view.minHeight=dp(36); view.setPadding(dp(4),dp(6),dp(4),dp(6))
-                    keyViews+=view
-                    line.addView(view,lp(0,-2).apply { weight=1f; rightMargin=dp(6) })
+                val views=rowKeys.map { key -> azKey(key).also { line.addView(it,lp(0,-2).apply { weight=1f; rightMargin=dp(6) }) } }
+                letterColumn.addView(line)
+                views
+            }
+            keyboardRow.addView(letterColumn,lp(0,-2).apply { weight=1f; rightMargin=dp(6) })
+            val digitColumn=column()
+            val digitRows=listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("0")).map { rowKeys ->
+                val line=row().apply { setPadding(0,0,0,dp(4)) }
+                val views=rowKeys.map { key -> azKey(key).also { line.addView(it,lp(dp(52),-2).apply { rightMargin=dp(6) }) } }
+                digitColumn.addView(line)
+                views
+            }.toMutableList()
+            // 手机输入按钮并入数字键盘末行（0 右侧），样式与数字键一致
+            lateinit var phone: TextView
+            phone=button("手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }
+            phone.textSize=13f; phone.minHeight=dp(36); phone.setPadding(dp(8),dp(6),dp(8),dp(6))
+            (digitRows.last().first().parent as LinearLayout).addView(phone,lp(dp(110),-2))
+            digitRows[digitRows.size-1]=digitRows.last()+phone
+            keyboardRow.addView(digitColumn,lp(-2,-2))
+            container.addView(keyboardRow)
+            letterRows.forEachIndexed { r,views ->
+                views.forEachIndexed { c,key ->
+                    key.nextFocusLeftId=views[if(c==0) 0 else c-1].id
+                    key.nextFocusRightId=if(c==views.size-1) digitRows[r].first().id else views[c+1].id
+                    key.nextFocusUpId=if(r==0) input.id else letterRows[r-1][c].id
+                    key.nextFocusDownId=if(r==letterRows.size-1) key.id else letterRows[r+1][c].id
                 }
-                container.addView(line)
             }
-            keyViews.forEachIndexed { index,key ->
-                key.nextFocusLeftId=keyViews[if(index%7==0) index else index-1].id
-                key.nextFocusRightId=keyViews[if(index%7==6) index else index+1].id
-                key.nextFocusUpId=if(index<7) input.id else keyViews[index-7].id
-                key.nextFocusDownId=if(index+7<keyViews.size) keyViews[index+7].id else key.id
+            digitRows.forEachIndexed { r,views ->
+                views.forEachIndexed { c,key ->
+                    key.nextFocusLeftId=if(c==0) letterRows[r].last().id else views[c-1].id
+                    key.nextFocusRightId=views[if(c==views.size-1) c else c+1].id
+                    key.nextFocusUpId=if(r==0) input.id else digitRows[r-1][minOf(c,digitRows[r-1].size-1)].id
+                    key.nextFocusDownId=if(r==digitRows.size-1) key.id else digitRows[r+1][minOf(c,digitRows[r+1].size-1)].id
+                }
             }
-            azFirst=keyViews.first(); azLastRow.addAll(keyViews.takeLast(7))
+            azFirst=letterRows.first().first(); azLastRow.addAll(letterRows.last()+digitRows.last())
             val suggestScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
             val suggestLine=row()
             suggestScroll.addView(suggestLine)
