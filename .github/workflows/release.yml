@@ -35,12 +35,13 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.19.2+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.19.2-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.19.3+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.19.3-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 优化随机荐剧弹窗：卡片改为固定尺寸，海报按 3:4 比例显示，小图自动拉伸填满，四列整齐排列"
-            echo "- 点击荐剧卡片直接关闭弹窗进入详情页，操作更顺畅"
+            echo "- 搜索页新增数字键盘：字母键盘在左、数字键盘在右（1-9 三行 + 0），遥控器方向键自由移动"
+            echo "- 手机输入按钮移入数字键盘末行，与数字键右缘对齐"
+            echo "- 左上角品牌区「红果」后方显示当前版本号"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK

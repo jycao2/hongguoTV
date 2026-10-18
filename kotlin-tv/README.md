@@ -9,6 +9,11 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.19.3 新增
+
+- **搜索数字键盘**：搜索页字母键盘右侧新增数字键盘（1-9 三行 + 0），遥控器方向键自由移动；「手机输入」移入数字键盘末行，与数字键右缘对齐。
+- **品牌区版本号**：左上角「红果」后方显示当前版本号，小字底部对齐。
+
 ## 0.19.2 新增
 
 - **荐剧弹窗优化**：随机荐剧卡片改为固定尺寸，海报按 3:4 比例显示，小图自动拉伸填满，四列整齐排列；点击卡片直接关闭弹窗进入详情页。
@@ -217,7 +222,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.19.2-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.19.3-android8.apk
 ```
 
 ## 工程结构
