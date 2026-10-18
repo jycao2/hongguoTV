@@ -15,6 +15,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.*
 import android.view.inputmethod.InputMethodManager
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -72,6 +73,7 @@ class MainActivity: Activity() {
     private var pendingDetail: Series?=null
     private var detailAutoplay=true
     private var libraryLoadError: Throwable?=null
+    private var localPermissionContinuation: (() -> Unit)?=null
     private var workScope: RequestScope?=null
     private var workJob: java.util.concurrent.Future<*>?=null
     private var playerListener: Player.Listener?=null
@@ -272,7 +274,128 @@ class MainActivity: Activity() {
         library.loadAsync(onFailure={ problem ->
             if(!isDestroyed) { libraryLoadError=problem; if(foreground) showLibraryError(problem) }
         }) {
-            if(!isDestroyed && foreground) { showCatalog(load=true); favoriteMonitor.check() }
+            if(!isDestroyed && foreground) handleLocalBackupOnStartup {
+                if(!isDestroyed && foreground) { showCatalog(load=true); favoriteMonitor.check() }
+            }
+        }
+    }
+    private fun handleLocalBackupOnStartup(done: () -> Unit) {
+        if(!library.localBackupEnabled || library.localRestoreChecked) {
+            library.localRestoreChecked=true
+            library.maybeBackupOnStartup()
+            done(); return
+        }
+        val storage=library.localBackup()
+        if(!storage.supported || (!storage.restoreAllowed && library.localPermissionAsked)) {
+            library.localRestoreChecked=true
+            library.maybeBackupOnStartup()
+            done(); return
+        }
+        if(storage.restoreAllowed) { restoreLocalBackup(done); return }
+        library.localPermissionAsked=true
+        AlertDialog.Builder(this).setTitle("本地备份")
+            .setMessage("开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时在设置中关闭。")
+            .setNegativeButton("稍后") { _,_ -> library.localRestoreChecked=true; done() }
+            .setPositiveButton("授权") { _,_ ->
+                localPermissionContinuation={ restoreLocalBackup(done) }
+                if(!storage.request(this)) {
+                    localPermissionContinuation=null; library.localRestoreChecked=true
+                    Toast.makeText(this,"当前设备无法授予存储权限，可在设置中使用手机备份迁移",Toast.LENGTH_LONG).show()
+                    done()
+                }
+            }
+            .setOnCancelListener { library.localRestoreChecked=true; done() }
+            .show()
+    }
+    private fun restoreLocalBackup(done: () -> Unit) {
+        io.execute {
+            val data=runCatching { library.readLocalBackup() }.getOrNull()
+            runOnUiThread {
+                if(isDestroyed) return@runOnUiThread
+                val restored=data!=null && library.isEmptyForRestore()
+                if(restored) {
+                    favoriteMonitor.stop()
+                    library.applyLocalBackup(data!!)
+                    tabState.clear(); tabFocus.clear(); catalogFocus=""; page=1
+                    Toast.makeText(this,"已从本机备份恢复收藏与记录",Toast.LENGTH_LONG).show()
+                }
+                library.localRestoreChecked=true
+                library.maybeBackupOnStartup()
+                done()
+            }
+        }
+    }
+    private fun localBackupLabel(): String {
+        if(!library.localBackupEnabled) return "本地备份与恢复  ·  已关闭"
+        val storage=library.localBackup()
+        if(!storage.supported) return "本地备份与恢复  ·  不可用"
+        if(storage.needsPermission) return "本地备份与恢复  ·  待授权"
+        return "本地备份与恢复  ·  已开启"
+    }
+    private fun showLocalBackupDialog(anchor: TextView) {
+        val storage=library.localBackup()
+        if(!storage.supported) {
+            AlertDialog.Builder(this).setTitle("本地备份与恢复")
+                .setMessage("当前设备没有可用的公共存储，无法自动备份；可使用「手机备份与恢复」迁移记录。")
+                .setPositiveButton("知道了",null).show()
+            return
+        }
+        if(!library.localBackupEnabled) {
+            AlertDialog.Builder(this).setTitle("本地备份与恢复")
+                .setMessage("开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。")
+                .setNegativeButton("取消",null)
+                .setPositiveButton("开启") { _,_ ->
+                    library.localBackupEnabled=true; anchor.text=localBackupLabel()
+                    if(storage.needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
+                }.show()
+            return
+        }
+        val needsPermission=storage.needsPermission
+        val actions=if(needsPermission) arrayOf("授权存储权限","关闭本地自动备份") else arrayOf(if(library.isEmptyForRestore() && library.hasLocalBackup()) "立即恢复" else "立即备份","关闭本地自动备份")
+        AlertDialog.Builder(this).setTitle("本地备份与恢复").setItems(actions) { _,which ->
+            if(which==0) {
+                if(needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
+            } else {
+                library.localBackupEnabled=false; anchor.text=localBackupLabel()
+                Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
+            }
+        }.show()
+    }
+    /** Empty library with an existing backup must restore instead of overwriting it with nothing. */
+    private fun localBackupAction(anchor: TextView) {
+        if(library.isEmptyForRestore() && library.hasLocalBackup()) {
+            restoreLocalBackup { anchor.text=localBackupLabel() }
+        } else backupWithToast(anchor)
+    }
+    private fun requestLocalBackupPermission(anchor: TextView) {
+        localPermissionContinuation={
+            anchor.text=localBackupLabel()
+            if(library.localBackup().backupAllowed) localBackupAction(anchor)
+        }
+        if(!library.localBackup().request(this)) {
+            localPermissionContinuation=null
+            anchor.text=localBackupLabel()
+            Toast.makeText(this,"当前设备无法授予存储权限，请使用手机备份迁移",Toast.LENGTH_LONG).show()
+        }
+    }
+    private fun backupWithToast(anchor: TextView) {
+        library.backupNow { ok ->
+            anchor.text=localBackupLabel()
+            Toast.makeText(this,if(ok) "本机备份已更新" else "备份失败，请检查存储权限",Toast.LENGTH_SHORT).show()
+        }
+    }
+    override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode==LocalBackupStorage.REQUEST_MANAGE) {
+            val next=localPermissionContinuation; localPermissionContinuation=null
+            if(next!=null && !isDestroyed) next()
+        }
+    }
+    override fun onRequestPermissionsResult(requestCode: Int,permissions: Array<out String>,grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode==LocalBackupStorage.REQUEST_READ || requestCode==LocalBackupStorage.REQUEST_WRITE) {
+            val next=localPermissionContinuation; localPermissionContinuation=null
+            if(next!=null && !isDestroyed) next()
         }
     }
     private fun base(title: String?=null): LinearLayout {
@@ -946,13 +1069,26 @@ class MainActivity: Activity() {
             autoSeasonButton.text="系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}"
         }
         val danmakuPrefRows=mutableListOf<TextView>()
-        fun syncDanmakuPrefRows()=danmakuPrefRows.forEach { it.visibility=if(library.danmaku) View.VISIBLE else View.GONE }
+        var danmakuExpanded=false
         var rechainSettings: ()->Unit={}
+        lateinit var danmakuToggle: TextView
+        fun syncDanmakuRows() {
+            val show=library.danmaku
+            danmakuToggle.visibility=if(show) View.VISIBLE else View.GONE
+            danmakuPrefRows.forEach { it.visibility=if(show && danmakuExpanded) View.VISIBLE else View.GONE }
+            danmakuToggle.text="弹幕设置  ·  ${if(danmakuExpanded) "收起" else "展开"}"
+            rechainSettings()
+        }
         lateinit var danmakuButton: TextView
         danmakuButton=setting(playback,"官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}") {
             library.danmaku=!library.danmaku
             danmakuButton.text="官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}"
-            syncDanmakuPrefRows(); rechainSettings()
+            if(!library.danmaku) danmakuExpanded=false
+            syncDanmakuRows()
+        }
+        danmakuToggle=setting(playback,"弹幕设置  ·  展开") {
+            danmakuExpanded=!danmakuExpanded
+            syncDanmakuRows()
         }
         lateinit var danmakuOpacity: TextView
         danmakuOpacity=setting(playback,"弹幕不透明度  ·  ${library.danmakuOpacity}%") { showDanmakuOpacityPicker(danmakuOpacity) }
@@ -972,7 +1108,7 @@ class MainActivity: Activity() {
             Toast.makeText(this,"弹幕设置已恢复默认",Toast.LENGTH_SHORT).show()
         }
         danmakuPrefRows.addAll(listOf(danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,danmakuReset))
-        syncDanmakuPrefRows()
+        syncDanmakuRows()
 
         lateinit var themeButton: TextView
         themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
@@ -991,6 +1127,8 @@ class MainActivity: Activity() {
                 }
             })
         }
+        lateinit var localBackupButton: TextView
+        localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var backup: TextView
         backup=setting(device,"手机备份与恢复") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -1032,8 +1170,9 @@ class MainActivity: Activity() {
             setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
         }
         rechainSettings={
-            val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+(if(library.danmaku) danmakuPrefRows else emptyList())
-            val right=listOf(themeButton,backdropButton,backup,hidden,clearCache,updates,license)
+            val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
+                (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())
+            val right=listOf(themeButton,backdropButton,localBackupButton,backup,hidden,clearCache,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 view.nextFocusDownId=items.getOrNull(index+1)?.id ?: settingsFooter.id

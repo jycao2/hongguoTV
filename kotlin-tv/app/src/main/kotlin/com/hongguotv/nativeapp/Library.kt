@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.Log
 import com.hongguotv.core.*
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 // The backup and native library use the same immutable progress shape.
@@ -24,6 +25,12 @@ class Library(context: Context) {
     private val loader = Executors.newSingleThreadExecutor { task -> Thread(task, "hongguotv-library-load") }
     private val prefs by lazy { app.getSharedPreferences("native-library-v1", Context.MODE_PRIVATE) }
     private val homePrefs by lazy { app.getSharedPreferences("native-home-cache-v1", Context.MODE_PRIVATE) }
+    private val localPrefs by lazy { app.getSharedPreferences("native-local-backup-v1", Context.MODE_PRIVATE) }
+    private val localBackupStorage = LocalBackupStorage(app)
+    private val backupWorker = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "hongguotv-local-backup") }
+    private val backupLock = Any()
+    private var backupTask: ScheduledFuture<*>? = null
+    @Volatile private var backupDirty = false
     private val writes = LatestWriteQueue<String, () -> Any?>("hongguotv-library-write", write = { batch -> commit(prefs, batch) },
         failed = { Log.w("HongguoTV", "Local library commit failed; pending changes retained for retry") })
     private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
@@ -87,7 +94,7 @@ class Library(context: Context) {
         }
     }
     private fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
-    private fun put(key: String, value: Any?) { writes.submit(mapOf(key to { value })) }
+    private fun put(key: String, value: Any?) { writes.submit(mapOf(key to { value })); scheduleLocalBackup() }
     private fun persist(vararg keys: String) {
         val state = state()
         val batch = linkedMapOf<String, () -> Any?>()
@@ -106,6 +113,7 @@ class Library(context: Context) {
             }
         }
         writes.submit(batch)
+        scheduleLocalBackup()
     }
     fun favorites() = state().favorites()
     fun favorite(id: String) = state().favorite(id)
@@ -210,16 +218,80 @@ class Library(context: Context) {
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
             "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
             "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }))
+        scheduleLocalBackup()
         flush()
     }
+    // ---- Local rotating backup ----
+    var localBackupEnabled: Boolean
+        get() = localPrefs.getBoolean("enabled", true)
+        set(value) { localPrefs.edit().putBoolean("enabled", value).apply() }
+    var localRestoreChecked: Boolean
+        get() = localPrefs.getBoolean("restoreChecked", false)
+        set(value) { localPrefs.edit().putBoolean("restoreChecked", value).apply() }
+    var localPermissionAsked: Boolean
+        get() = localPrefs.getBoolean("permissionAsked", false)
+        set(value) { localPrefs.edit().putBoolean("permissionAsked", value).apply() }
+    fun localBackup(): LocalBackupStorage = localBackupStorage
+    /** True when the library holds no user data, so a backup may be restored without overwriting anything. */
+    fun isEmptyForRestore(): Boolean {
+        val data = runCatching { snapshot() }.getOrNull() ?: return false
+        return data.favorites.isEmpty() && data.later.isEmpty() && data.history.isEmpty() && data.searches.isEmpty() &&
+            data.favoriteGroups.isEmpty() && data.watched.isEmpty() && data.hidden.isEmpty()
+    }
+    fun readLocalBackup(): BackupData? = localBackupStorage.load()
+    fun hasLocalBackup(): Boolean = localBackupStorage.store()?.hasBackup() == true
+    fun applyLocalBackup(data: BackupData) = restore(data, true)
+    /** Immediate backup for the settings entry; the callback runs on the main thread. */
+    fun backupNow(onDone: (Boolean) -> Unit) {
+        val data = runCatching { snapshot() }.getOrNull()
+        if (data == null) { main.post { onDone(false) }; return }
+        backupWorker.execute {
+            val ok = localBackupStorage.store()?.save(data) == true
+            if (ok) backupDirty = false
+            main.post { onDone(ok) }
+        }
+    }
+    /** First run after an upgrade may have data but no backup yet; empty libraries are never written. */
+    fun maybeBackupOnStartup() {
+        if (!localBackupEnabled || index == null || isEmptyForRestore()) return
+        val store = localBackupStorage.store() ?: return
+        if (store.hasBackup()) return
+        val data = runCatching { snapshot() }.getOrNull() ?: return
+        backupWorker.execute { store.save(data) }
+    }
+    private fun scheduleLocalBackup() {
+        if (!localBackupEnabled || index == null) return
+        val data = runCatching { snapshot() }.getOrNull() ?: return
+        backupDirty = true
+        synchronized(backupLock) {
+            backupTask?.cancel(false)
+            backupTask = backupWorker.schedule({ writeLocalBackup(data) }, 5, TimeUnit.SECONDS)
+        }
+    }
+    private fun writeLocalBackup(data: BackupData) {
+        if (!localBackupEnabled) return
+        val ok = localBackupStorage.store()?.save(data) == true
+        if (ok) backupDirty = false
+    }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */
-    fun flush() { writes.flush(); homeWrites.flush() }
+    fun flush() {
+        writes.flush(); homeWrites.flush()
+        if (backupDirty && index != null) {
+            val data = runCatching { snapshot() }.getOrNull()
+            if (data != null) backupWorker.execute { writeLocalBackup(data) }
+        }
+    }
     /** Drain pending commits after Activity destruction; abrupt process death is still a boundary. */
     fun close() {
         if (closed) return
         closed = true
         readyCallbacks.clear(); errorCallbacks.clear()
         loader.shutdown()
+        if (backupDirty && index != null) {
+            val data = runCatching { snapshot() }.getOrNull()
+            if (data != null) backupWorker.execute { writeLocalBackup(data) }
+        }
+        backupWorker.shutdown()
         synchronized(retiredWrites) {
             writes.close(); homeWrites.close()
             retiredWrites += writes; retiredWrites += homeWrites
