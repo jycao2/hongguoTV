@@ -35,13 +35,12 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.19.3+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.19.3-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.19.4+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.19.4-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 搜索页新增数字键盘：字母键盘在左、数字键盘在右（1-9 三行 + 0），遥控器方向键自由移动"
-            echo "- 手机输入按钮移入数字键盘末行，与数字键右缘对齐"
-            echo "- 左上角品牌区「红果」后方显示当前版本号"
+            echo "- 新增退出确认：首页按返回时弹出确认窗，收藏有更新优先展示更新剧集，否则随机推荐 3 部剧，点击卡片可直接进入详情继续观看"
+            echo "- 「退出不看了」会先保存观看记录再关闭应用，进度不丢失；「再看一会儿」关闭弹窗继续浏览"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK
