@@ -1,4 +1,4 @@
-﻿package com.hongguotv.core
+package com.hongguotv.core
 
 import org.json.JSONObject
 import org.junit.Assert.*

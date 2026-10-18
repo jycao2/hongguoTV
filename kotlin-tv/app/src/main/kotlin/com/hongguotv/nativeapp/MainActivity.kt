@@ -1104,8 +1104,34 @@ class MainActivity: Activity() {
         if(items.isEmpty() && !loading) {
             content.addView(text("候选池为空，正在补充…",15f,muted).apply { setPadding(0,dp(20),0,0) })
         } else if(items.isNotEmpty()) {
-            val randomAdapter=CatalogAdapter(items.toMutableList())
-            val grid=GridLayoutManager(this,3)
+            // 弹窗专用固定尺寸卡片：宽120dp，上图（3:4固定高）下名称+集数，小图拉伸撑满
+            val cardWidth=dp(120)
+            val posterHeight=(cardWidth/TvStyle.POSTER_ASPECT).toInt()
+            val randomAdapter=object: RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+                override fun getItemCount()=items.size
+                override fun onCreateViewHolder(parent: ViewGroup,viewType: Int): RecyclerView.ViewHolder {
+                    val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card)
+                    val image=ImageView(this@MainActivity).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+                    card.addView(image,lp(-1,posterHeight))
+                    val title=text("",13f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(6),dp(3),0) }
+                    val badge=text("",11f,muted).apply { maxLines=1; minLines=1; minHeight=dp(17); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
+                    card.addView(title,lp(-1,-2)); card.addView(badge,lp(-1,-2))
+                    card.layoutParams=RecyclerView.LayoutParams(cardWidth,-2).apply { rightMargin=dp(12); bottomMargin=dp(10) }
+                    return object: RecyclerView.ViewHolder(card) {}
+                }
+                override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
+                    val item=items[position]; val card=holder.itemView as LinearLayout
+                    val image=card.getChildAt(0) as ImageView
+                    val title=card.getChildAt(1) as TextView
+                    val badge=card.getChildAt(2) as TextView
+                    card.contentDescription=item.title
+                    loadCover(image,item.cover)
+                    title.text=item.title; badge.text=item.badge
+                    card.setOnClickListener { randomDialog?.dismiss(); openDetail(item,false) }
+                    card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) loadCover(image,item.cover) }
+                }
+            }
+            val grid=GridLayoutManager(this,4)
             val recycler=RecyclerView(this).apply { clipToPadding=false; itemAnimator=null }
             recycler.layoutManager=grid; recycler.adapter=randomAdapter
             content.addView(recycler,lp(-1,-1))

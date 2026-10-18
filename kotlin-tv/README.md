@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.19.2 新增
+
+- **荐剧弹窗优化**：随机荐剧卡片改为固定尺寸，海报按 3:4 比例显示，小图自动拉伸填满，四列整齐排列；点击卡片直接关闭弹窗进入详情页。
+
 ## 0.19.1 新增
 
 - **更新修复**：修复 Android 9 电视/盒子自动更新误报「包名、版本或签名不匹配」无法安装的问题（API 28/29 平台缺陷适配）。
@@ -213,7 +217,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.19.1-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.19.2-android8.apk
 ```
 
 ## 工程结构
