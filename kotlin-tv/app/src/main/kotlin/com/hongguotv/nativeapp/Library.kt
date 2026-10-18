@@ -118,6 +118,7 @@ class Library(context: Context) {
     fun hidden() = state().hidden()
     fun favoriteUpdate(id: String) = state().favoriteUpdate(id)
     fun updatedFavorites() = state().updatedFavorites()
+    fun updates() = state().updates()
     fun groups() = state().groups()
     fun groupOf(id: String) = state().groupOf(id)
     fun setGroup(id: String, group: String?): Boolean = state().setGroup(id, group).also { if (it) persist("favoriteGroups") }
