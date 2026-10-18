@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.19.4"
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.19.5"
     }
     buildFeatures { buildConfig = true }
     signingConfigs {
@@ -23,10 +23,11 @@ android {
             keyPassword = signingValue("HONGGUOTV_KEY_PASSWORD", "keyPassword")
         }
     }
-    buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
     kotlinOptions { jvmTarget = "17" }
-    packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.kotlin_module") }
+    // bcprov 只用到 SM3Digest，PQC/X509 的附属资源文件（约 1.2MB）用不到，打包时排除
+    packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.kotlin_module", "org/bouncycastle/pqc/**", "org/bouncycastle/x509/**") }
 }
 dependencies {
     implementation("androidx.core:core:1.8.0")

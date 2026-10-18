@@ -35,12 +35,13 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.19.4+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.19.4-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.19.5+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.19.5-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 新增退出确认：首页按返回时弹出确认窗，收藏有更新优先展示更新剧集，否则随机推荐 3 部剧，点击卡片可直接进入详情继续观看"
-            echo "- 「退出不看了」会先保存观看记录再关闭应用，进度不丢失；「再看一会儿」关闭弹窗继续浏览"
+            echo "- 修复搜索结果和剧集详情「系列剧推荐」中多季剧缺季的问题，自动补齐同系列全部分季并按季号排序"
+            echo "- 补季查询改为并发执行，剧集详情首次打开耗时由约 3.7 秒降至约 1.4 秒"
+            echo "- 精简安装包体积，由 2.95 MB 降至 1.62 MB"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK

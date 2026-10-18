@@ -8,6 +8,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
@@ -111,19 +113,106 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(type==ContentType.COMIC) {
             try { return appSearch(keyword,page,type) }
             catch(e: Exception) { /* App search API rejected the request or the cursor expired; the website paginates independently. */ }
-            return webSearch(keyword,page,COMIC_WEB_GENRE)
+            return fillSeasons(webSearch(keyword,page,COMIC_WEB_GENRE),page,type,keyword)
         }
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
-        return webSearch(keyword,page,SHORT_WEB_GENRE)
+        return fillSeasons(webSearch(keyword,page,SHORT_WEB_GENRE),page,type,keyword)
     }
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
         val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
         val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
         val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
-        val items=valid(mapped)
-        return CatalogPage(items,items.isNotEmpty() && page<100)
+        return CatalogPage(valid(mapped),false)
     }
+    private data class SeasonFill(val at: Long, val items: List<Series>)
+    private val seasonFills=mutableMapOf<String, SeasonFill>()
+    /** 网站搜索固定只返回前 10 条，多季剧必然缺季；联想接口未被拦截，用同名季的精确标题回查网站补齐。 */
+    private fun collectSeasons(base: String, known: List<Series>, genre: String?, hints: List<String>, cacheKey: String, budget: Int = 10): List<Series> {
+        val cached=synchronized(seasonFills) { seasonFills[cacheKey]?.takeIf { clock()-it.at<86_400_000 }?.items }
+        if(cached!=null) return cached
+        val knownIds=known.map { it.id }.toSet()
+        val found=mutableListOf<Series>()
+        fun absorb(page: CatalogPage?) {
+            page?.items?.filter { it.id !in knownIds && baseName(it.title)==base && found.none { s -> s.id==it.id } }?.let { found+=it }
+        }
+        // 基底整词、基底前 4 字与联想互不依赖，并发取回，避免串行等待
+        val queries=hints.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val pool=Executors.newFixedThreadPool(4)
+        try {
+            val pages=listOf(base,base.take(4)).distinct().map { query -> pool.submit(Callable { runCatching { webSearch(query,1,genre) }.getOrNull() }) }
+            val suggestions=pool.submit(Callable { queries.map { suggestRaw(it) } })
+            pages.forEach { absorb(it.get()) }
+            // 多个 query 的联想结果互补，能覆盖更多季（联想每次返回的子集并不稳定）
+            val knownTitles=(known.map { it.title }+found.map { it.title }).map { it.trim() }.toSet()
+            val names=suggestions.get().flatten().map { it.trim() }
+                .filter { it.isNotBlank() && baseName(it)==base && it !in knownTitles }.distinct()
+            // 逐季回查同样互不依赖，3 路并发把最耗时的这段压到原来的三分之一
+            val lookups=names.map { name ->
+                val season=seasonNumber(name)
+                pool.submit(Callable {
+                    runCatching { webSearch(name,1,genre) }.getOrNull()
+                        ?.items?.firstOrNull { it.id !in knownIds && baseName(it.title)==base && seasonNumber(it.title)==season }
+                })
+            }
+            for(task in lookups) {
+                if(found.size>=budget) break
+                val match=runCatching { task.get() }.getOrNull()
+                if(match!=null && found.none { it.id==match.id }) found+=match
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+        val final=found.take(budget)
+        synchronized(seasonFills) {
+            seasonFills[cacheKey]=SeasonFill(clock(),final)
+            while(seasonFills.size>50) seasonFills.remove(seasonFills.keys.first())
+        }
+        return final
+    }
+    private fun fillSeasons(page: CatalogPage, pageNumber: Int, type: ContentType, keyword: String): CatalogPage {
+        if(pageNumber!=1 || page.items.size<2) return page
+        val groups=page.items.groupBy { baseName(it.title) }.filter { (base,rows) ->
+            base.isNotBlank() && (rows.size>1 || rows.any { seasonNumber(it.title)!=Int.MAX_VALUE })
+        }
+        if(groups.isEmpty()) return page
+        val additions=mutableMapOf<String,List<Series>>()
+        var budget=10
+        for((base,rows) in groups.entries.sortedByDescending { it.value.size }.take(2)) {
+            if(budget<=0) break
+            val genre=if(type==ContentType.COMIC) COMIC_WEB_GENRE else SHORT_WEB_GENRE
+            // 基底词、用户输入、基底前缀各取一次联想，多个 query 的结果互补
+            val extra=collectSeasons(base,page.items,genre,listOf(base,keyword,base.take(4)),"$type|$base",budget)
+            budget-=extra.size
+            additions[base]=extra
+        }
+        if(additions.values.all { it.isEmpty() }) return page
+        // 原位合并：同一基底按季号排列，其余条目保持原有相关性顺序
+        val output=mutableListOf<Series>()
+        val placed=mutableSetOf<String>()
+        for(item in page.items) {
+            val base=baseName(item.title)
+            if(base in additions) {
+                if(!placed.add(base)) continue
+                val group=(page.items.filter { baseName(it.title)==base }+additions.getValue(base)).distinctBy { it.id }
+                output+=group.sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }
+            } else output+=item
+        }
+        return page.copy(items=output)
+    }
+    private fun suggestRaw(query: String): List<String> = runCatching {
+        if(query.isBlank() || query.length>40) return emptyList()
+        VendorConstants.regenerate()
+        val values=VendorConstants.device.toMutableMap()
+        for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
+        values["version_name"]="7.2.2.32"
+        values["query"]=query
+        val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
+        val data=JSONObject(text(signed.url,signed))
+        if(data.optInt("code",-1)!=0) return emptyList()
+        val rows=data.optJSONObject("data")?.optJSONArray("query_result") ?: return emptyList()
+        (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
+    }.getOrElse { emptyList() }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
         VendorConstants.regenerate()
         val values=VendorConstants.device.toMutableMap()
@@ -141,16 +230,21 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             if(it.passback.isNotBlank()) values["passback"]=it.passback
             it.offset?.takeIf { offset -> offset>=0 }?.let { offset -> values["offset"]=offset.toString() }
         }
-        val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v",values)
-        val data=JSONObject(text(signed.url,signed))
-        if(data.optInt("code",-1)!=0) throw IOException("搜索接口暂不可用")
+        // 官方 APK 逆向确认主网关为 reading.snssdk.com；签名只覆盖参数与主机无关，被网关拦截时换主机兜底
+        var data: JSONObject? = null
+        for(host in listOf("https://api5-normal-sinfonlinea.fqnovel.com","https://reading.snssdk.com")) {
+            val signed=signer.sign("$host/reading/bookapi/search/tab/v",values)
+            val candidate=runCatching { JSONObject(text(signed.url,signed)) }.getOrNull() ?: continue
+            if(candidate.optInt("code",-1)==0) { data=candidate; break }
+        }
+        if(data==null) throw IOException("搜索接口暂不可用")
         val tabs=data.optJSONArray("search_tabs") ?: data.optJSONObject("data")?.optJSONArray("search_tabs") ?: throw IOException("搜索格式异常")
         val tab=tabs.objects().firstOrNull { it.optInt("tab_type")==type.searchTab } ?: throw IOException("${type.label}搜索暂不可用")
         val list=mutableListOf<Series>()
         for(cell in (tab.optJSONArray("data") ?: JSONArray()).objects()) {
-            val cells=mutableListOf(cell)
-            runCatching { JSONObject(cell.str("lynx_data")).optJSONArray("cell_data")?.objects() }.getOrNull()?.let { cells.addAll(it) }
-            for(row in cells) {
+            val rows=mutableListOf(cell)
+            runCatching { JSONObject(cell.str("lynx_data")).optJSONArray("cell_data")?.objects() }.getOrNull()?.let { rows.addAll(it) }
+            for(row in rows) {
                 val video=row.optJSONArray("video_data")?.objects()?.firstOrNull() ?: continue
                 val id=video.str("series_id").ifEmpty { row.str("book_id").ifEmpty { row.str("search_result_id") } }
                 val title=row.optJSONObject("search_high_light")?.optJSONObject("title")?.str("text").orEmpty().ifEmpty { video.str("title").ifEmpty { row.str("cell_name") } }
@@ -168,18 +262,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     fun suggest(query: String): List<String> {
         val key=query.trim().lowercase()
         if(key.isEmpty() || key.length>20 || !key.matches(Regex("[a-z0-9]+"))) return emptyList()
-        return runCatching {
-            VendorConstants.regenerate()
-            val values=VendorConstants.device.toMutableMap()
-            for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
-            values["version_name"]="7.2.2.32"
-            values["query"]=key
-            val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
-            val data=JSONObject(text(signed.url,signed))
-            if(data.optInt("code",-1)!=0) return emptyList()
-            val rows=data.optJSONObject("data")?.optJSONArray("query_result") ?: return emptyList()
-            (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
-        }.getOrElse { emptyList() }
+        return suggestRaw(key)
     }
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
@@ -190,15 +273,17 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val episodes=(0 until raw.length()).map { raw.getString(it) }
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         val series=card(o).copy(id=id)
-        return Detail(series,episodes,related(html,series),sameName(series))
+        val related=related(html,series)
+        return Detail(series,episodes,related,sameName(series,related))
     }
-    // The detail page has no dedicated same-name group, so other seasons are collected by searching the
-    // website for the season-independent base title and keeping every entry that shares that base name.
-    private fun sameName(current: Series): List<Series> {
+    // The detail page has no dedicated same-name group, so other seasons are collected from its related
+    // payload and filled with the same website/suggestion pipeline used by search.
+    private fun sameName(current: Series, related: List<Series>): List<Series> {
         val base=baseName(current.title); if(base.isBlank()) return emptyList()
-        val page=runCatching { webSearch(base,1,null) }.getOrNull() ?: return emptyList()
-        return page.items.filter { it.id!=current.id && baseName(it.title)==base }
-            .distinctBy { it.id }.sortedBy { seasonNumber(it.title) }.take(12)
+        val siblings=related.filter { it.id!=current.id && baseName(it.title)==base }.distinctBy { it.id }
+        val extra=collectSeasons(base,listOf(current)+siblings,null,listOf(base,base.take(4)),"detail|$base",20)
+        return (siblings+extra).distinctBy { it.id }.filter { it.id!=current.id }
+            .sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }.take(20)
     }
     private fun baseName(title: String)=title.replace(SeasonPattern,"").trim().trim('：',':','-','·',' ')
     // The detail page embeds its recommendation payload as an HTML-escaped JSON array inside the

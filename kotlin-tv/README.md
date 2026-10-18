@@ -9,6 +9,12 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.19.5 新增
+
+- **多季补齐**：修复搜索结果和剧集详情「系列剧推荐」中多季剧缺季的问题，自动补齐同系列全部分季并按季号排序。
+- **详情提速**：补季查询改为并发执行，剧集详情首次打开耗时由约 3.7 秒降至约 1.4 秒。
+- **安装包精简**：开启资源裁剪并排除无用资源，安装包体积由 2.95 MB 降至 1.62 MB。
+
 ## 0.19.4 新增
 
 - **退出确认**：首页按返回弹出确认窗，收藏有更新优先展示更新剧集，否则随机推荐 3 部剧，点击卡片直接进入详情；「退出不看了」先保存观看记录再关闭应用。
@@ -226,7 +232,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.19.3-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.19.5-android8.apk
 ```
 
 ## 工程结构

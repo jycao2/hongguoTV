@@ -202,7 +202,26 @@ class ContentRepositoryTest {
         }
         val result=repo.search("修仙",1,ContentType.COMIC)
         assertEquals(listOf("222"),result.items.map { it.id })
-        assertTrue(result.hasMore)
+        // 网站搜索的 page 参数被忽略，翻页只会拿到同一批结果，因此不能提示还有更多
+        assertFalse(result.hasMore)
+    }
+
+    @Test fun multiSeasonSearchFillsMissingSeasonsFromSuggestions() {
+        val repo=repository { request ->
+            val url=request.url
+            val path=java.net.URLDecoder.decode(url.encodedPath,"UTF-8")
+            when {
+                url.host.endsWith("fqnovel.com") && path.contains("suggest") ->
+                    JSONObject().put("code",0).put("data",JSONObject().put("query_result",JSONArray().put("测试剧第二季"))).toString()
+                url.host.endsWith("fqnovel.com") -> ""
+                path.contains("第二季") ->
+                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"222","series_name":"测试剧第二季","genre":"205"}}]}}};</script>"""
+                else ->
+                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"测试剧第一季","genre":"205"}},{"video_data":{"series_id":"113","series_name":"测试剧第三季","genre":"205"}}]}}};</script>"""
+            }
+        }
+        val result=repo.search("测试剧",1,ContentType.COMIC)
+        assertEquals(listOf("111","222","113"),result.items.map { it.id })
     }
 
     @Test fun shortSearchFallsBackToWebsiteAndKeepsOnlyShortGenreRows() {
@@ -264,11 +283,11 @@ class ContentRepositoryTest {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths+=request.url.encodedPath
-            if(paths.size==1) throw IOException("offline")
+            if(paths.size<=2) throw IOException("offline")
             """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"456","series_name":"测试短剧","genre":"203"}]}}}};</script>"""
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
-        assertEquals(2,paths.size)
+        assertEquals(3,paths.size)
     }
 
     private fun relatedItem(id: String,name: String)=JSONObject().put("series_id",id).put("series_name",name)
@@ -314,6 +333,29 @@ class ContentRepositoryTest {
         }
         val detail=repo.detail("123")
         assertEquals(listOf("333","222","444"),detail.sameName.map { it.id })
+    }
+
+    @Test fun detailFillsMissingSeasonsFromSuggestionsLikeSearch() {
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧 第一季").put("vid_list",JSONArray().put("900"))
+        val repo=repository { request ->
+            when {
+                request.url.encodedPath=="/detail" -> detailHtml(series,JSONArray())
+                request.url.host.endsWith("fqnovel.com") -> JSONObject().put("code",0)
+                    .put("data",JSONObject().put("query_result",JSONArray().put("测试剧 第二季").put("测试剧 第三季"))).toString()
+                else -> {
+                    val keyword=java.net.URLDecoder.decode(request.url.pathSegments.last(),"UTF-8")
+                    val row=when(keyword) {
+                        "测试剧" -> """{"video_data":{"series_id":"123","series_name":"测试剧 第一季","genre":"203"}}"""
+                        "测试剧 第二季" -> """{"video_data":{"series_id":"222","series_name":"测试剧 第二季","genre":"203"}}"""
+                        "测试剧 第三季" -> """{"video_data":{"series_id":"333","series_name":"测试剧 第三季","genre":"203"}}"""
+                        else -> ""
+                    }
+                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[${row}]}}};</script>"""
+                }
+            }
+        }
+        // 网站只返回季 1，联想给出的季 2、季 3 需要回查补齐
+        assertEquals(listOf("222","333"),repo.detail("123").sameName.map { it.id })
     }
 
     private fun currentRealRank(payload: JSONObject) = script("mergeLoaderData",JSONArray()

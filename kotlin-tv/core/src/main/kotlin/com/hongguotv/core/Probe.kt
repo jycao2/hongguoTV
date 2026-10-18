@@ -25,8 +25,9 @@ fun main(args: Array<String>) {
         return
     }
     val type=if(args.contains("--comic")) ContentType.COMIC else ContentType.SHORT
-    val keyword=if(type==ContentType.COMIC) "修仙" else "总裁"
-    val search=repository.search(keyword,type=type); println("search=${search.items.size}; hasMore=${search.hasMore}")
+    val keyword=args.getOrNull(args.indexOf("--keyword")+1) ?: if(type==ContentType.COMIC) "修仙" else "总裁"
+    val started=System.currentTimeMillis()
+    val search=repository.search(keyword,type=type); println("searchMs=${System.currentTimeMillis()-started}; search=${search.items.size}; hasMore=${search.hasMore}")
     if(type==ContentType.COMIC && search.hasMore) {
         val next=repository.search(keyword,2,type)
         println("searchPage2=${next.items.size}; overlap=${search.items.map { it.id }.intersect(next.items.map { it.id }.toSet()).size}")
