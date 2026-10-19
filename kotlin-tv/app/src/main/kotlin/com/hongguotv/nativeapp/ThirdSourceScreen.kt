@@ -372,14 +372,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun renderEmptySources(container: LinearLayout) {
         val body = column().apply { setPadding(0, dp(24), 0, 0) }
-        message(body, "暂无片源信息，可手动添加或恢复内置源")
+        message(body, "暂无片源信息，可添加、导入配置或恢复内置源")
         body.addView(text("若重装后没有自动恢复：可能是本机备份文件不存在或未授予存储权限，可在「设置 → 本地备份与恢复」中查看。", 13f, muted)
             .apply { setPadding(0, dp(2), 0, dp(10)) })
+        // 空态同样给全入口：添加 / 导入配置 / 恢复内置源 / 扫码导入导出
         val actions = row().apply { setPadding(0, dp(4), 0, 0) }
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
+        val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
         val restore = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
-        restore.nextFocusLeftId = add.id
-        add.nextFocusRightId = restore.id
+        val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
+        add.nextFocusRightId = importTvbox.id
+        importTvbox.nextFocusLeftId = add.id; importTvbox.nextFocusRightId = restore.id
+        restore.nextFocusLeftId = importTvbox.id; restore.nextFocusRightId = transfer.id
+        transfer.nextFocusLeftId = restore.id
         body.addView(actions)
         body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(20), 0, 0) })
         container.addView(body, lp(-1, 0).apply { weight = 1f })
@@ -808,7 +813,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             rows += line
         }
-        if(sources.isEmpty()) message(list, "暂无片源信息，可手动添加或恢复内置源")
+        if(sources.isEmpty()) message(list, "暂无片源信息，可添加、导入配置或恢复内置源")
         body.addView(listScroll, lp(-1, 0).apply { weight = 1f })
 
         // 底部：全选 / 批量删除 / 操作提示
