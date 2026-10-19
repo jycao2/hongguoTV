@@ -832,7 +832,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             }
         }
         dialog.show()
-        nameEdit.requestFocus()
+        // 不自动聚焦输入框：否则弹窗一出现就弹软键盘，想用「扫码填写」还得多按一次返回
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        save.requestFocus()
     }
 
     private fun showImportDialog() {
@@ -882,16 +884,28 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             }
         }
         dialog.show()
-        urlEdit.requestFocus()
+        // 同上：默认聚焦「解析」，不弹软键盘，方便直接走扫码填写
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        parse.requestFocus()
     }
 
     private fun showImportChecklist(candidates: List<ThirdTvboxSite>, skipped: Int) {
-        val checked = BooleanArray(candidates.size) { true }
+        // 默认全不勾：探活通过的源自动勾上，探活失败的保持不勾；用户手动点过的行不再被结果覆盖
+        val checked = BooleanArray(candidates.size) { false }
+        val touched = BooleanArray(candidates.size) { false }
+        val checkViews = arrayOfNulls<TextView>(candidates.size)
         val statusViews = arrayOfNulls<TextView>(candidates.size)
         val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
+        fun paintCheck(index: Int) {
+            val view = checkViews[index] ?: return
+            view.text = if(checked[index]) "✓" else "○"
+            view.setTextColor(if(checked[index]) TvStyle.accent else muted)
+        }
+        var refreshAction: () -> Unit = {}
         val rows = candidates.mapIndexed { index, site ->
             val line = row().apply { setPadding(dp(10), dp(8), dp(10), dp(8)) }
-            val check = text(if(checked[index]) "✓" else "○", 16f, if(checked[index]) TvStyle.accent else muted)
+            val check = text("○", 16f, muted)
+            checkViews[index] = check
             val nameColumn = column()
             nameColumn.addView(text(site.name, 15f))
             nameColumn.addView(text(hostOf(site.api), 12f, muted))
@@ -899,15 +913,15 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             line.addView(check, lp(-2, -2).apply { rightMargin = dp(8) }); line.addView(nameColumn, lp(0, -2).apply { weight = 1f }); line.addView(status)
             focusStyle(line)
             line.setOnClickListener {
+                touched[index] = true
                 checked[index] = !checked[index]
-                check.text = if(checked[index]) "✓" else "○"
-                check.setTextColor(if(checked[index]) TvStyle.accent else muted)
+                paintCheck(index); refreshAction()
             }
             content.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             statusViews[index] = status
             line
         }
-        content.addView(text("已自动跳过 $skipped 个不支持源", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        content.addView(text("已自动跳过 $skipped 个不支持源 · 仅默认勾选可连接的源", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         val dialog = AlertDialog.Builder(activity).setTitle("选择要导入的源（${candidates.size}）")
             .setView(ScrollView(activity).apply { addView(content) })
             .setNegativeButton("取消", null)
@@ -915,9 +929,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 val selected = candidates.filterIndexed { index, _ -> checked[index] }
                 importSources(selected)
             }.create()
+        fun refreshActionImpl() {
+            val count = checked.count { it }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.let { button ->
+                button.text = "导入所选（$count）"
+                button.isEnabled = count > 0
+            }
+        }
+        refreshAction = { refreshActionImpl() }
+        dialog.setOnShowListener { refreshAction() }
         dialog.show()
+        refreshAction()
         rows.firstOrNull()?.requestFocus()
-        // 逐个探活（单线程执行器天然串行），实时回填状态
+        // 逐个探活（单线程执行器天然串行），实时回填状态并自动勾选可连接的源
         candidates.forEachIndexed { index, site ->
             val gen = generation
             executor.execute {
@@ -925,8 +949,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 main.post {
                     if(gen != generation) return@post
                     statusViews[index]?.let { view ->
-                        view.text = if(probe.ok) "可连接 · ${formatCount(probe.total)}" else "超时"
+                        view.text = if(probe.ok) "可连接 · ${formatCount(probe.total)}" else (probe.reason ?: "不可用")
                         view.setTextColor(if(probe.ok) Color.rgb(76, 175, 80) else TvStyle.muted)
+                    }
+                    if(!touched[index]) {
+                        checked[index] = probe.ok
+                        paintCheck(index); refreshAction()
                     }
                 }
             }
