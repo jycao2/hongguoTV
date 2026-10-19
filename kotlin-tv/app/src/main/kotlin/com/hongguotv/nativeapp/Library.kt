@@ -30,7 +30,11 @@ class Library(context: Context) {
     private val backupWorker = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "hongguotv-local-backup") }
     private val backupLock = Any()
     private var backupTask: ScheduledFuture<*>? = null
+    /** 已排队的备份计划时间点（epoch ms），用于复用更早的计划，避免任务被反复推迟。 */
+    private var backupDueAt = 0L
     @Volatile private var backupDirty = false
+    /** 上次成功落盘时间：两次备份之间至少间隔 1 分钟，避免播放中每 5 秒重写整包。 */
+    @Volatile private var lastBackupAt = 0L
     private val writes = LatestWriteQueue<String, () -> Any?>("hongguotv-library-write", write = { batch -> commit(prefs, batch) },
         failed = { Log.w("HongguoTV", "Local library commit failed; pending changes retained for retry") })
     private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
@@ -265,7 +269,7 @@ class Library(context: Context) {
         if (data == null) { main.post { onDone(false) }; return }
         backupWorker.execute {
             val ok = localBackupStorage.store()?.save(data) == true
-            if (ok) backupDirty = false
+            if (ok) { backupDirty = false; lastBackupAt = System.currentTimeMillis() }
             main.post { onDone(ok) }
         }
     }
@@ -275,28 +279,42 @@ class Library(context: Context) {
         val store = localBackupStorage.store() ?: return
         if (store.hasBackup()) return
         val data = runCatching { snapshot() }.getOrNull() ?: return
-        backupWorker.execute { store.save(data) }
+        backupWorker.execute { if (store.save(data)) lastBackupAt = System.currentTimeMillis() }
     }
     private fun scheduleLocalBackup() {
         if (!localBackupEnabled || index == null) return
-        val data = runCatching { snapshot() }.getOrNull() ?: return
         backupDirty = true
         synchronized(backupLock) {
-            backupTask?.cancel(false)
-            backupTask = backupWorker.schedule({ writeLocalBackup(data) }, 5, TimeUnit.SECONDS)
+            val now = System.currentTimeMillis()
+            // 变更先防抖 5 秒；播放中每 5 秒都有进度落盘，再叠一个 1 分钟最小间隔避免整包反复 fsync
+            val due = maxOf(now + 5_000L, lastBackupAt + 60_000L)
+            // 已有更早的计划就复用：否则播放中每 5 秒都会把任务往后推，可能一直轮不到写盘
+            val pending = backupTask
+            if (pending != null && !pending.isDone && backupDueAt in 1..due) return
+            pending?.cancel(false)
+            backupDueAt = due
+            backupTask = backupWorker.schedule({
+                synchronized(backupLock) { backupTask = null; backupDueAt = 0L }
+                // 真正写盘时再取快照，保证是最新进度
+                runCatching { snapshot() }.getOrNull()?.let { writeLocalBackup(it) }
+            }, (due - now).coerceAtLeast(0), TimeUnit.MILLISECONDS)
         }
     }
     private fun writeLocalBackup(data: BackupData) {
         if (!localBackupEnabled) return
         val ok = localBackupStorage.store()?.save(data) == true
-        if (ok) backupDirty = false
+        if (ok) { backupDirty = false; lastBackupAt = System.currentTimeMillis() }
     }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */
     fun flush() {
         writes.flush(); homeWrites.flush()
         if (backupDirty && index != null) {
             val data = runCatching { snapshot() }.getOrNull()
-            if (data != null) backupWorker.execute { writeLocalBackup(data) }
+            if (data != null) {
+                // 放弃排队中的延时备份，改为立刻写一次，避免 5 秒后又重复写同一份数据
+                synchronized(backupLock) { backupTask?.cancel(false); backupTask = null; backupDueAt = 0L }
+                backupWorker.execute { writeLocalBackup(data) }
+            }
         }
     }
     /** Drain pending commits after Activity destruction; abrupt process death is still a boundary. */
@@ -307,7 +325,10 @@ class Library(context: Context) {
         loader.shutdown()
         if (backupDirty && index != null) {
             val data = runCatching { snapshot() }.getOrNull()
-            if (data != null) backupWorker.execute { writeLocalBackup(data) }
+            if (data != null) {
+                synchronized(backupLock) { backupTask?.cancel(false); backupTask = null; backupDueAt = 0L }
+                backupWorker.execute { writeLocalBackup(data) }
+            }
         }
         backupWorker.shutdown()
         synchronized(retiredWrites) {
