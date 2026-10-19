@@ -36,3 +36,6 @@ keystore.properties
 .externalNativeBuild/
 /ios/Pods/
 /ios/build/
+
+# 手机版为本地实验模块，不入库
+/kotlin-tv/app-phone/
