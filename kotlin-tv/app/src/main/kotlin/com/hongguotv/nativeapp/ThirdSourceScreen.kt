@@ -27,12 +27,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.hongguotv.core.PhoneField
+import com.hongguotv.core.PhoneForm
 import java.util.concurrent.Executors
 
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */
 class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit) {
-    private enum class Mode { BROWSE, DETAIL, PLAY }
+    private enum class Mode { BROWSE, SEARCH, DETAIL, PLAY }
     private enum class Dot { RUNNING, OK, DEAD }
 
     private class ProbeState(val dot: Dot, val total: Int)
@@ -43,7 +45,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private val client = ThirdCmsClient()
     private val artwork = ArtworkLoader(activity)
     private val tvTools = TvTools(activity)
-    private val executor = Executors.newFixedThreadPool(2)
+    private val executor = Executors.newFixedThreadPool(3)
     private val probeExecutor = Executors.newFixedThreadPool(2)
     private var generation = 0
 
@@ -57,16 +59,35 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private val probes = HashMap<String, ProbeState>()
     private val capsuleDots = HashMap<String, View>()
     private var categories: List<ThirdCategory> = emptyList()
+    private var categoriesCached = false
     private var categoryId: String? = null
     private var page = 1
     private var hasMore = false
     private var videos: MutableList<ThirdVideo> = mutableListOf()
     private var loading = false
     private var loadingMore = false
+    // 本次浏览会话是否已发起过列表请求：空结果分类若再自动重发会形成「请求→空→rebuild→再请求」
+    // 死循环，界面持续重建吞掉按键（表现为遥控器卡死）
+    private var catalogRequested = false
     private var loadError: String? = null
     private var searchWord: String? = null
     private var searchDetails: List<ThirdDetail> = emptyList()
     private val searchIndex = HashMap<String, ThirdDetail>()
+    // 搜索页（独立 Mode.SEARCH）：输入、联想、分页状态与浏览态结果分离
+    private var searchInput = ""
+    private var suggestions: List<String> = emptyList()
+    private var suggestSeq = 0
+    private var searchLoading = false
+    private var searchLoadingMore = false
+    private var searchRequested = false
+    private var searchPage = 1
+    private var searchHasMore = false
+    private var searchTotal = 0
+    private val suggestDebounce = Runnable { runSuggest() }
+    // 搜索筛选（客户端筛选，CMS 搜索接口不支持多维条件）
+    private var filterType: String? = null
+    private var filterYear: String? = null
+    private var filterArea: String? = null
     private var probeSummary: TextView? = null
     private var gridStatus: TextView? = null
     private var gridAdapter: GridAdapter? = null
@@ -76,8 +97,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     // ---- 详情态 ----
     private var detail: ThirdDetail? = null
     private var detailGroup = 0
-    private var recommendations: List<ThirdVideo> = emptyList()
-    private var recommendRow: LinearLayout? = null
+    private var synopsisExpanded = false
 
     // ---- 播放态 ----
     private var player: ExoPlayer? = null
@@ -121,22 +141,34 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 else { attachPlayer(lastPositionMs.coerceAtLeast(0), false); lastPositionMs = -1L }
             }
             mode == Mode.DETAIL && detail != null -> renderDetail(container)
+            mode == Mode.SEARCH -> renderSearch(container)
             else -> { mode = Mode.BROWSE; loading = false; loadingMore = false; renderBrowse(container) }
+        }
+        // 重建时系统可能在首帧布局阶段清掉焦点（片库页同样用 post 兜底）：下一帧再补一次，
+        // 否则遥控器会出现「按了没反应」的失焦状态
+        val focusId = topFocusId
+        if(focusId != View.NO_ID) container.post {
+            if(container.isAttachedToWindow) container.findViewById<View>(focusId)?.requestFocus()
         }
     }
 
-    /** 返回：播放→详情→浏览；浏览态交还 MainActivity（导航焦点/退出确认）。 */
+    /** 返回：播放→详情→浏览（搜索页直接回浏览）；浏览态交还 MainActivity（导航焦点/退出确认）。 */
     fun onBack(): Boolean = when(mode) {
         Mode.PLAY -> { saveProgressNow(); mode = Mode.DETAIL; releasePlayback(); rebuild(); true }
         Mode.DETAIL -> { mode = Mode.BROWSE; rebuild(); true }
-        Mode.BROWSE -> false
+        Mode.SEARCH -> { mode = Mode.BROWSE; rebuild(); true }
+        // 搜索结果页返回搜索页，方便改关键词；普通浏览交还 MainActivity
+        Mode.BROWSE -> if(searchWord != null) {
+            suggestions = emptyList(); suggestSeq++; mode = Mode.SEARCH; rebuild(); scheduleSuggest(); true
+        } else false
     }
 
-    /** 播放页按键接管；其他模式交还系统。 */
+    /** 播放页按键接管；浏览态只接管网格上下翻行（RecyclerView 在固定高度容器里不会为焦点自动滚动）。 */
     fun onKey(event: KeyEvent): Boolean {
+        if(event.action != KeyEvent.ACTION_DOWN) return false
+        if(mode == Mode.BROWSE && browseGridKey(event.keyCode)) return true
         if(mode != Mode.PLAY || player == null) return false
         val key = event.keyCode
-        if(event.action != KeyEvent.ACTION_DOWN) return false
         val focusInOverlay = overlayButtons.any { it.hasFocus() }
         if(overlayVisible && focusInOverlay) return false   // 控制层内走原生焦点导航
         return when(key) {
@@ -177,32 +209,65 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(sources.isEmpty()) { renderEmptySources(container); return }
         val body = column().apply { setPadding(0, dp(4), 0, 0) }
 
-        // 源胶囊条 + 管理
-        val sourceRow = row()
-        val capsuleScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
-        val capsules = row(); capsuleDots.clear()
-        val capsuleViews = sources.mapIndexed { index, source -> sourceCapsule(source, index) }
-        capsuleViews.forEach { view -> capsules.addView(view, lp(-2, -2).apply { rightMargin = dp(8) }) }
-        sourceButtons = capsuleViews
-        capsuleScroll.addView(capsules)
-        sourceRow.addView(capsuleScroll, lp(0, -2).apply { weight = 1f })
-        val manage = addButton(sourceRow, "管理") { showSourceManager() }
-        body.addView(sourceRow)
+        // 源胶囊条 + 管理（搜索态隐藏，把高度让给结果网格）
+        var capsuleViews: List<View> = emptyList()
+        var manage: TextView? = null
+        if(searchWord == null) {
+            val sourceRow = row()
+            val capsuleScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
+            val capsules = row(); capsuleDots.clear()
+            capsuleViews = sources.mapIndexed { index, source -> sourceCapsule(source, index) }
+            capsuleViews.forEach { view -> capsules.addView(view, lp(-2, -2).apply { rightMargin = dp(8) }) }
+            sourceButtons = capsuleViews
+            capsuleScroll.addView(capsules)
+            sourceRow.addView(capsuleScroll, lp(0, -2).apply { weight = 1f })
+            manage = addButton(sourceRow, "管理") { showSourceManager() }
+            body.addView(sourceRow)
 
-        probeSummary = text(probeSummaryText(), 12f, muted).apply { setPadding(0, dp(5), 0, dp(5)) }
-        body.addView(probeSummary)
+            probeSummary = text(probeSummaryText(), 12f, muted).apply { setPadding(0, dp(5), 0, dp(5)) }
+            body.addView(probeSummary)
+        } else sourceButtons = emptyList()
 
         // 搜索行
         val searchRow = row()
-        val search = addButton(searchRow, "搜索片源") { showSearchDialog() }
+        val search = addButton(searchRow, "搜索片源") { openSearch() }
         var clearRef: TextView? = null
-        if(searchWord != null) clearRef = addButton(searchRow, "清除搜索") { clearSearch() }
+        if(searchWord != null) clearRef = addButton(searchRow, "重新搜索") { openSearch(clear = true) }
         body.addView(searchRow)
 
-        // 分类条（搜索态隐藏）
+        // 分类条（搜索态隐藏，改为筛选条）
         var categoryButtons: List<TextView> = emptyList()
         if(searchWord != null) {
-            body.addView(text("搜索「$searchWord」 · ${searchDetails.size} 条结果", 13f).apply { setPadding(0, dp(6), 0, dp(6)) })
+            // 搜索态：结果统计 + 类型/年份/地区筛选
+            val filteredCount = filteredSearchDetails().size
+            val status = when {
+                searchLoading -> "正在搜索「$searchWord」…"
+                searchDetails.isEmpty() -> "搜索「$searchWord」 · 暂无结果"
+                searchTotal > searchDetails.size -> "搜索「$searchWord」 · $filteredCount/${searchDetails.size} 条（共 $searchTotal 条）"
+                else -> "搜索「$searchWord」 · $filteredCount/${searchDetails.size} 条"
+            }
+            body.addView(text(status, 13f).apply { setPadding(0, dp(6), 0, dp(2)) })
+            val filterRow = row().apply { setPadding(0, 0, 0, dp(4)) }
+            val typeOptions = searchDetails.mapNotNull { it.typeName }.distinct().sorted()
+            val yearOptions = searchDetails.mapNotNull { it.year }.distinct().sortedDescending()
+            val areaOptions = searchDetails.mapNotNull { it.area }.distinct().sorted()
+            val filterCapsules = mutableListOf<View>()
+            fun filterCapsule(label: String, current: String?, options: List<String>, onPick: (String?) -> Unit): TextView =
+                text(label + (current?.let { "：$it" } ?: ""), 13f, if(current != null) TvStyle.accent else TvStyle.text).apply {
+                    setPadding(dp(10), dp(6), dp(10), dp(6)); focusStyle(this, selected = current != null)
+                    setOnClickListener { showFilterPicker(label, listOf<String?>(null) + options, current, onPick) }
+                }
+            if(typeOptions.size > 1) filterCapsules += filterCapsule("类型", filterType, typeOptions) { filterType = it; rebuild() }
+            if(yearOptions.size > 1) filterCapsules += filterCapsule("年份", filterYear, yearOptions) { filterYear = it; rebuild() }
+            if(areaOptions.size > 1) filterCapsules += filterCapsule("地区", filterArea, areaOptions) { filterArea = it; rebuild() }
+            if(filterType != null || filterYear != null || filterArea != null) {
+                filterCapsules += text("清除筛选", 13f, muted).apply {
+                    setPadding(dp(10), dp(6), dp(10), dp(6)); focusStyle(this)
+                    setOnClickListener { filterType = null; filterYear = null; filterArea = null; rebuild() }
+                }
+            }
+            filterCapsules.forEach { filterRow.addView(it, lp(-2, -2).apply { rightMargin = dp(8) }) }
+            if(filterCapsules.isNotEmpty()) body.addView(filterRow)
         } else {
             val categoryScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
             val categoryRow = row().apply { setPadding(0, dp(2), 0, dp(2)) }
@@ -210,7 +275,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             categoryButtons = options.map { option ->
                 val id = option.id.ifEmpty { null }
                 addButton(categoryRow, option.name, categoryId == id) {
-                    categoryId = id; videos.clear(); loadError = null; page = 1; hasMore = false; rebuild()
+                    categoryId = id; videos.clear(); loadError = null; page = 1; hasMore = false
+                    catalogRequested = false; rebuild()
                 }
             }
             categoryScroll.addView(categoryRow)
@@ -220,27 +286,48 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 结果区
         if(searchWord == null && loadError != null && videos.isEmpty()) {
             body.addView(text("暂时无法加载「${currentSource()?.name.orEmpty()}」：$loadError", 15f, muted).apply { setPadding(0, dp(24), 0, dp(10)) })
-            addButton(body, "重试") { loadError = null; rebuild() }.requestFocus()
+            addButton(body, "重试") { loadError = null; catalogRequested = false; rebuild() }.requestFocus()
             container.addView(body, lp(-1, 0).apply { weight = 1f })
             topFocusId = body.getChildAt(body.childCount - 1).id
             return
         }
-        val display: List<ThirdVideo> = if(searchWord != null) searchDetails.map { it.video } else videos
+        val display: List<ThirdVideo> = currentDisplay()
+        // 自动补拉放在空态文案之前：请求会同步置 loading，文案能显示「正在加载…」而不是误报「暂无内容」
+        if(videos.isEmpty() && searchWord == null && loadError == null && !loading && !catalogRequested) requestCatalog(reset = true)
+        // 搜索同理：失败后不自动重发（searchRequested 守卫），避免「请求→失败→重建→再请求」死循环
+        if(searchWord != null && searchDetails.isEmpty() && loadError == null && !searchLoading && !searchRequested) requestSearch(reset = true)
         if(display.isEmpty()) {
             message(body, when {
+                searchWord != null && searchDetails.isNotEmpty() -> "没有符合筛选条件的结果，调整筛选或清除筛选试试"
+                searchWord != null && searchLoading -> "正在搜索「$searchWord」…"
+                searchWord != null && loadError != null -> "搜索失败：$loadError，换个关键词或稍后重试"
                 searchWord != null -> "未找到与「$searchWord」相关的内容，换个关键词试试"
                 loading -> "正在加载「${currentSource()?.name.orEmpty()}」…"
                 loadError == null -> "该分类暂无内容"
                 else -> ""
             })
         }
-        if(display.isNotEmpty()) mountGrid(body, display)
+        if(display.isNotEmpty()) mountGrid(body)
         gridStatus = text(gridStatusText(), 12f, muted).apply { setPadding(0, dp(4), 0, 0) }
         body.addView(gridStatus)
 
         container.addView(body, lp(-1, 0).apply { weight = 1f })
-        topFocusId = capsuleViews.firstOrNull()?.id ?: search.id
-        if(videos.isEmpty() && searchWord == null && loadError == null && !loading) requestCatalog(reset = true)
+        // 焦点归属：搜索结果→首张卡片；选中的分类→该分类；空态→「全部」；其余→当前使用的源胶囊
+        // （点源 tab 切换后不要把焦点甩回第一个胶囊）
+        val emptyBrowse = display.isEmpty() && !loading && searchWord == null && loadError == null
+        val selectedCategory = if(searchWord == null && categoryId != null) {
+            val index = categories.indexOfFirst { it.id == categoryId }
+            if(index >= 0) categoryButtons.getOrNull(index + 1) else null
+        } else null
+        val currentCapsule = capsuleViews.getOrNull(sources.indexOfFirst { it.id == currentId })
+        topFocusId = when {
+            selectedCategory != null -> selectedCategory.id
+            searchWord != null && gridRecycler != null -> gridRecycler!!.id
+            searchWord != null -> search.id
+            emptyBrowse && categoryButtons.isNotEmpty() -> categoryButtons[0].id
+            currentCapsule != null -> currentCapsule.id
+            else -> capsuleViews.firstOrNull()?.id ?: search.id
+        }
         // 焦点接线：胶囊/搜索/分类 ↓ → 网格；胶囊 → 管理 → 搜索 左右互达
         gridRecycler?.id?.let { gridId ->
             capsuleViews.forEach { it.nextFocusDownId = gridId }
@@ -248,10 +335,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             clearRef?.nextFocusDownId = gridId
             categoryButtons.forEach { it.nextFocusDownId = gridId }
         }
-        search.nextFocusUpId = manage.id
-        manage.nextFocusRightId = search.id
-        search.nextFocusLeftId = manage.id
-        if(clearRef != null) { manage.nextFocusRightId = clearRef.id; clearRef.nextFocusLeftId = manage.id }
+        search.nextFocusUpId = manage?.id ?: View.NO_ID
+        search.nextFocusLeftId = manage?.id ?: View.NO_ID
+        manage?.let { button ->
+            button.nextFocusRightId = clearRef?.id ?: search.id
+            clearRef?.nextFocusLeftId = button.id
+        }
     }
 
     private fun sourceCapsule(source: ThirdSource, index: Int): LinearLayout {
@@ -282,9 +371,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         topFocusId = add.id; add.requestFocus()
     }
 
-    private fun mountGrid(body: LinearLayout, display: List<ThirdVideo>) {
+    private fun mountGrid(body: LinearLayout) {
         val cols = browseCols()
-        val adapter = GridAdapter(display, cols)
+        val adapter = GridAdapter(cols) { currentDisplay() }
         gridAdapter = adapter
         val grid = GridLayoutManager(activity, cols)
         val recycler = RecyclerView(activity).apply {
@@ -294,19 +383,30 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 val first = grid.findFirstVisibleItemPosition().coerceAtLeast(0)
                 post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() }
             } }
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    // 滚到底自动续页：焦点导航不会触发 bind 的临界判断时由这里兜底
+                    if(!recyclerView.canScrollVertically(1)) maybeLoadMore()
+                }
+            })
         }
         gridRecycler = recycler
         body.addView(recycler, lp(-1, 0).apply { weight = 1f })
         sourceButtons.lastOrNull()?.nextFocusDownId = recycler.id
     }
 
-    private inner class GridAdapter(private val items: List<ThirdVideo>, private val cols: Int) : RecyclerView.Adapter<GridAdapter.Holder>() {
-        private val contentPx = (activity.resources.displayMetrics.widthPixels * 0.9f).toInt()
-        private val cellPx = (contentPx - dp(8) * (cols - 1)) / cols
+    /** 当前结果集：浏览态用列表缓存，搜索态用筛选后的搜索结果。adapter 每次取最新，翻页追加不必重建控件。 */
+    private fun currentDisplay(): List<ThirdVideo> =
+        if(searchWord != null) filteredSearchDetails().map { it.video } else videos
+
+    private inner class GridAdapter(private val cols: Int, private val source: () -> List<ThirdVideo>) : RecyclerView.Adapter<GridAdapter.Holder>() {
+        private val contentPx = (activity.resources.displayMetrics.widthPixels * 0.88f).toInt()
+        private val cellPx = (contentPx - dp(12) * (cols - 1)) / cols
         private val posterPx = (cellPx / TvStyle.POSTER_ASPECT).toInt()
+        private val items: List<ThirdVideo> get() = source()
 
         fun submit(appendFrom: Int) {
-            if(appendFrom < 0) notifyDataSetChanged() else notifyItemRangeInserted(appendFrom, items.size - appendFrom)
+            if(appendFrom < 0) notifyDataSetChanged() else notifyItemRangeInserted(appendFrom, source().size - appendFrom)
         }
 
         inner class Holder(val card: LinearLayout, val image: ImageView, val name: TextView, val badge: TextView) : RecyclerView.ViewHolder(card)
@@ -317,11 +417,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val imageFrame = FrameLayout(activity)
             val image = ImageView(activity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(TvStyle.badgeSurface) }
             imageFrame.addView(image, FrameLayout.LayoutParams(-1, posterPx))
-            val badge = text("", 10f, Color.WHITE).apply { setPadding(dp(5), dp(2), dp(5), dp(2)); background = rounded(TvStyle.badgeSurface, radius = 6) }
-            imageFrame.addView(badge, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { topMargin = dp(4); rightMargin = dp(4) })
-            val name = text("", 13f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(2), dp(5), dp(2), 0) }
+            val badge = text("", 12f, Color.WHITE).apply { setPadding(dp(6), dp(3), dp(6), dp(3)); background = rounded(TvStyle.badgeSurface, radius = 6) }
+            imageFrame.addView(badge, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { topMargin = dp(5); rightMargin = dp(5) })
+            val name = text("", 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(2), dp(6), dp(2), 0) }
             card.addView(imageFrame); card.addView(name)
-            card.layoutParams = RecyclerView.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+            card.layoutParams = RecyclerView.LayoutParams(-1, -2).apply { bottomMargin = dp(12); rightMargin = dp(4) }
             return Holder(card, image, name, badge)
         }
 
@@ -333,11 +433,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             artwork.load(holder.image, item.cover, ArtworkLoader.PRIORITY_VISIBLE)
             holder.card.id = View.generateViewId()
             focusStyle(holder.card)
-            // 保留 focusStyle 的绘制监听，追加名称高亮
+            // 保留 focusStyle 的绘制监听，追加名称高亮；焦点走到末排即预取下一页
             val paint = holder.card.onFocusChangeListener
             holder.card.setOnFocusChangeListener { v, focused ->
                 paint?.onFocusChange(v, focused)
                 holder.name.setTextColor(if(focused) TvStyle.accent else TvStyle.text)
+                if(focused && position >= items.size - 3) maybeLoadMore()
             }
             holder.card.setOnClickListener { onVideoClick(item) }
             if(position >= items.size - 12) maybeLoadMore()
@@ -363,8 +464,49 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun maybeLoadMore() {
-        if(loadingMore || !hasMore || searchWord != null || loadError != null || currentSource() == null) return
+        if(loadError != null || currentSource() == null) return
+        if(searchWord != null) { requestSearch(reset = false); return }
+        if(loadingMore || !hasMore) return
         requestCatalog(reset = false)
+    }
+
+    /** 网格上下翻行：目标行不在视口内时先滚动再聚焦；已到底则拉起下一页。 */
+    private fun browseGridKey(key: Int): Boolean {
+        val recycler = gridRecycler ?: return false
+        // 有弹窗时焦点属于弹窗窗口，不能被网格按键逻辑吞掉
+        val current = activity.currentFocus ?: return false
+        if(current.windowToken !== recycler.windowToken) return false
+        val focused = recycler.findFocus() ?: return false
+        val grid = recycler.layoutManager as? GridLayoutManager ?: return false
+        val position = recycler.getChildAdapterPosition(focused)
+        if(position == RecyclerView.NO_POSITION) return false
+        val span = grid.spanCount.coerceAtLeast(1)
+        when(key) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                val next = position + span
+                if(next >= (gridAdapter?.itemCount ?: 0)) { maybeLoadMore(); return true }
+                // 目标行贴到视口底部：视口只有一行时即 0（整行替换），两行时等效下滚一行
+                scrollAndFocus(recycler, grid, next, (recycler.height - focused.height).coerceAtLeast(0))
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                val prev = position - span
+                if(prev < 0) return false
+                scrollAndFocus(recycler, grid, prev, 0)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun scrollAndFocus(recycler: RecyclerView, grid: GridLayoutManager, position: Int, offset: Int) {
+        grid.scrollToPositionWithOffset(position, offset)
+        // postOnAnimation 在下一帧布局之后执行；普通 post 可能早于这次重新布局，导致目标卡片还没创建
+        recycler.postOnAnimation {
+            val target = grid.findViewByPosition(position)
+            if(target != null) target.requestFocus()
+            else recycler.postOnAnimation { grid.findViewByPosition(position)?.requestFocus() }
+        }
     }
 
     private fun requestCatalog(reset: Boolean) {
@@ -373,15 +515,29 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val gen = generation
         val requestCategory = categoryId
         val requestPage = if(reset) 1 else page + 1
-        if(reset) loading = true else loadingMore = true
+        if(reset) {
+            // 新 reset 请求发起前取消所有在途 catalog 请求：旧请求已无人消费（generation 会丢弃其回调），
+            // 不取消会占满线程池让新请求排队，界面长时间空态（体感卡死）
+            client.cancelCatalog()
+            loading = true
+            catalogRequested = true
+        } else loadingMore = true
         executor.execute {
+            // 分类与列表串行请求、统一一次回调：分类中途 rebuild 会让 generation 失效，
+            // 导致 list 回调被丢弃、loading 死锁（点分类后界面卡死）
+            val fetched = if(reset && !categoriesCached && requestCategory == null) client.categories(source.api) else null
             val result = client.list(source.api, requestCategory, requestPage)
             main.post {
                 if(gen != generation) return@post
+                if(fetched != null && fetched.isNotEmpty()) { categories = fetched; categoriesCached = true }
                 if(reset) {
                     loading = false
                     if(result != null) {
-                        categories = result.categories; videos = result.videos.toMutableList()
+                        // 分类兜底：仅首页响应含分类时更新缓存，后续页沿用
+                        if(!categoriesCached && result.categories.isNotEmpty()) {
+                            categories = result.categories; categoriesCached = true
+                        }
+                        videos = result.videos.toMutableList()
                         hasMore = result.hasMore && result.videos.isNotEmpty(); loadError = null; page = 1
                     } else { loadError = "连接超时或接口无响应"; videos = mutableListOf(); hasMore = false }
                     rebuild()
@@ -400,15 +556,82 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
+    /** 搜索分页请求（ac=detail&wd=）：reset 取第 1 页并替换结果，否则追加下一页。 */
+    private fun requestSearch(reset: Boolean) {
+        val source = currentSource() ?: return
+        val word = searchWord ?: return
+        if(reset) {
+            if(searchLoading) return
+            searchLoading = true; searchRequested = true
+        } else {
+            if(searchLoadingMore || !searchHasMore) return
+            searchLoadingMore = true
+        }
+        val gen = generation
+        val requestPage = if(reset) 1 else searchPage + 1
+        executor.execute {
+            val result = client.searchPage(source.api, word, requestPage)
+            main.post {
+                if(gen != generation) return@post
+                if(reset) {
+                    searchLoading = false
+                    val pageData = result.page
+                    if(pageData != null) {
+                        searchDetails = pageData.details
+                        searchIndex.clear(); searchIndex.putAll(pageData.details.associateBy { it.video.id })
+                        searchHasMore = pageData.hasMore; searchTotal = pageData.total; searchPage = 1; loadError = null
+                    } else {
+                        searchDetails = emptyList(); searchHasMore = false; searchTotal = 0
+                        loadError = result.error ?: "连接超时或接口无响应"
+                    }
+                    rebuild()
+                } else {
+                    searchLoadingMore = false
+                    val pageData = result.page
+                    if(pageData != null) {
+                        val known = searchDetails.mapTo(HashSet()) { it.video.id }
+                        val fresh = pageData.details.filter { it.video.id !in known }
+                        val insertAt = searchDetails.size
+                        searchDetails = searchDetails + fresh
+                        searchIndex.putAll(fresh.associateBy { it.video.id })
+                        searchHasMore = pageData.hasMore; searchTotal = pageData.total; searchPage = requestPage
+                        gridAdapter?.submit(insertAt)
+                        gridStatus?.text = gridStatusText()
+                    } else gridStatus?.text = "加载更多失败，继续下滑可重试"
+                }
+            }
+        }
+    }
+
     private fun gridStatusText(): String = when {
-        searchWord != null -> ""
+        searchWord != null -> when {
+            searchLoadingMore -> "正在加载更多…"
+            searchHasMore -> "继续下滑加载更多"
+            searchDetails.isEmpty() -> ""
+            searchTotal > searchDetails.size -> "已加载 ${searchDetails.size} / $searchTotal 条"
+            else -> "已加载全部 ${searchDetails.size} 条"
+        }
         loadingMore -> "正在加载更多…"
         hasMore -> "继续下滑加载更多"
         videos.isEmpty() -> ""
         else -> "已加载全部 ${videos.size} 条"
     }
 
-    private fun clearSearch() { searchWord = null; searchDetails = emptyList(); searchIndex.clear(); rebuild() }
+    /** 应用类型/年份/地区筛选后的搜索结果。 */
+    private fun filteredSearchDetails(): List<ThirdDetail> = searchDetails.filter { item ->
+        (filterType == null || item.typeName == filterType) &&
+        (filterYear == null || item.year == filterYear) &&
+        (filterArea == null || item.area == filterArea)
+    }
+
+    /** 筛选选项弹窗：第一项为「全部」。 */
+    private fun showFilterPicker(title: String, options: List<String?>, current: String?, onPick: (String?) -> Unit) {
+        val labels = options.map { it ?: "全部" }.toTypedArray()
+        AlertDialog.Builder(activity).setTitle(title)
+            .setItems(labels) { dialog, which ->
+                onPick(options[which]); dialog.dismiss()
+            }.show()
+    }
 
     // ---- 源切换与探活 ----
 
@@ -418,8 +641,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(source.id == currentId) return
         currentId = source.id; store.setCurrent(source.id)
         categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
-        videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
+        filterType = null; filterYear = null; filterArea = null
+        videos.clear(); loadError = null; page = 1; hasMore = false
+        categories = emptyList(); categoriesCached = false; catalogRequested = false
+        resetSearchState()
         scheduleProbes(); rebuild()
+    }
+
+    /** 换源/删源后清空搜索页与分页状态，避免旧源结果残留。 */
+    private fun resetSearchState() {
+        main.removeCallbacks(suggestDebounce)
+        searchInput = ""; suggestions = emptyList(); suggestSeq++
+        searchRequested = false; searchLoading = false; searchLoadingMore = false
+        searchPage = 1; searchHasMore = false; searchTotal = 0
     }
 
     private fun scheduleProbes() {
@@ -508,6 +742,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             probes.remove(source.id)
             categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
             videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
+            categoriesCached = false; catalogRequested = false
             Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
             rebuild()
         }
@@ -562,6 +797,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                             probes[source.id] = ProbeState(Dot.OK, probe.total)
                             categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
                             videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
+                            categoriesCached = false; catalogRequested = false
                             dialog.dismiss()
                             Toast.makeText(activity, "已添加「${source.name}」", Toast.LENGTH_SHORT).show()
                             rebuild()
@@ -571,11 +807,22 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             }
         }
         scan.setOnClickListener {
-            tvTools.phoneInput(save) { submitted ->
-                val value = submitted.trim()
-                if(value.startsWith("http")) {
-                    apiEdit.setText(value)
-                    if(nameEdit.text.isBlank()) nameEdit.setText(hostOf(value))
+            // 添加源需要名称与接口地址两个值，手机页对应两个输入框
+            tvTools.phoneForm(save, PhoneForm(
+                heading = "添加三方片源",
+                description = "填写源名称（可留空，留空自动用域名）与 CMS 接口地址，提交后自动回填到电视。",
+                fields = listOf(
+                    PhoneField("name", "源名称（可留空）", "例如：量子资源", 20, required = false),
+                    PhoneField("api", "接口地址", "https://…/api.php/provide/vod", 300)
+                ),
+                doneHint = "请回到电视继续添加或保存。",
+                invalidMessage = "请填写以 http 开头的接口地址"
+            )) { values ->
+                val api = values["api"].orEmpty()
+                val name = values["name"].orEmpty()
+                if(api.startsWith("http")) {
+                    apiEdit.setText(api)
+                    if(name.isNotEmpty()) nameEdit.setText(name)
                     nameEdit.requestFocus()
                 } else errorText.text = "请输入以 http 开头的接口地址"
             }
@@ -617,8 +864,15 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         parse.setOnClickListener { runParse(urlEdit.text.toString()) }
         scan.setOnClickListener {
-            tvTools.phoneInput(parse) { submitted ->
-                val value = submitted.trim()
+            // 导入配置只需一个配置链接，手机页文案与字段都要对应导入场景而不是搜索剧名
+            tvTools.phoneForm(parse, PhoneForm(
+                heading = "导入 TVBox 配置",
+                description = "在手机浏览器里粘贴 TVBox 配置链接（明文 JSON），提交后电视会自动解析并列出可导入的 CMS 源。",
+                fields = listOf(PhoneField("url", "TVBox 配置链接", "http://…/tv", 300)),
+                doneHint = "请回到电视查看解析结果。",
+                invalidMessage = "请填写以 http 开头的配置链接"
+            )) { values ->
+                val value = values["url"].orEmpty()
                 if(value.startsWith("http")) { urlEdit.setText(value); runParse(value) }
                 else errorText.text = "请输入以 http 开头的配置链接"
             }
@@ -701,143 +955,276 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         rebuild()
     }
 
-    // ================= 搜索 =================
+    // ================= 搜索页（独立全屏：键盘 + 联想 + 历史 + 手机扫码） =================
 
-    private var searchDialog: AlertDialog? = null
-    private var searchDraft = ""
-    private val searchDebounce = Runnable { if(searchDraft.isNotBlank()) runSearchNow(searchDraft) }
+    private var searchInputView: TextView? = null
+    private var suggestHost: LinearLayout? = null
+    private var suggestKeyDownTargets: List<View> = emptyList()
 
-    private fun showSearchDialog() {
-        searchDraft = searchWord.orEmpty()
-        val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
-        val display = text(searchDraft.ifEmpty { "—" }, 19f).apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, dp(8)) }
-        content.addView(display)
-        val keyViews = mutableListOf<TextView>()
-        var firstKey: TextView? = null
-        fun key(label: String, span: Int = 1, onClick: () -> Unit): TextView {
-            val view = text(label, 14f).apply {
-                gravity = Gravity.CENTER; minHeight = dp(34); focusStyle(this)
-                setOnClickListener { onClick() }
-            }
-            keyViews += view
-            if(firstKey == null) firstKey = view
-            return view
+    /** 打开搜索页；clear=true 时同时清空上次结果（「重新搜索」入口）。 */
+    private fun openSearch(clear: Boolean = false) {
+        main.removeCallbacks(suggestDebounce)
+        searchInput = if(clear) "" else searchWord.orEmpty()
+        if(clear) {
+            searchWord = null; searchDetails = emptyList(); searchIndex.clear()
+            searchRequested = false; searchPage = 1; searchHasMore = false; searchTotal = 0
+            filterType = null; filterYear = null; filterArea = null; loadError = null
         }
+        suggestions = emptyList(); suggestSeq++
+        mode = Mode.SEARCH
+        rebuild()
+        if(searchInput.isNotBlank()) scheduleSuggest()
+    }
+
+    private fun renderSearch(container: LinearLayout) {
+        detachPlayerViews()
+        val body = column()
+
+        // 顶栏：返回 + 输入回显 + 手机扫码
+        val head = row()
+        addButton(head, "‹ 返回") { onBack() }
+        val display = text(searchInput.ifEmpty { "输入片名或关键词" }, 19f, if(searchInput.isEmpty()) muted else TvStyle.text).apply {
+            setPadding(dp(14), 0, dp(14), 0); gravity = Gravity.CENTER_VERTICAL; maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.START
+        }
+        searchInputView = display
+        head.addView(display, lp(0, dp(46)).apply { weight = 1f; leftMargin = dp(6) })
+        var phone: TextView? = null
+        phone = addButton(head, "手机扫码输入") { phoneSearch(phone) }
+        body.addView(head, lp(-1, -2).apply { bottomMargin = dp(6) })
+
+        // 屏幕键盘：6 列，与联想/历史上下串联
+        val keyViews = mutableListOf<TextView>()
+        fun key(label: String, onClick: () -> Unit): TextView = text(label, 15f).apply {
+            gravity = Gravity.CENTER; minHeight = dp(40); focusStyle(this); setOnClickListener { onClick() }
+        }.also { keyViews += it }
         val keyboard = column()
-        listOf("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ0123", "456789").forEach { keys ->
+        listOf("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ0123", "456789").forEach { letters ->
             val line = row().apply { setPadding(0, 0, 0, dp(4)) }
-            keys.forEach { ch ->
-                val view = key(ch.toString()) { searchDraft += ch; display.text = searchDraft; scheduleLiveSearch() }
-                line.addView(view, lp(0, -2).apply { weight = 1f; rightMargin = dp(4) })
+            letters.forEach { ch ->
+                val letter = ch.toString().lowercase()
+                line.addView(key(letter) { typeChar(letter) }, lp(0, -2).apply { weight = 1f; rightMargin = dp(4) })
             }
             keyboard.addView(line)
         }
-        val lastLine = row().apply { setPadding(0, 0, 0, dp(2)) }
-        val del = key("删除", 2) { if(searchDraft.isNotEmpty()) { searchDraft = searchDraft.dropLast(1); display.text = searchDraft.ifEmpty { "—" }; scheduleLiveSearch() } }
-        lastLine.addView(del, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
-        val clear = key("清空", 2) { searchDraft = ""; display.text = "—"; scheduleLiveSearch() }
-        lastLine.addView(clear, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
-        val go = key("搜索", 2) { if(searchDraft.isNotBlank()) { searchDialog?.dismiss(); runSearchNow(searchDraft) } }
-        lastLine.addView(go, lp(0, -2).apply { weight = 2f })
-        content.addView(keyboard)
-        val actions = row().apply { setPadding(0, dp(8), 0, 0) }
-        val phone = addButton(actions, "手机扫码输入") { tvTools.phoneInput(go) { submitted ->
-            val value = submitted.trim()
-            if(value.isNotEmpty()) { searchDialog?.dismiss(); runSearchNow(value) }
-        } }
-        content.addView(actions)
+        val lastRow = row().apply { setPadding(0, 0, 0, dp(4)) }
+        val del = key("删除") { if(searchInput.isNotEmpty()) { searchInput = searchInput.dropLast(1); refreshSearchInput(); scheduleSuggest() } }
+        val clear = key("清空") { searchInput = ""; refreshSearchInput(); suggestions = emptyList(); suggestSeq++; renderSuggestions() }
+        val go = key("搜索") { submitSearch(searchInput) }
+        lastRow.addView(del, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
+        lastRow.addView(clear, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
+        lastRow.addView(go, lp(0, -2).apply { weight = 2f })
+        keyboard.addView(lastRow)
+        body.addView(keyboard, lp(-1, -2).apply { bottomMargin = dp(8) })
+        suggestKeyDownTargets = listOf(del, clear, go)
 
-        val dialog = AlertDialog.Builder(activity).setTitle("搜索片源")
-            .setView(ScrollView(activity).apply { addView(content) }).setNegativeButton("关闭", null).create()
-        searchDialog = dialog
-        dialog.show()
-        firstKey?.requestFocus()
-        // 键盘行内上下互访（6 列对齐）
-        keyViews.forEachIndexed { index, view -> view.nextFocusUpId = keyViews.getOrNull(index - 6)?.id ?: View.NO_ID }
+        // 联想词
+        body.addView(sectionTitle("联想"))
+        val host = column()
+        suggestHost = host
+        body.addView(host, lp(-1, -2))
+        renderSuggestions()
+
+        // 搜索历史（独立持久化，最多 20 条，这里展示最近 6 条）
+        val history = store.searches()
+        if(history.isNotEmpty()) {
+            body.addView(sectionTitle("搜索历史"))
+            history.take(6).chunked(3).forEach { chunk ->
+                val line = row().apply { setPadding(0, 0, 0, dp(4)) }
+                chunk.forEach { word ->
+                    line.addView(text(word, 14f).apply {
+                        setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        focusStyle(this); setOnClickListener { submitSearch(word) }
+                    }, lp(0, -2).apply { weight = 1f; rightMargin = dp(6) })
+                }
+                repeat(3 - chunk.size) { line.addView(View(activity), lp(0, -2).apply { weight = 1f }) }
+                body.addView(line)
+            }
+            val tools = row().apply { setPadding(0, dp(4), 0, 0) }
+            if(history.size > 6) addButton(tools, "全部历史") { showAllHistory(history) }
+            addButton(tools, "清空历史") {
+                tvTools.confirm("清空搜索历史", "清除本机保存的三方片源搜索词？", tools) { store.clearSearches(); rebuild() }
+            }
+            body.addView(tools)
+        }
+
+        val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false; addView(body) }
+        container.addView(scroll, lp(-1, 0).apply { weight = 1f })
+
+        // 焦点：默认落在键盘首键；上下按 6 列对齐，末行三键向下进联想
+        topFocusId = keyViews.firstOrNull()?.id ?: View.NO_ID
+        keyViews.forEachIndexed { index, view ->
+            view.nextFocusUpId = keyViews.getOrNull(index - 6)?.id ?: View.NO_ID
+            view.nextFocusDownId = keyViews.getOrNull(index + 6)?.id ?: View.NO_ID
+        }
+        suggestKeyDownTargets.forEach { it.nextFocusDownId = host.getChildAt(0)?.id ?: View.NO_ID }
     }
 
-    private fun scheduleLiveSearch() {
-        main.removeCallbacks(searchDebounce)
-        main.postDelayed(searchDebounce, 400)
+    /** 只重建联想区：输入过程中不重建整页，避免焦点从键盘跳走。 */
+    private fun renderSuggestions() {
+        val host = suggestHost ?: return
+        host.removeAllViews()
+        if(suggestions.isEmpty()) {
+            host.addView(text(if(searchInput.isBlank()) "输入关键词后显示联想词" else "没有联想词，可直接按「搜索」", 13f, muted)
+                .apply { setPadding(dp(10), dp(6), 0, dp(8)) })
+            suggestKeyDownTargets.forEach { it.nextFocusDownId = View.NO_ID }
+            return
+        }
+        suggestions.forEach { name ->
+            host.addView(text(name, 15f).apply {
+                setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                focusStyle(this); setOnClickListener { submitSearch(name) }
+            }, lp(-1, -2).apply { bottomMargin = dp(4) })
+        }
+        suggestKeyDownTargets.forEach { it.nextFocusDownId = host.getChildAt(0).id }
+        for(index in 0 until host.childCount) {
+            val view = host.getChildAt(index)
+            view.nextFocusUpId = if(index == 0) suggestKeyDownTargets.lastOrNull()?.id ?: View.NO_ID else host.getChildAt(index - 1).id
+            view.nextFocusDownId = if(index == host.childCount - 1) View.NO_ID else host.getChildAt(index + 1).id
+        }
     }
 
-    private fun runSearchNow(word: String) {
+    private fun typeChar(ch: String) {
+        if(searchInput.length >= 40) return
+        searchInput += ch
+        refreshSearchInput(); scheduleSuggest()
+    }
+
+    private fun refreshSearchInput() {
+        val view = searchInputView ?: return
+        view.text = searchInput.ifEmpty { "输入片名或关键词" }
+        view.setTextColor(if(searchInput.isEmpty()) muted else TvStyle.text)
+    }
+
+    private fun scheduleSuggest() {
+        main.removeCallbacks(suggestDebounce)
+        main.postDelayed(suggestDebounce, 300)
+    }
+
+    /** 联想请求：300ms 防抖 + 序号守卫（只接受最新输入的结果），接口不支持或失败时静默为空。 */
+    private fun runSuggest() {
         val source = currentSource() ?: return
-        searchWord = word; searchDraft = word
-        val gen = generation
+        val word = searchInput.trim()
+        val seq = ++suggestSeq
+        if(word.isEmpty()) { suggestions = emptyList(); renderSuggestions(); return }
         executor.execute {
-            val details = client.search(source.api, word)
+            val list = client.suggest(source.api, word)
             main.post {
-                if(gen != generation) return@post
-                searchDetails = details
-                searchIndex.clear(); searchIndex.putAll(details.associateBy { it.video.id })
-                categoryId = null
-                if(searchDialog?.isShowing == true) searchDialog?.dismiss()
-                rebuild()
+                if(seq != suggestSeq) return@post
+                suggestions = list
+                renderSuggestions()
             }
         }
     }
+
+    /** 提交搜索：切回浏览态展示结果并写入搜索历史。 */
+    private fun submitSearch(word: String) {
+        val clean = word.trim()
+        if(clean.isEmpty() || currentSource() == null) return
+        main.removeCallbacks(suggestDebounce)
+        searchWord = clean; searchInput = clean
+        store.rememberSearch(clean)
+        searchDetails = emptyList(); searchIndex.clear()
+        searchPage = 1; searchHasMore = false; searchTotal = 0
+        searchRequested = false; searchLoading = false; searchLoadingMore = false
+        filterType = null; filterYear = null; filterArea = null; loadError = null
+        categoryId = null
+        mode = Mode.BROWSE
+        rebuild()
+    }
+
+    private fun phoneSearch(anchor: View?) {
+        tvTools.phoneForm(anchor, PhoneForm(
+            heading = "搜索片源",
+            description = "输入片名或关键词，提交后电视会立即按当前片源搜索。",
+            fields = listOf(PhoneField("query", "片名或关键词", "例如：爱情", 40)),
+            doneHint = "请回到电视查看搜索结果。",
+            invalidMessage = "请输入 1—40 个字符的关键词"
+        )) { values ->
+            val word = values["query"].orEmpty()
+            if(word.isNotBlank()) submitSearch(word)
+        }
+    }
+
+    private fun showAllHistory(history: List<String>) {
+        AlertDialog.Builder(activity).setTitle("搜索历史（${history.size}）")
+            .setItems(history.toTypedArray()) { dialog, which -> dialog.dismiss(); submitSearch(history[which]) }
+            .setNegativeButton("取消", null).show()
+    }
+
+    private fun sectionTitle(label: String) = text(label, 13f, muted).apply { setPadding(0, dp(6), 0, dp(4)) }
 
     // ================= 详情态 =================
 
     private fun openDetail(data: ThirdDetail) {
         detail = data
+        synopsisExpanded = false
         val progress = store.progress(currentId.orEmpty(), data.video.id)
         detailGroup = progress?.group?.takeIf { data.groups.getOrNull(it) != null } ?: ThirdCms.defaultGroupIndex(data.groups)
         playGroup = detailGroup; playEpisode = progress?.episode ?: 0
-        recommendations = emptyList()
         mode = Mode.DETAIL
-        requestRecommendations()
         rebuild()
-    }
-
-    private fun requestRecommendations() {
-        val source = currentSource() ?: return
-        val gen = generation
-        val exclude = detail?.video?.id
-        executor.execute {
-            val result = client.list(source.api, categoryId, 1)
-            main.post {
-                if(gen != generation) return@post
-                recommendations = result?.videos?.filter { it.id != exclude }?.take(5).orEmpty()
-                mountRecommendations()
-            }
-        }
     }
 
     private fun renderDetail(container: LinearLayout) {
         val data = detail ?: run { mode = Mode.BROWSE; renderBrowse(container); return }
-        recommendRow = null
         val body = column()
+
+        // 顶栏：返回按钮与片名同行、垂直居中对齐
         val head = row()
         val back = addButton(head, "‹ 返回") { onBack() }
-        head.addView(text(data.video.name, 21f).apply { setTypeface(null, android.graphics.Typeface.BOLD); setPadding(dp(10), 0, 0, 0) }, lp(0, dp(40)).apply { weight = 1f; gravity = Gravity.CENTER_VERTICAL })
-        body.addView(head)
+        head.addView(text(data.video.name, 20f).apply {
+            setTypeface(null, android.graphics.Typeface.BOLD); maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(6), 0, 0, 0)
+        }, lp(0, -2).apply { weight = 1f; gravity = Gravity.CENTER_VERTICAL })
+        body.addView(head, lp(-1, -2).apply { bottomMargin = dp(8) })
 
         val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
-        val content = column().apply { setPadding(0, dp(6), 0, 0) }
+        val content = column()
         scroll.addView(content)
 
-        val infoRow = row().apply { setPadding(0, 0, 0, dp(10)) }
-        val posterColumn = column()
+        // 信息区：海报（小尺寸）+ 右侧文案顶部对齐
+        val infoRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         val poster = ImageView(activity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(TvStyle.badgeSurface) }
         artwork.load(poster, data.video.cover)
-        posterColumn.addView(poster, lp(dp(220), (dp(220) / TvStyle.POSTER_ASPECT).toInt()))
-        posterColumn.addView(text("来源：${currentSource()?.name.orEmpty()}", 12f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0) })
-        infoRow.addView(posterColumn)
+        infoRow.addView(poster, lp(dp(150), (dp(150) / TvStyle.POSTER_ASPECT).toInt()))
 
         val right = column()
         val titleRow = row()
-        titleRow.addView(text(data.video.name, 22f).apply { setTypeface(null, android.graphics.Typeface.BOLD) }, lp(-2, -2))
+        titleRow.addView(text(data.video.name, 20f).apply { setTypeface(null, android.graphics.Typeface.BOLD) }, lp(-2, -2))
         if(data.video.remarks.isNotBlank()) titleRow.addView(text(data.video.remarks, 11f, Color.WHITE).apply {
             setPadding(dp(6), dp(3), dp(6), dp(3)); background = rounded(TvStyle.badgeSurface, radius = 6)
         }, lp(-2, -2).apply { leftMargin = dp(8) })
         right.addView(titleRow)
         val episodeCount = data.groups.getOrNull(detailGroup)?.second?.size ?: 0
-        right.addView(text(listOfNotNull(data.typeName, data.year, "共 $episodeCount 集").joinToString(" · "), 13f, muted).apply { setPadding(0, dp(6), 0, dp(6)) })
-        right.addView(text(data.synopsis ?: "暂无简介", 13f, muted).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
-        content.addView(infoRow)
-        infoRow.addView(right, lp(0, -2).apply { weight = 1f; leftMargin = dp(16) })
+        right.addView(text(listOfNotNull(data.typeName, data.year, data.area, "共 $episodeCount 集").joinToString(" · "), 13f, muted).apply { setPadding(0, dp(6), 0, dp(6)) })
+        right.addView(text("来源：${currentSource()?.name.orEmpty()}", 12f, muted).apply { setPadding(0, 0, 0, dp(6)) })
+        // 简介：默认 3 行折叠，文案多时提供展开/收起
+        val fullSynopsis = data.synopsis ?: "暂无简介"
+        val synopsis = text(fullSynopsis, 13f, muted).apply {
+            maxLines = if(synopsisExpanded) Int.MAX_VALUE else 3
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        right.addView(synopsis)
+        var toggle: TextView? = null
+        toggle = text(if(synopsisExpanded) "收起 ▲" else "展开 ▼", 12f, TvStyle.accent).apply {
+            setPadding(0, dp(4), 0, 0); visibility = View.GONE
+            focusStyle(this)
+            setOnClickListener {
+                synopsisExpanded = !synopsisExpanded
+                synopsis.maxLines = if(synopsisExpanded) Int.MAX_VALUE else 3
+                this.text = if(synopsisExpanded) "收起 ▲" else "展开 ▼"
+            }
+        }
+        // 仅当文案折叠后被截断时才显示展开按钮
+        synopsis.post {
+            toggle.visibility = if(synopsis.lineCount > 3 || synopsisExpanded) View.VISIBLE else View.GONE
+        }
+        right.addView(toggle)
+        infoRow.addView(right, lp(0, -2).apply { weight = 1f; leftMargin = dp(14) })
+        content.addView(infoRow, lp(-1, -2).apply { bottomMargin = dp(10) })
 
         // 主按钮：有进度默认继续播放并持焦点
         val progress = store.progress(currentId.orEmpty(), data.video.id)
@@ -889,14 +1276,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             mainFocus?.nextFocusDownId = recycler.id
         }
 
-        // 同分类推荐
-        content.addView(text("同分类推荐", 15f).apply { setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, dp(12), 0, dp(6)) })
-        val recommend = row()
-        recommendRow = recommend
-        recommend.addView(text(if(recommendations.isEmpty()) "加载中…" else "", 12f, muted))
-        if(recommendations.isNotEmpty()) mountRecommendations(recommend)
-        content.addView(recommend)
-
         body.addView(scroll, lp(-1, 0).apply { weight = 1f })
         container.addView(body, lp(-1, 0).apply { weight = 1f })
         topFocusId = mainFocus?.id ?: back.id
@@ -906,22 +1285,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun renderDetailRefresh() {
         if(mode == Mode.DETAIL) rebuild()
-    }
-
-    private fun mountRecommendations(into: LinearLayout? = recommendRow) {
-        val target = into ?: return
-        if(recommendations.isEmpty()) { target.addView(text("暂无推荐", 12f, muted)); return }
-        target.removeAllViews()
-        recommendations.forEach { item ->
-            val card = column().apply { setPadding(dp(4), 0, dp(4), 0) }
-            val image = ImageView(activity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(TvStyle.badgeSurface) }
-            card.addView(image, lp(dp(170), dp(96)))
-            card.addView(text(item.name, 12f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(2), dp(4), dp(2), 0) })
-            focusStyle(card)
-            card.setOnClickListener { onVideoClick(item) }
-            target.addView(card, lp(-2, -2).apply { rightMargin = dp(8) })
-            artwork.load(image, item.cover, ArtworkLoader.PRIORITY_VISIBLE)
-        }
     }
 
     private inner class EpisodeAdapter(private val episodes: List<ThirdEpisode>) : RecyclerView.Adapter<EpisodeAdapter.Holder>() {
@@ -1166,7 +1529,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun browseCols(): Int = when {
-        widthDp() >= 1100 -> 6; widthDp() >= 900 -> 5; widthDp() >= 700 -> 4; else -> 3
+        widthDp() >= 1100 -> 7; widthDp() >= 900 -> 6; widthDp() >= 700 -> 5; else -> 4
     }
     private fun episodeCols(): Int = when {
         widthDp() >= 1100 -> 7; widthDp() >= 900 -> 6; widthDp() >= 700 -> 5; else -> 4

@@ -16,7 +16,7 @@ data class ThirdCategory(val id: String, val name: String)
 data class ThirdVideo(val id: String, val name: String, val cover: String, val remarks: String)
 data class ThirdEpisode(val label: String, val url: String)
 data class ThirdDetail(
-    val video: ThirdVideo, val typeName: String?, val year: String?,
+    val video: ThirdVideo, val typeName: String?, val year: String?, val area: String?,
     val synopsis: String?, val groups: List<Pair<String, List<ThirdEpisode>>>
 )
 data class ThirdProgress(val episode: Int, val positionMs: Long, val group: Int)
@@ -24,6 +24,12 @@ data class ThirdListPage(
     val categories: List<ThirdCategory>, val videos: List<ThirdVideo>,
     val page: Int, val pageCount: Int, val hasMore: Boolean, val total: Int
 )
+/** 搜索结果分页：条目带封面与播放地址，page/hasMore/total 用于「继续下滑加载更多」。 */
+data class ThirdSearchPage(
+    val details: List<ThirdDetail>, val page: Int, val hasMore: Boolean, val total: Int
+)
+/** 搜索请求结果：page 为空时 error 给出可读原因（该片源未开启搜索 / 网络失败）。 */
+data class ThirdSearchResult(val page: ThirdSearchPage?, val error: String?)
 data class ThirdProbe(val ok: Boolean, val total: Int, val reason: String?)
 data class ThirdTvboxSite(val name: String, val api: String)
 data class ThirdTvboxParse(val candidates: List<ThirdTvboxSite>, val skipped: Int)
@@ -33,6 +39,7 @@ data class ThirdTvboxParse(val candidates: List<ThirdTvboxSite>, val skipped: In
 object ThirdCms {
     const val PAGE_LIMIT = 20          // 常规单页条目数，page/pagecount 缺失时按「返回条数 < 此值」判尾页
     const val MAX_SOURCES = 30         // 源列表上限
+    const val SUGGEST_LIMIT = 10       // 联想词条数上限
     const val TIMEOUT_SECONDS = 10L
 
     /** 内置源名单（2026-10-20 实测探活通过；失效源随版本更新在名单中替换）。 */
@@ -117,11 +124,35 @@ object ThirdCms {
                 video,
                 item.optString("type_name").trim().ifEmpty { null },
                 item.optString("vod_year").trim().ifEmpty { null },
+                item.optString("vod_area").trim().ifEmpty { null },
                 synopsis.ifEmpty { null },
                 parsePlayGroups(item.optString("vod_play_from"), item.optString("vod_play_url"))
             )
         }
         return details
+    }
+
+    /** 搜索联想解析（ac=list&wd=）：响应只含片名等轻量字段，去重后最多返回 SUGGEST_LIMIT 条。 */
+    fun parseSuggestions(body: String): List<String> {
+        val json = JSONObject(body)
+        val array = json.optJSONArray("list") ?: return emptyList()
+        val names = LinkedHashSet<String>()
+        for(index in 0 until array.length()) {
+            val name = array.optJSONObject(index)?.optString("vod_name")?.trim().orEmpty()
+            if(name.isNotEmpty()) names += name
+            if(names.size >= SUGGEST_LIMIT) break
+        }
+        return names.toList()
+    }
+
+    /** 搜索结果分页解析（ac=detail&wd=）：条目带封面与播放地址，分页字段与列表一致。 */
+    fun parseDetailPage(body: String): ThirdSearchPage {
+        val details = parseDetailList(body)
+        val json = JSONObject(body)
+        val page = json.optInt("page", 1)
+        val pageCount = json.optInt("pagecount", 0)
+        val hasMore = if(pageCount > 0) page < pageCount else details.size >= PAGE_LIMIT
+        return ThirdSearchPage(details, page, hasMore && details.isNotEmpty(), json.optInt("total", details.size))
     }
 
     /** 播放地址三层解析：$$$ 分组 → # 分集 → 名称$地址。
@@ -196,24 +227,47 @@ class ThirdCmsClient {
     private val cache = ConcurrentHashMap<String, Pair<Long, Any>>()
     private val cacheTtl = 10 * 60_000L
 
-    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。 */
-    fun get(url: String): ThirdHttp = try {
-        http.newCall(Request.Builder().url(url)
+    // 在途 catalog 请求登记：切换分类/片源时统一取消，避免慢请求占满线程池导致界面长时间空态
+    private val catalogCalls = java.util.Collections.synchronizedList(mutableListOf<okhttp3.Call>())
+
+    fun cancelCatalog() {
+        synchronized(catalogCalls) { catalogCalls.forEach { it.cancel() }; catalogCalls.clear() }
+    }
+
+    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。catalog=true 时登记可取消。 */
+    fun get(url: String, catalog: Boolean = false): ThirdHttp {
+        val call = http.newCall(Request.Builder().url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; TV) AppleWebKit/537.36")
-            .build()).execute().use { response ->
-            val bytes = response.body?.bytes()
-            when {
-                !response.isSuccessful -> ThirdHttp(null, "HTTP ${response.code}")
-                bytes == null || bytes.isEmpty() -> ThirdHttp(null, "源站返回空响应")
-                else -> ThirdHttp(ThirdCms.decode(bytes), null)
+            .build())
+        if(catalog) catalogCalls += call
+        return try {
+            call.execute().use { response ->
+                val bytes = response.body?.bytes()
+                when {
+                    !response.isSuccessful -> ThirdHttp(null, "HTTP ${response.code}")
+                    bytes == null || bytes.isEmpty() -> ThirdHttp(null, "源站返回空响应")
+                    else -> ThirdHttp(ThirdCms.decode(bytes), null)
+                }
             }
+        } catch (problem: Exception) {
+            ThirdHttp(null, when(problem) {
+                is SocketTimeoutException -> "连接超时"
+                is UnknownHostException -> "域名无法解析"
+                else -> "连接失败（响应被中断）"
+            })
+        } finally {
+            if(catalog) catalogCalls -= call
         }
-    } catch (problem: Exception) {
-        ThirdHttp(null, when(problem) {
-            is SocketTimeoutException -> "连接超时"
-            is UnknownHostException -> "无法连接源站"
-            else -> "连接失败"
-        })
+    }
+
+    /** 分类列表（ac=list 首页响应含完整 class[]；videolist 响应不返回分类）。 */
+    fun categories(api: String): List<ThirdCategory> {
+        val key = "$api|categories"
+        @Suppress("UNCHECKED_CAST")
+        (cached(key) as? List<ThirdCategory>)?.let { return it }
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "pg" to "1")), catalog = true)
+        val parsed = response.body?.let { body -> try { ThirdCms.parseList(body).categories } catch (_: Exception) { null } } ?: emptyList()
+        store(key, parsed); return parsed
     }
 
     /** 分类列表与条目分页（ac=videolist，含封面与角标；ac=list 是轻量响应缺 vod_pic）。 */
@@ -225,7 +279,7 @@ class ThirdCmsClient {
             if(!categoryId.isNullOrBlank()) add("t" to categoryId)
             add("pg" to page.toString())
         }
-        val response = get(ThirdCms.apiUrl(api, params))
+        val response = get(ThirdCms.apiUrl(api, params), catalog = true)
         val parsed = response.body?.let { body -> try { ThirdCms.parseList(body) } catch (_: Exception) { null } } ?: return null
         store(key, parsed); return parsed
     }
@@ -239,14 +293,26 @@ class ThirdCmsClient {
         store(key, parsed); return parsed
     }
 
-    /** 片源内搜索（ac=detail&wd=，结果直接含播放地址）。 */
-    fun search(api: String, word: String): List<ThirdDetail> {
-        val key = "$api|search|$word"
+    /** 搜索联想（ac=list&wd=，轻量响应只有片名）；接口不支持搜索或网络失败时静默返回空。 */
+    fun suggest(api: String, word: String): List<String> {
+        val key = "$api|suggest|$word"
         @Suppress("UNCHECKED_CAST")
-        (cached(key) as? List<ThirdDetail>)?.let { return it }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "wd" to word)))
-        val parsed = response.body?.let { body -> try { ThirdCms.parseDetailList(body) } catch (_: Exception) { null } } ?: emptyList()
+        (cached(key) as? List<String>)?.let { return it }
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "wd" to word, "pg" to "1")))
+        val parsed = response.body?.let { body -> try { ThirdCms.parseSuggestions(body) } catch(_: Exception) { null } } ?: emptyList()
         store(key, parsed); return parsed
+    }
+
+    /** 片源内搜索分页（ac=detail&wd=，结果直接含封面与播放地址）。
+     *  部分源未开启搜索时会返回「暂不支持搜索」等纯文本，这里给出明确原因而不是笼统的加载失败。 */
+    fun searchPage(api: String, word: String, page: Int): ThirdSearchResult {
+        val key = "$api|search|$word|$page"
+        (cached(key) as? ThirdSearchPage)?.let { return ThirdSearchResult(it, null) }
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())))
+        response.body ?: return ThirdSearchResult(null, response.error ?: "连接失败")
+        val parsed = try { ThirdCms.parseDetailPage(response.body!!) } catch(_: Exception) { null }
+            ?: return ThirdSearchResult(null, "该片源未开启搜索")
+        store(key, parsed); return ThirdSearchResult(parsed, null)
     }
 
     /** 探活：HTTP 200 + JSON 含 list 字段即通过，返回条目数；失败带明确原因。 */
@@ -261,17 +327,22 @@ class ThirdCmsClient {
     /** 拉取并提取 TVBox 明文配置；parse 为 null 时 error 给出原因（含加密配置提示）。 */
     fun importTvbox(url: String): Pair<ThirdTvboxParse?, String?> {
         val response = get(url)
-        response.body ?: return null to (response.error ?: "无法获取配置")
+        response.body ?: return null to "无法获取配置：${response.error ?: "未知错误"}。请先确认该链接能在手机浏览器里直接打开"
+        // 部分配置带 UTF-8 BOM，直接交给 JSONObject 会解析失败
+        val body = response.body!!.trim().removePrefix("\uFEFF")
         return try {
-            ThirdCms.parseTvboxConfig(response.body!!) to null
+            ThirdCms.parseTvboxConfig(body) to null
         } catch (_: Exception) {
-            null to "该配置不支持导入（仅支持明文 JSON）"
+            null to "该配置不支持导入（仅支持明文 JSON，加密或二进制配置无法解析）"
         }
     }
 
-    /** 释放独立连接池与线程池。 */
+    /** 释放独立连接池与线程池。evictAll 关闭 SSL socket 会触发网络 IO，必须在后台线程执行，
+     *  否则 onDestroy（主线程）调用时 StrictMode 抛 NetworkOnMainThreadException。 */
     fun shutdown() {
-        http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
+        Thread({
+            http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
+        }, "thirdcms-shutdown").start()
     }
 
     private fun cached(key: String): Any? {

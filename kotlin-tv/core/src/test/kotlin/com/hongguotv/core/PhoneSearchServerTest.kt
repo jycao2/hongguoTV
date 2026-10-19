@@ -9,8 +9,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class PhoneSearchServerTest {
-    private fun request(server: PhoneSearchServer,method: String="GET",path: String?=null,body: String="",headers: String="",host: String?=null): String {
-        val uri=URI(server.url)
+    private fun request(server: PhoneSearchServer,method: String="GET",path: String?=null,body: String="",headers: String="",host: String?=null): String =
+        request(server.url,method,path,body,headers,host)
+    private fun request(server: PhoneInputServer,method: String="GET",path: String?=null,body: String="",headers: String="",host: String?=null): String =
+        request(server.url,method,path,body,headers,host)
+    private fun request(url: String,method: String="GET",path: String?=null,body: String="",headers: String="",host: String?=null): String {
+        val uri=URI(url)
         return Socket("127.0.0.1",uri.port).use { socket ->
             socket.soTimeout=3000
             val bytes=body.toByteArray(Charsets.UTF_8)
@@ -67,6 +71,44 @@ class PhoneSearchServerTest {
         PhoneSearchServer("127.0.0.1",{ fail("expired session submitted") },{ expired.countDown() },1).use { server ->
             assertTrue(expired.await(2,TimeUnit.SECONDS))
             assertTrue(runCatching { request(server) }.isFailure)
+        }
+    }
+    @Test fun `multi field form renders every input and submits all values`() {
+        val received=CountDownLatch(1); var values: Map<String,String> = emptyMap()
+        val form=PhoneForm(
+            heading="添加三方片源",
+            description="填写源名称与接口地址",
+            fields=listOf(
+                PhoneField("name","源名称","例如：量子资源",20,required=false),
+                PhoneField("api","接口地址","https://…/api.php/provide/vod",300)
+            )
+        )
+        PhoneInputServer("127.0.0.1",form,{ values=it;received.countDown() }).use { server ->
+            val page=request(server)
+            assertTrue(page.startsWith("HTTP/1.1 200"))
+            assertTrue(page.contains("<h1>添加三方片源</h1>"))
+            assertTrue(page.contains("name=\"name\"")); assertTrue(page.contains("name=\"api\""))
+            assertTrue(page.contains("maxlength=\"300\""))
+            assertEquals(2,Regex("<input").findAll(page).count())
+            val api="https://a.example.com/api.php/provide/vod"
+            val reply=request(server,"POST",URI(server.url).path+"/submit",
+                "name="+URLEncoder.encode("我的源","UTF-8")+"&api="+URLEncoder.encode(api,"UTF-8"))
+            assertTrue(reply.startsWith("HTTP/1.1 200"))
+            assertTrue(received.await(2,TimeUnit.SECONDS))
+            assertEquals("我的源",values["name"]); assertEquals(api,values["api"])
+        }
+    }
+    @Test fun `optional field may stay blank and unknown field is rejected`() {
+        val received=CountDownLatch(1); var api=""
+        val form=PhoneForm("添加三方片源","填写接口地址",listOf(
+            PhoneField("name","源名称","可留空",20,required=false),
+            PhoneField("api","接口地址","https://…",300)
+        ))
+        PhoneInputServer("127.0.0.1",form,{ api=it["api"].orEmpty();received.countDown() }).use { server ->
+            assertTrue(request(server,"POST",URI(server.url).path+"/submit","name=&extra=1").startsWith("HTTP/1.1 400"))
+            val reply=request(server,"POST",URI(server.url).path+"/submit","name=&api="+URLEncoder.encode("https://b.example.com/api.php/provide/vod","UTF-8"))
+            assertTrue(reply.startsWith("HTTP/1.1 200"))
+            assertTrue(received.await(2,TimeUnit.SECONDS)); assertEquals("https://b.example.com/api.php/provide/vod",api)
         }
     }
 }

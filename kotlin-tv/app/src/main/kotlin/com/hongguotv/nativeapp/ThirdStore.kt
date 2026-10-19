@@ -51,6 +51,22 @@ class ThirdStore(context: Context) {
 
     fun clearProgress(sourceId: String, videoId: String) { prefs.edit().remove(KEY_PROGRESS + key(sourceId, videoId)).apply() }
 
+    /** 搜索历史：最近在前，最多 20 条；损坏或缺失时静默返回空。 */
+    fun searches(): List<String> = try {
+        val raw = prefs.getString(KEY_SEARCHES, null) ?: return emptyList()
+        val array = JSONArray(raw)
+        (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf { it.isNotBlank() } }
+    } catch (_: Exception) { emptyList() }
+
+    fun rememberSearch(word: String) {
+        val clean = word.trim()
+        if(clean.isEmpty()) return
+        val next = (listOf(clean) + searches().filterNot { it.equals(clean, ignoreCase = true) }).take(20)
+        prefs.edit().putString(KEY_SEARCHES, JSONArray(next).toString()).apply()
+    }
+
+    fun clearSearches() { prefs.edit().remove(KEY_SEARCHES).apply() }
+
     private fun key(sourceId: String, videoId: String) = "$sourceId:$videoId"
 
     private fun readSources(raw: String?): List<ThirdSource> {
@@ -78,5 +94,6 @@ class ThirdStore(context: Context) {
         private const val KEY_PROGRESS = "progress:"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_CURRENT = "current"
+        private const val KEY_SEARCHES = "searches"
     }
 }

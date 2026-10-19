@@ -1161,7 +1161,14 @@ class MainActivity: Activity() {
         tvTools.choose("选择分组 · ${series.title}",options,anchor,{ index ->
             when {
                 index==0 -> { library.setGroup(series.id,null); apply() }
-                index==options.lastIndex -> tvTools.phoneInput(anchor) { name ->
+                index==options.lastIndex -> tvTools.phoneForm(anchor,PhoneForm(
+                    heading="新建收藏分组",
+                    description="输入分组名称后发送到电视，电视会立即创建该分组。",
+                    fields=listOf(PhoneField("name","分组名称","最多 12 个字",12)),
+                    doneHint="请回到电视查看新建的分组。",
+                    invalidMessage="请输入 1—12 个字符的分组名称"
+                )) { values ->
+                    val name=values["name"].orEmpty()
                     if(!library.setGroup(series.id,name)) Toast.makeText(this,"分组数量已达上限或名称无效",Toast.LENGTH_SHORT).show()
                     apply()
                 }
