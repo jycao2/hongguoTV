@@ -47,8 +47,7 @@ object ThirdCms {
         ThirdSource("liangzi", "量子", "https://cj.lziapi.com/api.php/provide/vod", true),
         ThirdSource("baofeng", "暴风", "https://bfzyapi.com/api.php/provide/vod", true),
         ThirdSource("feifan", "非凡", "https://ffzy5.tv/api.php/provide/vod", true),
-        ThirdSource("tianya", "天涯", "https://tyyszy.com/api.php/provide/vod", true),
-        ThirdSource("suoni", "索尼", "https://suonizy.net/api.php/provide/vod", true)
+        ThirdSource("tianya", "天涯", "https://tyyszy.com/api.php/provide/vod", true)
     )
 
     /** 次级名单（实测可用，供「恢复内置源」补齐）。 */

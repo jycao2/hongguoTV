@@ -97,11 +97,11 @@ data class ThirdProgress(val episode:Int, val positionMs:Long, val group:Int)
 | 暴风 | https://bfzyapi.com/api.php/provide/vod | 16.5万 | 1.7s |
 | 非凡 | https://ffzy5.tv/api.php/provide/vod | 9.9万 | 1.7s |
 | 天涯 | https://tyyszy.com/api.php/provide/vod | 7.3万 | 0.7s |
-| 索尼 | https://suonizy.net/api.php/provide/vod | 14.7万 | 0.7s |
 
 - 全部验证：ac=list 分类/列表正常、ac=detail&wd= 搜索正常、播放地址为标准 m3u8
 - 次级名单（实测可用，供「恢复内置源」）：红牛 hongniuzy3.com、360 360zy.com、金鹰 jinyingzy.com
 - 已失效（勿用）：非凡主域名 api.ffzyplay.com、快看 kuaikanzy.net、卧龙、乐视、木耳、优质、塞班、魔爪、白嫖
+- 已移出内置名单：索尼 suonizy.net（2026-10-20，需用户手动添加）
 - 内置名单硬编码在 ThirdCms.kt，版本迭代时维护更新，失效源在版本更新日志中替换
 
 ## 六、播放地址格式实测样例
