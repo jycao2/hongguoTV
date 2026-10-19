@@ -205,6 +205,8 @@ class MainActivity: Activity() {
     private var searchFocusPending=false
     private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
+    /** 设置页重建后要恢复焦点的设置项标签前缀。 */
+    private var settingsFocusKey: String?=null
     private var detail: Detail?=null
     private var episodeIndex=0
     private var group=0
@@ -576,6 +578,8 @@ class MainActivity: Activity() {
         brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
         top.addView(brand,lp(dp(172),dp(44)))
         listOf("首页","搜索","排行榜","收藏","最近观看","设置","片源").forEachIndexed { index,label ->
+            // 片源入口默认隐藏，可在「设置 → 片源隐藏」中开启
+            if(index==6 && library.sourceHidden) return@forEachIndexed
             val item=addButton(top,label,index==tab) { switchTab(index) }
             fun paint(focused: Boolean) {
                 item.setTextColor(if(focused) bg else if(index==tab) accent else muted)
@@ -1205,6 +1209,7 @@ class MainActivity: Activity() {
         }
     }
     private fun settings(parent: LinearLayout, footerHost: LinearLayout) {
+        val settingRows=mutableListOf<TextView>()
         parent.addView(text("按你的习惯播放",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(15),0,dp(7)) })
         parent.addView(text("偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(18)) })
         val groups=row().apply { gravity=Gravity.TOP }
@@ -1225,6 +1230,7 @@ class MainActivity: Activity() {
                 setOnFocusChangeListener { _,focused -> background=rounded(if(focused) TvStyle.raised else bg,if(focused) accent else Color.TRANSPARENT) }
             }
             group.addView(view,lp(-1,-2).apply { bottomMargin=dp(8) })
+            settingRows+=view
             return view
         }
         heading(playback,"播放偏好","所有剧集共用，播放中也可调整")
@@ -1327,6 +1333,14 @@ class MainActivity: Activity() {
         hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
             library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
         }
+        lateinit var sourceHiddenButton: TextView
+        sourceHiddenButton=setting(device,"片源隐藏  ·  ${if(library.sourceHidden) "开启" else "关闭"}") {
+            // 开关即导航栏「片源」入口的显隐，重建页面后把焦点放回本项
+            library.sourceHidden=!library.sourceHidden
+            if(library.sourceHidden && tab==6) tab=0
+            settingsFocusKey="片源隐藏"
+            showCatalog()
+        }
         fun cacheBytes()=listOfNotNull(cacheDir,externalCacheDir).sumOf { dir -> dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }
         fun cacheLabel()="清理缓存  ·  ${when(val b=cacheBytes()) {
             in 0..1023 -> "$b B"; in 1024..1048575 -> "${b/1024} KB"; else -> "%.1f MB".format(b/1048576f)
@@ -1356,7 +1370,7 @@ class MainActivity: Activity() {
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
                 (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())
-            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,clearCache,updates,license)
+            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,sourceHiddenButton,clearCache,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
@@ -1369,7 +1383,10 @@ class MainActivity: Activity() {
         rechainSettings()
         footerHost.addView(settingsFooter,lp(-2,-2))
         footerHost.addView(settingsDisclaimer,lp(-2,-2))
-        nav[tab].requestFocus()
+        // 页面重建（如切换片源显隐）后按标签恢复焦点，避免跳回顶部导航
+        val wanted=settingsFocusKey.also { settingsFocusKey=null }
+        val target=wanted?.let { key -> settingRows.firstOrNull { it.text.toString().startsWith(key) } }
+        if(target!=null) target.requestFocus() else nav[tab].requestFocus()
     }
     private fun runSearch(value: String,type: ContentType=library.contentType,fromPhone: Boolean=false) {
         val clean=value.trim(); if(clean.isEmpty() || clean.length>80) return

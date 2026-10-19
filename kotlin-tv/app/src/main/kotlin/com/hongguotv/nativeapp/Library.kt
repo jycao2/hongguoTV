@@ -201,6 +201,10 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置中开启。 */
+    var sourceHidden: Boolean
+        get() = prefs.getBoolean("sourceHidden", true)
+        set(value) { prefs.edit().putBoolean("sourceHidden", value).apply() }
     // Per-series intro/outro skips stay on this device, outside the backup, like the theme.
     private var marksCache: LinkedHashMap<String, SkipMark>? = null
     private fun marks(): LinkedHashMap<String, SkipMark> =
