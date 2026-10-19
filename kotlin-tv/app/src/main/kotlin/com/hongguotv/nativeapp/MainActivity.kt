@@ -1342,18 +1342,30 @@ class MainActivity: Activity() {
             showCatalog()
         }
         fun cacheBytes()=listOfNotNull(cacheDir,externalCacheDir).sumOf { dir -> dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }
-        fun cacheLabel()="清理缓存  ·  ${when(val b=cacheBytes()) {
-            in 0..1023 -> "$b B"; in 1024..1048575 -> "${b/1024} KB"; else -> "%.1f MB".format(b/1048576f)
+        fun cacheLabel(bytes: Long?)="清理缓存  ·  ${when {
+            bytes==null -> "计算中…"
+            bytes in 0..1023 -> "$bytes B"; bytes in 1024..1048575 -> "${bytes/1024} KB"; else -> "%.1f MB".format(bytes/1048576f)
         }}"
         lateinit var clearCache: TextView
-        clearCache=setting(device,cacheLabel()) {
+        clearCache=setting(device,cacheLabel(null)) {
             AlertDialog.Builder(this).setTitle("清理缓存").setMessage("清除封面图片和已下载的安装包等缓存数据，不影响收藏和观看记录。")
                 .setNegativeButton("取消",null).setPositiveButton("清理") { _,_ ->
                     io.execute {
                         listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
-                        runOnUiThread { clearCache.text=cacheLabel(); Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show() }
+                        // 统计同样放后台，避免删完立刻在主线程遍历目录
+                        val remaining=cacheBytes()
+                        main.post {
+                            if(isDestroyed) return@post
+                            clearCache.text=cacheLabel(remaining)
+                            Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }.show()
+        }
+        // 大小统计会遍历缓存目录，放到后台算完再回填，避免设置页构建时阻塞主线程
+        io.execute {
+            val bytes=cacheBytes()
+            main.post { if(!isDestroyed) clearCache.text=cacheLabel(bytes) }
         }
         lateinit var updates: TextView
         updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
