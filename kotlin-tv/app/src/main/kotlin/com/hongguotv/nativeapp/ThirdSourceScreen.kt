@@ -964,6 +964,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var searchInputView: TextView? = null
     private var suggestHost: LinearLayout? = null
     private var suggestKeyDownTargets: List<View> = emptyList()
+    private var searchKeyViews: List<View> = emptyList()
 
     /** 打开搜索页；clear=true 时同时清空上次结果（「重新搜索」入口）。 */
     private fun openSearch(clear: Boolean = false) {
@@ -997,19 +998,45 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         phone = addButton(head, "手机扫码输入") { phoneSearch(phone) }
         body.addView(head, lp(-1, -2).apply { bottomMargin = dp(6) })
 
-        // 屏幕键盘：6 列，与联想/历史上下串联
+        // 左中右三栏：历史 / 键盘 / 联想，每栏独立滚动，矮屏也不会互相挤掉
+        val columns = row().apply { gravity = Gravity.TOP }
+
+        // 左：搜索历史（最多 8 条，其余走「全部历史」）
+        val history = store.searches()
+        val historyViews = mutableListOf<View>()
+        val historyCol = column()
+        historyCol.addView(sectionTitle("搜索历史"))
+        if(history.isEmpty()) historyCol.addView(text("暂无历史", 13f, muted).apply { setPadding(dp(10), dp(6), 0, 0) })
+        history.take(8).forEach { word ->
+            val chip = text(word, 14f).apply {
+                setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                focusStyle(this); setOnClickListener { submitSearch(word) }
+            }
+            historyViews += chip
+            historyCol.addView(chip, lp(-1, -2).apply { bottomMargin = dp(4) })
+        }
+        if(history.isNotEmpty()) {
+            if(history.size > 8) historyViews += addButton(historyCol, "全部历史") { showAllHistory(history) }
+            historyViews += addButton(historyCol, "清空历史") {
+                tvTools.confirm("清空搜索历史", "清除本机保存的三方片源搜索词？", historyCol) { store.clearSearches(); rebuild() }
+            }
+        }
+        columns.addView(columnScroll(historyCol), lp(0, -1).apply { weight = 0.24f })
+
+        // 中：屏幕键盘（6 列，上下按列对齐）
         val keyViews = mutableListOf<TextView>()
         fun key(label: String, onClick: () -> Unit): TextView = text(label, 15f).apply {
             gravity = Gravity.CENTER; minHeight = dp(40); focusStyle(this); setOnClickListener { onClick() }
         }.also { keyViews += it }
-        val keyboard = column()
+        val keyboardCol = column()
         listOf("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ0123", "456789").forEach { letters ->
             val line = row().apply { setPadding(0, 0, 0, dp(4)) }
             letters.forEach { ch ->
                 val letter = ch.toString().lowercase()
                 line.addView(key(letter) { typeChar(letter) }, lp(0, -2).apply { weight = 1f; rightMargin = dp(4) })
             }
-            keyboard.addView(line)
+            keyboardCol.addView(line)
         }
         val lastRow = row().apply { setPadding(0, 0, 0, dp(4)) }
         val del = key("删除") { if(searchInput.isNotEmpty()) { searchInput = searchInput.dropLast(1); refreshSearchInput(); scheduleSuggest() } }
@@ -1018,76 +1045,75 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         lastRow.addView(del, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
         lastRow.addView(clear, lp(0, -2).apply { weight = 2f; rightMargin = dp(4) })
         lastRow.addView(go, lp(0, -2).apply { weight = 2f })
-        keyboard.addView(lastRow)
-        body.addView(keyboard, lp(-1, -2).apply { bottomMargin = dp(8) })
+        keyboardCol.addView(lastRow)
+        columns.addView(columnScroll(keyboardCol), lp(0, -1).apply { weight = 0.5f; leftMargin = dp(12); rightMargin = dp(12) })
         suggestKeyDownTargets = listOf(del, clear, go)
 
-        // 联想词
-        body.addView(sectionTitle("联想"))
+        // 右：联想词
         val host = column()
+        val suggestCol = column().apply { addView(sectionTitle("联想")); addView(host) }
         suggestHost = host
-        body.addView(host, lp(-1, -2))
-        renderSuggestions()
+        columns.addView(columnScroll(suggestCol), lp(0, -1).apply { weight = 0.26f })
 
-        // 搜索历史（独立持久化，最多 20 条，这里展示最近 6 条）
-        val history = store.searches()
-        if(history.isNotEmpty()) {
-            body.addView(sectionTitle("搜索历史"))
-            history.take(6).chunked(3).forEach { chunk ->
-                val line = row().apply { setPadding(0, 0, 0, dp(4)) }
-                chunk.forEach { word ->
-                    line.addView(text(word, 14f).apply {
-                        setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                        focusStyle(this); setOnClickListener { submitSearch(word) }
-                    }, lp(0, -2).apply { weight = 1f; rightMargin = dp(6) })
-                }
-                repeat(3 - chunk.size) { line.addView(View(activity), lp(0, -2).apply { weight = 1f }) }
-                body.addView(line)
-            }
-            val tools = row().apply { setPadding(0, dp(4), 0, 0) }
-            if(history.size > 6) addButton(tools, "全部历史") { showAllHistory(history) }
-            addButton(tools, "清空历史") {
-                tvTools.confirm("清空搜索历史", "清除本机保存的三方片源搜索词？", tools) { store.clearSearches(); rebuild() }
-            }
-            body.addView(tools)
-        }
+        body.addView(columns, lp(-1, 0).apply { weight = 1f })
+        container.addView(body, lp(-1, 0).apply { weight = 1f })
 
-        val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false; addView(body) }
-        container.addView(scroll, lp(-1, 0).apply { weight = 1f })
-
-        // 焦点：默认落在键盘首键；上下按 6 列对齐，末行三键向下进联想
+        // 焦点：默认键盘首键；上下按 6 列对齐，左列 ↔ 历史、右列 ↔ 联想
+        searchKeyViews = keyViews
         topFocusId = keyViews.firstOrNull()?.id ?: View.NO_ID
         keyViews.forEachIndexed { index, view ->
             view.nextFocusUpId = keyViews.getOrNull(index - 6)?.id ?: View.NO_ID
             view.nextFocusDownId = keyViews.getOrNull(index + 6)?.id ?: View.NO_ID
+            if(index < 36 && index % 6 == 0) {
+                view.nextFocusLeftId = historyViews.getOrNull(index / 6)?.id ?: historyViews.lastOrNull()?.id ?: View.NO_ID
+            }
         }
-        suggestKeyDownTargets.forEach { it.nextFocusDownId = host.getChildAt(0)?.id ?: View.NO_ID }
+        historyViews.forEachIndexed { index, view ->
+            view.nextFocusRightId = keyViews.getOrNull(index * 6)?.id ?: keyViews.firstOrNull()?.id ?: View.NO_ID
+            view.nextFocusUpId = historyViews.getOrNull(index - 1)?.id ?: View.NO_ID
+            view.nextFocusDownId = historyViews.getOrNull(index + 1)?.id ?: View.NO_ID
+        }
+        renderSuggestions()
     }
+
+    /** 纵向可滚容器：三栏内容超出屏幕时各自滚动，不挤压其它栏。 */
+    private fun columnScroll(content: LinearLayout): ScrollView =
+        ScrollView(activity).apply {
+            isVerticalScrollBarEnabled = false
+            addView(content, FrameLayout.LayoutParams(-1, -2))
+        }
 
     /** 只重建联想区：输入过程中不重建整页，避免焦点从键盘跳走。 */
     private fun renderSuggestions() {
         val host = suggestHost ?: return
         host.removeAllViews()
+        val views = mutableListOf<View>()
         if(suggestions.isEmpty()) {
             host.addView(text(if(searchInput.isBlank()) "输入关键词后显示联想词" else "没有联想词，可直接按「搜索」", 13f, muted)
                 .apply { setPadding(dp(10), dp(6), 0, dp(8)) })
-            suggestKeyDownTargets.forEach { it.nextFocusDownId = View.NO_ID }
-            return
+        } else {
+            suggestions.forEach { name ->
+                val item = text(name, 15f).apply {
+                    setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    focusStyle(this); setOnClickListener { submitSearch(name) }
+                }
+                views += item
+                host.addView(item, lp(-1, -2).apply { bottomMargin = dp(4) })
+            }
         }
-        suggestions.forEach { name ->
-            host.addView(text(name, 15f).apply {
-                setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                focusStyle(this); setOnClickListener { submitSearch(name) }
-            }, lp(-1, -2).apply { bottomMargin = dp(4) })
+        // 跨栏接线：键盘最右列 ↔ 联想同排，功能键 ↓ 进第一条联想
+        searchKeyViews.forEachIndexed { index, keyView ->
+            if(index < 36 && index % 6 == 5) {
+                keyView.nextFocusRightId = views.getOrNull(index / 6)?.id ?: views.firstOrNull()?.id ?: View.NO_ID
+            }
         }
-        suggestKeyDownTargets.forEach { it.nextFocusDownId = host.getChildAt(0).id }
-        for(index in 0 until host.childCount) {
-            val view = host.getChildAt(index)
-            view.nextFocusUpId = if(index == 0) suggestKeyDownTargets.lastOrNull()?.id ?: View.NO_ID else host.getChildAt(index - 1).id
-            view.nextFocusDownId = if(index == host.childCount - 1) View.NO_ID else host.getChildAt(index + 1).id
+        views.forEachIndexed { index, view ->
+            view.nextFocusLeftId = searchKeyViews.getOrNull((index % 6) * 6 + 5)?.id ?: View.NO_ID
+            view.nextFocusUpId = views.getOrNull(index - 1)?.id ?: View.NO_ID
+            view.nextFocusDownId = views.getOrNull(index + 1)?.id ?: View.NO_ID
         }
+        suggestKeyDownTargets.forEach { it.nextFocusDownId = views.firstOrNull()?.id ?: View.NO_ID }
     }
 
     private fun typeChar(ch: String) {
