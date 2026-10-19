@@ -38,6 +38,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private enum class Mode { BROWSE, SEARCH, SOURCES, DETAIL, PLAY }
     private enum class Dot { RUNNING, OK, DEAD }
 
+    private companion object {
+        /** 三方片源免责声明：空态与源管理页常驻展示。 */
+        const val SOURCE_DISCLAIMER = "内置第三方 CMS 接口仅为技术交流与学习用途，应用不提供、不存储、不传播任何视频内容，内容合法性由对应源站负责。"
+    }
+
     private class ProbeState(val dot: Dot, val total: Int, val reason: String? = null)
 
     private val main = Handler(Looper.getMainLooper())
@@ -366,14 +371,17 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun renderEmptySources(container: LinearLayout) {
-        val body = column().apply { setPadding(0, dp(30), 0, 0) }
-        message(body, "已删除全部片源，可添加或恢复内置源")
+        val body = column().apply { setPadding(0, dp(24), 0, 0) }
+        message(body, "暂无片源信息，可手动添加或恢复内置源")
+        body.addView(text("若重装后没有自动恢复：可能是本机备份文件不存在或未授予存储权限，可在「设置 → 本地备份与恢复」中查看。", 13f, muted)
+            .apply { setPadding(0, dp(2), 0, dp(10)) })
         val actions = row().apply { setPadding(0, dp(4), 0, 0) }
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
         val restore = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
         restore.nextFocusLeftId = add.id
         add.nextFocusRightId = restore.id
         body.addView(actions)
+        body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(20), 0, 0) })
         container.addView(body, lp(-1, 0).apply { weight = 1f })
         topFocusId = add.id; add.requestFocus()
     }
@@ -708,6 +716,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var sourceBatchMode = false
     private val sourceSelected = mutableSetOf<String>()
     private val sourceStatusViews = HashMap<String, TextView>()
+    private val sourceCheckViews = HashMap<String, TextView>()
+    private var batchActionButton: TextView? = null
+    private var batchSelectAllButton: TextView? = null
 
     private fun openSources() {
         sourceBatchMode = false; sourceSelected.clear()
@@ -753,7 +764,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
 
         // 源列表：名称 / 主机 / 探活状态 / 使用中；批量模式下点击勾选
-        capsuleDots.clear(); sourceStatusViews.clear()
+        capsuleDots.clear(); sourceStatusViews.clear(); sourceCheckViews.clear()
+        batchActionButton = null; batchSelectAllButton = null
         val listScroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         val list = column()
         listScroll.addView(list, FrameLayout.LayoutParams(-1, -2))
@@ -766,8 +778,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 background = rounded(if(selected) TvStyle.selectedSurface else TvStyle.surface)
             }
             if(sourceBatchMode) {
-                line.addView(text(if(selected) "✓" else "○", 16f, if(selected) TvStyle.accent else muted),
-                    lp(-2, -2).apply { rightMargin = dp(10) })
+                val check = text(if(selected) "✓" else "○", 16f, if(selected) TvStyle.accent else muted)
+                sourceCheckViews[source.id] = check
+                line.addView(check, lp(-2, -2).apply { rightMargin = dp(10) })
             }
             val dot = View(activity).apply {
                 background = rounded(dotColor(source.id), radius = 3)
@@ -787,26 +800,37 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             focusStyle(line, selected = isCurrent || selected)
             line.setOnClickListener {
                 if(sourceBatchMode) {
+                    // 就地更新勾选，不重建页面，避免焦点丢失
                     if(!sourceSelected.remove(source.id)) sourceSelected += source.id
-                    rebuild()
+                    refreshBatchUi()
                 } else switchSource(source)
             }
             list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             rows += line
         }
-        if(sources.isEmpty()) message(list, "已删除全部片源，可添加或恢复内置源")
+        if(sources.isEmpty()) message(list, "暂无片源信息，可手动添加或恢复内置源")
         body.addView(listScroll, lp(-1, 0).apply { weight = 1f })
 
-        // 底部：批量删除 / 操作提示
+        // 底部：全选 / 批量删除 / 操作提示
+        var selectAllRef: TextView? = null
+        var removeRef: TextView? = null
         if(sourceBatchMode) {
             val bar = row().apply { setPadding(0, dp(6), 0, 0) }
-            val remove = addButton(bar, "删除所选（${sourceSelected.size}）") { confirmBatchDelete() }
-            remove.isEnabled = sourceSelected.isNotEmpty()
+            selectAllRef = addButton(bar, if(sourceSelected.size == sources.size) "取消全选" else "全选") {
+                if(sourceSelected.size == sources.size) sourceSelected.clear()
+                else sourceSelected.addAll(sources.map { it.id })
+                refreshBatchUi()
+            }
+            removeRef = addButton(bar, "删除所选（${sourceSelected.size}）") { confirmBatchDelete() }
+            removeRef?.let { it.isEnabled = sourceSelected.isNotEmpty() }
+            batchSelectAllButton = selectAllRef
+            batchActionButton = removeRef
             body.addView(bar)
-            body.addView(text("点击条目勾选要删除的源，删除前会二次确认", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
+            body.addView(text("点击条目勾选 · 「全选」一键勾选全部 · 删除前二次确认", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
         } else {
             body.addView(text("点击源条目切换使用 · 顶部「批量删除」可多选 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         }
+        body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(8), 0, dp(2)) })
 
         container.addView(body, lp(-1, 0).apply { weight = 1f })
 
@@ -815,6 +839,15 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         rows.forEachIndexed { index, view ->
             view.nextFocusUpId = rows.getOrNull(index - 1)?.id ?: add.id
             view.nextFocusDownId = rows.getOrNull(index + 1)?.id ?: View.NO_ID
+        }
+        // 批量操作条：列表末尾 ↓ 进入，全选 ↔ 删除所选
+        if(selectAllRef != null || removeRef != null) {
+            rows.lastOrNull()?.let { last -> last.nextFocusDownId = selectAllRef?.id ?: removeRef?.id ?: View.NO_ID }
+            selectAllRef?.let { all -> all.nextFocusRightId = removeRef?.id ?: View.NO_ID }
+            removeRef?.let { remove ->
+                remove.nextFocusLeftId = selectAllRef?.id ?: View.NO_ID
+                remove.nextFocusUpId = rows.lastOrNull()?.id ?: View.NO_ID
+            }
         }
         // 操作行左右串联：添加源 → 导入配置 →（恢复内置源）→ 导入/导出配置
         add.nextFocusRightId = importTvbox.id
@@ -828,6 +861,21 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         transfer.nextFocusRightId = View.NO_ID
         transfer.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
+    }
+
+    /** 批量模式就地刷新：勾选标记、按钮文字与可用状态，不重建页面（避免焦点丢失）。 */
+    private fun refreshBatchUi() {
+        val count = sourceSelected.size
+        sourceCheckViews.forEach { (id, check) ->
+            val on = id in sourceSelected
+            check.text = if(on) "✓" else "○"
+            check.setTextColor(if(on) TvStyle.accent else muted)
+        }
+        batchActionButton?.let { button ->
+            button.text = "删除所选（$count）"
+            button.isEnabled = count > 0
+        }
+        batchSelectAllButton?.text = if(sources.isNotEmpty() && count == sources.size) "取消全选" else "全选"
     }
 
     /** 批量删除：选中项二次确认后移除，当前源被删则顺延到第一个剩余源。 */
@@ -867,9 +915,16 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val room = ThirdCms.MAX_SOURCES - sources.size
         if(room <= 0) { Toast.makeText(activity, "源数量已达上限（${ThirdCms.MAX_SOURCES}）", Toast.LENGTH_SHORT).show(); return }
         val restored = missing.take(room)
-        store.saveSources(sources + restored)
-        Toast.makeText(activity, "已恢复 ${restored.size} 个内置源", Toast.LENGTH_SHORT).show()
-        backupRequest(); rebuild()
+        // 恢复内置源属于批量写入，二次确认并同时展示免责声明
+        tvTools.confirm("恢复内置源",
+            "将补充 ${restored.size} 个内置源，已有源不会被覆盖。\n\n$SOURCE_DISCLAIMER", null) {
+            val existApis = sources.mapTo(HashSet()) { it.api }
+            val fresh = restored.filterNot { it.api in existApis }.take((ThirdCms.MAX_SOURCES - sources.size).coerceAtLeast(0))
+            if(fresh.isEmpty()) { Toast.makeText(activity, "内置源均已存在", Toast.LENGTH_SHORT).show(); return@confirm }
+            store.saveSources(sources + fresh)
+            Toast.makeText(activity, "已恢复 ${fresh.size} 个内置源", Toast.LENGTH_SHORT).show()
+            backupRequest(); rebuild()
+        }
     }
 
     private fun showAddSourceDialog() {
