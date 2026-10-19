@@ -2,6 +2,7 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import com.hongguotv.core.BackupThirdHistory
 import com.hongguotv.core.BackupThirdSource
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,7 +19,7 @@ data class ThirdHistoryEntry(
 }
 
 /** 三方片源独立持久化：源列表与播放进度存独立 SharedPreferences（third-sources-v1）。
- *  不进 Library、不进收藏/历史/继续观看；源配置随主备份一起迁移，播放进度与搜索历史仍只在本机。 */
+ *  不进 Library、不进收藏/历史/继续观看；源配置与观看历史随主备份一起迁移，播放进度与搜索历史仍只在本机。 */
 class ThirdStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -106,6 +107,26 @@ class ThirdStore(context: Context) {
 
     fun clearHistory() { prefs.edit().remove(KEY_HISTORY).apply() }
 
+    /** 备份用：观看历史随主备份迁移。 */
+    fun backupHistory(): List<BackupThirdHistory> = history().map {
+        BackupThirdHistory(it.sourceApi, it.sourceName, it.videoId, it.title, it.cover, it.episodeIndex,
+            it.episodeLabel, it.positionMs, it.durationMs, it.updatedAt, it.completed)
+    }
+
+    /** 恢复观看历史：同「源接口 + 影片」保留进度较新的一条，最多 100 条；任何异常都静默忽略。 */
+    fun mergeHistory(incoming: List<BackupThirdHistory>) {
+        runCatching {
+            val merged = LinkedHashMap<String, ThirdHistoryEntry>()
+            (history() + incoming.map { it.toEntry() }).forEach { entry ->
+                val key = entry.sourceApi + "|" + entry.videoId
+                val prior = merged[key]
+                if(prior == null || entry.updatedAt > prior.updatedAt) merged[key] = entry
+            }
+            val next = merged.values.sortedByDescending { it.updatedAt }.take(MAX_HISTORY)
+            prefs.edit().putString(KEY_HISTORY, JSONArray(next.map { it.json() }).toString()).apply()
+        }
+    }
+
     /** 备份/导出用：只保留名称与接口。 */
     fun backupSources(): List<BackupThirdSource> = sources().map { BackupThirdSource(it.name, it.api) }
 
@@ -159,3 +180,6 @@ class ThirdStore(context: Context) {
         private const val MAX_HISTORY = 100
     }
 }
+
+private fun BackupThirdHistory.toEntry() = ThirdHistoryEntry(sourceApi, sourceName, videoId, title, cover,
+    episodeIndex, episodeLabel, positionMs, durationMs, updatedAt, completed)

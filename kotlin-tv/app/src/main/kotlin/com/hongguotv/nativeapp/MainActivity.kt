@@ -278,10 +278,12 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
-        // 三方片源配置随主备份一起保存/恢复：本地已有的源保留，不覆盖
+        // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
         thirdStore=ThirdStore(this)
         library.thirdSourcesProvider={ thirdStore.backupSources() }
         library.thirdSourcesRestore={ thirdStore.mergeRestored(it) }
+        library.thirdHistoryProvider={ thirdStore.backupHistory() }
+        library.thirdHistoryRestore={ thirdStore.mergeHistory(it) }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()

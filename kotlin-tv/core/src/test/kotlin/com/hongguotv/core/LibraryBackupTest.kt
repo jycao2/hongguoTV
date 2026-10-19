@@ -54,6 +54,28 @@ class LibraryBackupTest {
         assertTrue(LibraryBackup.decode(legacy.toString()).settings.sourceHidden)
         assertFalse(LibraryBackup.merge(data(),shown,true).settings.sourceHidden)
     }
+    @Test fun `third history round trips and legacy backups default to empty`() {
+        val hit=BackupThirdHistory("https://a.com/api.php/provide/vod","示例源","42","测试影片","https://a.com/1.jpg",
+            2,"第3集",12000,60000,1792448000000,false)
+        val withHistory=data().copy(thirdHistory=listOf(hit))
+        assertEquals(withHistory.thirdHistory,LibraryBackup.decode(LibraryBackup.encode(withHistory)).thirdHistory)
+        val legacy=JSONObject(LibraryBackup.encode(data())); legacy.remove("thirdHistory")
+        assertTrue(LibraryBackup.decode(legacy.toString()).thirdHistory.isEmpty())
+    }
+    @Test fun `broken third history entries are skipped without failing the backup`() {
+        val base=JSONObject(LibraryBackup.encode(data()))
+        base.put("thirdHistory",JSONArray().put(JSONObject().put("videoId","1")).put(JSONObject().put("sourceApi","https://a.com/api").put("videoId","7")).put("broken"))
+        val decoded=LibraryBackup.decode(base.toString())
+        assertEquals(1,decoded.thirdHistory.size)
+        val wrongType=JSONObject(LibraryBackup.encode(data())).put("thirdHistory","broken")
+        assertTrue(LibraryBackup.decode(wrongType.toString()).thirdHistory.isEmpty())
+    }
+    @Test fun `third history merge keeps the newest progress per video`() {
+        val old=BackupThirdHistory("https://a.com/api","A","1","剧","",0,"第1集",1000,60000,100,false)
+        val fresh=old.copy(episodeIndex=1,positionMs=2000,updatedAt=200)
+        val merged=LibraryBackup.merge(data().copy(thirdHistory=listOf(fresh)),data().copy(thirdHistory=listOf(old)),true).thirdHistory
+        assertEquals(1,merged.size); assertEquals(2000L,merged.first().positionMs)
+    }
     @Test fun `danmaku prefs round trip and out of range values normalize`() {
         val custom=data().copy(settings=BackupSettings().copy(danmakuOpacity=60,danmakuFont=0,danmakuSpeed=4,danmakuRows=5))
         assertEquals(custom,LibraryBackup.decode(LibraryBackup.encode(custom)))

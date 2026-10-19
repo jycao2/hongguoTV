@@ -77,6 +77,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var historyVideos: List<ThirdVideo> = emptyList()
     private var lastHistoryKey = ""
     private var lastHistoryAt = 0L
+    /** 观看历史触发的备份节流：最多 5 分钟一次，避免播放中反复整包写盘。 */
+    private var lastHistoryBackupAt = 0L
     /** 详情页来源：true 表示从观看历史点进来，返回时回历史而不是浏览页。 */
     private var detailFromHistory = false
     // 本次浏览会话是否已发起过列表请求：空结果分类若再自动重发会形成「请求→空→rebuild→再请求」
@@ -607,6 +609,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun deleteHistory(entry: ThirdHistoryEntry) {
         store.removeHistory(entry.sourceApi, entry.videoId)
         sources.firstOrNull { it.api == entry.sourceApi }?.let { store.clearProgress(it.id, entry.videoId) }
+        backupRequest()
         Toast.makeText(activity, "已删除这条记录", Toast.LENGTH_SHORT).show()
         rebuild()
     }
@@ -624,6 +627,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun confirmClearHistory() {
         tvTools.confirm("清空观看历史", "将删除全部 ${historyEntries.size} 条观看记录，不影响片源配置。", null) {
             store.clearHistory()
+            backupRequest()
             Toast.makeText(activity, "观看历史已清空", Toast.LENGTH_SHORT).show()
             rebuild()
         }
@@ -1840,6 +1844,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         store.rememberHistory(ThirdHistoryEntry(source.api, source.name, data.video.id, data.video.name, data.video.cover,
             playEpisode, label, position, duration, now, completed))
         if(completed) store.clearProgress(source.id, data.video.id)
+        // 历史要跟着主备份走：看完或距上次备份满 5 分钟才请求一次，避免播放中反复整包写盘
+        if(completed || now - lastHistoryBackupAt >= 5 * 60_000L) { lastHistoryBackupAt = now; backupRequest() }
     }
 
     private fun scheduleSave() {
