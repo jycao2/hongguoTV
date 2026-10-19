@@ -19,6 +19,8 @@ class Library(context: Context) {
     private companion object {
         // A replacement Activity must not load before its predecessor's final checkpoint commits.
         val retiredWrites = mutableListOf<LatestWriteQueue<String, () -> Any?>>()
+        /** 普通进度变更的备份节流窗口：播放中每 5 秒就有一次进度落盘，没必要跟着整包重写。 */
+        const val PROGRESS_BACKUP_INTERVAL_MS = 5 * 60_000L
     }
     private val app = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
@@ -117,7 +119,8 @@ class Library(context: Context) {
             }
         }
         writes.submit(batch)
-        scheduleLocalBackup()
+        // 只有播放进度是高频变更：其余收藏/历史操作/设置都尽快落盘
+        scheduleLocalBackup(urgent = keys.any { it != "progress" })
     }
     fun favorites() = state().favorites()
     fun favorite(id: String) = state().favorite(id)
@@ -281,13 +284,14 @@ class Library(context: Context) {
         val data = runCatching { snapshot() }.getOrNull() ?: return
         backupWorker.execute { if (store.save(data)) lastBackupAt = System.currentTimeMillis() }
     }
-    private fun scheduleLocalBackup() {
+    private fun scheduleLocalBackup(urgent: Boolean = true) {
         if (!localBackupEnabled || index == null) return
         backupDirty = true
         synchronized(backupLock) {
             val now = System.currentTimeMillis()
-            // 变更先防抖 5 秒；播放中每 5 秒都有进度落盘，再叠一个 1 分钟最小间隔避免整包反复 fsync
-            val due = maxOf(now + 5_000L, lastBackupAt + 60_000L)
+            // 变更先防抖 5 秒；播放进度这类高频变更再叠一个 5 分钟最小间隔，避免整包反复 fsync。
+            // 收藏、设置、片源等低频变更走 urgent，只防抖不受最小间隔限制。
+            val due = if(urgent) now + 5_000L else maxOf(now + 5_000L, lastBackupAt + PROGRESS_BACKUP_INTERVAL_MS)
             // 已有更早的计划就复用：否则播放中每 5 秒都会把任务往后推，可能一直轮不到写盘
             val pending = backupTask
             if (pending != null && !pending.isDone && backupDueAt in 1..due) return
