@@ -1346,11 +1346,9 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
         }
-        // 页脚固定在滚动区之外（屏幕底部居中）：既保证始终可见，也保持可聚焦，
-        // 否则 D-pad 停在最后一项时滚动区无法再往下滚。
+        // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
         val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    所有数据保存在本机",12f,muted).apply {
-            id=View.generateViewId(); isFocusable=true; setPadding(dp(10),dp(8),dp(10),dp(3))
-            setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
+            id=View.generateViewId(); isFocusable=false; setPadding(dp(10),dp(8),dp(10),dp(3))
         }
         val settingsDisclaimer=text("本应用仅用于技术交流与学习，不提供、不存储、不传播任何视频内容，内容版权归原平台所有。",11f,muted).apply {
             gravity=Gravity.CENTER; setPadding(dp(10),0,dp(10),dp(6))
@@ -1361,11 +1359,11 @@ class MainActivity: Activity() {
             val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,clearCache,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
-                view.nextFocusDownId=items.getOrNull(index+1)?.id ?: settingsFooter.id
+                // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
+                view.nextFocusDownId=items.getOrNull(index+1)?.id ?: View.NO_ID
             } }
             left.forEachIndexed { i,v -> v.nextFocusLeftId=v.id; v.nextFocusRightId=right.getOrNull(i)?.id ?: v.id }
             right.forEachIndexed { i,v -> v.nextFocusLeftId=left.getOrNull(i)?.id ?: v.id; v.nextFocusRightId=v.id }
-            settingsFooter.nextFocusUpId=left.last().id
             nav.forEach { it.nextFocusDownId=qualityButton.id }
         }
         rechainSettings()
