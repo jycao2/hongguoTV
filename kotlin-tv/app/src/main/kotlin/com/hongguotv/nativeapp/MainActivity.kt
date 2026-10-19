@@ -603,7 +603,7 @@ class MainActivity: Activity() {
             container.setPadding(container.paddingLeft,container.paddingTop,container.paddingRight,0)
             val page=column()
             val scroll=ScrollView(this); val body=column(); scroll.addView(body); page.addView(scroll,lp(-1,0).apply { weight=1f })
-            val footerHost=column().apply { gravity=Gravity.CENTER_HORIZONTAL }
+            val footerHost=column().apply { gravity=Gravity.CENTER_HORIZONTAL; setPadding(0,dp(12),0,0) }
             page.addView(footerHost,lp(-1,-2))
             container.addView(page,lp(-1,0).apply { weight=1f })
             settings(body,footerHost); if(focusNav) nav[tab].requestFocus(); return
