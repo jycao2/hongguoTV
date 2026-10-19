@@ -105,6 +105,7 @@ class MainActivity: Activity() {
     private var homeContentLogged=false
     private lateinit var library: Library
     private lateinit var tvTools: TvTools
+    private lateinit var thirdStore: ThirdStore
     private lateinit var updater: AppUpdater
     private lateinit var mediaSession: TvMediaSession
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
@@ -275,6 +276,10 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        // 三方片源配置随主备份一起保存/恢复：本地已有的源保留，不覆盖
+        thirdStore=ThirdStore(this)
+        library.thirdSourcesProvider={ thirdStore.backupSources() }
+        library.thirdSourcesRestore={ thirdStore.mergeRestored(it) }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
@@ -582,7 +587,7 @@ class MainActivity: Activity() {
         container.addView(top)
         container.addView(View(this).apply { setBackgroundColor(TvStyle.outline) },lp(-1,dp(1)).apply { bottomMargin=dp(6) })
         if(tab==6) {
-            val instance=third ?: ThirdSourceScreen(this) { showCatalog() }.also { third=it }
+            val instance=third ?: ThirdSourceScreen(this, { showCatalog() }, { library.requestBackup() }).also { third=it }
             instance.show(container)
             nav[tab].nextFocusDownId=instance.topFocusId
             val target=if(instance.topFocusId != View.NO_ID) container.findViewById<View>(instance.topFocusId) else null

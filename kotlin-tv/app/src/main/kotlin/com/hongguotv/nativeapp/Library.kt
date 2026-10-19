@@ -211,11 +211,21 @@ class Library(context: Context) {
         marksCache = next
         prefs.edit().putString("skipMarks", SkipMarks.encode(next)).apply()
     }
-    fun snapshot() = state().snapshot()
+    fun snapshot() = state().snapshot(thirdSourcesProvider?.invoke() ?: emptyList())
+
+    /** 由 MainActivity 注入：三方片源配置随主备份一起写入与恢复。 */
+    var thirdSourcesProvider: (() -> List<BackupThirdSource>)? = null
+    var thirdSourcesRestore: ((List<BackupThirdSource>) -> Unit)? = null
+
+    /** 三方片源变化后尽快落盘，避免只有片源变更时备份长期停留在旧内容。 */
+    fun requestBackup() = scheduleLocalBackup()
+
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
         index = LibraryIndex(merged, state().updates())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
+        // 三方源按接口合并：本地已有的保留，不覆盖，只补缺失
+        if(incoming.thirdSources.isNotEmpty()) thirdSourcesRestore?.invoke(incoming.thirdSources)
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },

@@ -99,7 +99,7 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
         updateCount += (if (next.hasUpdate) 1 else 0) - (if (previous?.hasUpdate == true) 1 else 0)
         return true
     }
-    fun snapshot() = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds, groupById)
+    fun snapshot(thirdSources: List<BackupThirdSource> = emptyList()) = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds, groupById, thirdSources)
 }
 
 /** Keeps the native-library-v1 disk keys and rich local metadata compatible with older APKs. */

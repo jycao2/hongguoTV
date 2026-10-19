@@ -2,11 +2,12 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import com.hongguotv.core.BackupThirdSource
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** 三方片源独立持久化：源列表与播放进度存独立 SharedPreferences（third-sources-v1）。
- *  不进 Library、不进收藏/历史/继续观看、不参与备份格式；旧数据缺失字段静默兜底。 */
+ *  不进 Library、不进收藏/历史/继续观看；源配置随主备份一起迁移，播放进度与搜索历史仍只在本机。 */
 class ThirdStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -66,6 +67,27 @@ class ThirdStore(context: Context) {
     }
 
     fun clearSearches() { prefs.edit().remove(KEY_SEARCHES).apply() }
+
+    /** 备份/导出用：只保留名称与接口。 */
+    fun backupSources(): List<BackupThirdSource> = sources().map { BackupThirdSource(it.name, it.api) }
+
+    /** 恢复源配置：本地已有的接口一律保留（不覆盖），只追加缺失项；返回新增数量。 */
+    fun mergeRestored(incoming: List<BackupThirdSource>): Int {
+        val local = sources()
+        val known = local.mapTo(HashSet()) { it.api }
+        val room = (ThirdCms.MAX_SOURCES - local.size).coerceAtLeast(0)
+        val added = incoming.asSequence()
+            .filter { it.api.startsWith("http") && known.add(it.api) }
+            .take(room)
+            .map { ThirdSource("u" + it.api.hashCode().toUInt().toString(),
+                it.name.ifBlank { it.api.removePrefix("https://").removePrefix("http://").substringBefore('/') }, it.api, false) }
+            .toList()
+        if(added.isEmpty()) return 0
+        saveSources(local + added)
+        // 恢复后视为已初始化，避免首次启动再用内置源覆盖用户配置
+        prefs.edit().putBoolean(KEY_INITIALIZED, true).apply()
+        return added.size
+    }
 
     private fun key(sourceId: String, videoId: String) = "$sourceId:$videoId"
 

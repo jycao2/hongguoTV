@@ -18,6 +18,8 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.hongguotv.core.EpisodeTarget
 import com.hongguotv.core.PhoneForm
 import com.hongguotv.core.PhoneInputServer
+import com.hongguotv.core.ThirdSourceTransferServer
+import com.hongguotv.core.BackupThirdSource
 import com.hongguotv.core.LibraryTransferServer
 import com.hongguotv.core.BackdropTransferServer
 import com.hongguotv.core.BackupData
@@ -130,6 +132,34 @@ class TvTools(private val activity: Activity) {
                     row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
                 }
             } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启手机填写，请检查网络后重试。" } }
+        }
+    }
+    /** 源配置的手机扫码导入导出：手机页可下载当前源配置，也可上传配置文件追加到电视。 */
+    fun sourceTransfer(config: String,anchor: View?,restore: (List<BackupThirdSource>)->Unit) {
+        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
+        val network=connectivity.activeNetwork; val capabilities=connectivity.getNetworkCapabilities(network)
+        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
+        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+            info("源配置导入/导出","请让电视和手机连接同一局域网后重试。",anchor); return
+        }
+        val content=column(); val status=label("正在生成二维码…"); content.addView(status)
+        val next=AlertDialog.Builder(activity).setTitle("源配置导入/导出").setView(ScrollView(activity).apply { addView(content) }).setNegativeButton("关闭",null).create()
+        open(next,anchor)
+        worker.execute {
+            try {
+                val session=ThirdSourceTransferServer(address,config,{ sources -> main.post { if(dialog===next) { next.dismiss(); restore(sources) } } },
+                    { main.post { if(dialog===next) { content.removeAllViews(); content.addView(label("二维码已过期，请关闭后重新打开。")) } } })
+                main.post {
+                    if(dialog!==next) { session.close(); return@post }
+                    phone=session; content.removeAllViews()
+                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
+                    val instructions=column()
+                    instructions.addView(label("手机扫码后用浏览器打开：可下载当前源配置，或选择配置文件恢复到电视。\n已有源不会被覆盖，只追加缺失的源；仅限同一局域网，最长 5 分钟。",16f))
+                    instructions.addView(label(session.url,12f))
+                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                }
+            } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启源配置传输，请检查网络后重试。" } }
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {

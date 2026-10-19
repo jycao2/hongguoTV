@@ -14,7 +14,10 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock)
 }
-data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap())
+data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap(),val thirdSources: List<BackupThirdSource> = emptyList())
+
+/** 三方片源配置：只保存名称与接口，随主备份一起迁移；恢复时只追加不覆盖。 */
+data class BackupThirdSource(val name: String,val api: String)
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
@@ -33,6 +36,9 @@ object LibraryBackup {
             .put("later",JSONArray(data.later.map(::seriesJson))).put("hidden",JSONArray(data.hidden.toList()))
             .put("favorites",JSONArray(data.favorites.map(::seriesJson))).put("history",JSONArray(data.history.map { it.json() }))
             .put("favoriteGroups",groups)
+            .put("thirdSources",JSONArray(data.thirdSources.take(ThirdSourceConfig.MAX).map { source ->
+                JSONObject().put("name",cleanText(source.name,40)).put("api",cleanText(source.api,500))
+            }))
             .put("watched",JSONArray(data.watched.intersect((data.favorites.map { it.id }+data.history.map { it.series.id }).toSet()).take(500)))
             .put("searches",JSONArray(SearchHistory.encode(data.searches.map { it.copy(query=cleanText(it.query,80)) }))).put("settings",data.settings.json()).toString()
         require(result.toByteArray(Charsets.UTF_8).size<=MAX_BYTES) { "备份超过 2 MB 限制" }
@@ -99,7 +105,15 @@ object LibraryBackup {
         val danmakuSpeed=DanmakuPrefs.speed(settings.optInt("danmakuSpeed",DanmakuPrefs.SPEED_DEFAULT))
         val danmakuRows=DanmakuPrefs.rows(settings.optInt("danmakuRows",DanmakuPrefs.ROWS_DEFAULT))
         val showClock=settings.optBoolean("showClock",false)
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock),later,hiddenIds,favoriteGroups)
+        // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复
+        val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
+            val api=runCatching { row.string("api",500) }.getOrNull() ?: return@mapNotNull null
+            if(!api.startsWith("http")) return@mapNotNull null
+            val name=runCatching { row.string("name",40) }.getOrDefault("")
+                .ifBlank { api.removePrefix("https://").removePrefix("http://").substringBefore('/') }
+            BackupThirdSource(name,api)
+        }.distinctBy { it.api } else emptyList()
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock),later,hiddenIds,favoriteGroups,thirdSources)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {
@@ -118,6 +132,8 @@ object LibraryBackup {
         val retained=(favorites.map { it.id }+history.map { it.series.id }).toSet()
         val favoriteIds=favorites.map { it.id }.toSet()
         val favoriteGroups=(local.favoriteGroups+incoming.favoriteGroups).filterKeys { it in favoriteIds }
-        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet(),favoriteGroups)
+        // 三方源：本地优先，只补充备份里新增的接口，同接口不覆盖
+        val thirdSources=(local.thirdSources+incoming.thirdSources).distinctBy { it.api }.take(ThirdSourceConfig.MAX)
+        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet(),favoriteGroups,thirdSources)
     }
 }

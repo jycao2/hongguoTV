@@ -29,11 +29,12 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.hongguotv.core.PhoneField
 import com.hongguotv.core.PhoneForm
+import com.hongguotv.core.ThirdSourceConfig
 import java.util.concurrent.Executors
 
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */
-class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit) {
+class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit, private val backupRequest: () -> Unit = {}) {
     private enum class Mode { BROWSE, SEARCH, DETAIL, PLAY }
     private enum class Dot { RUNNING, OK, DEAD }
 
@@ -721,6 +722,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             restoreRef = addButton(actions, "恢复内置源") { manager?.dismiss(); restoreBuiltinSources() }
         }
         content.addView(actions)
+        // 源配置的导出/导入都走手机扫码：手机页可下载当前配置，也可上传配置文件恢复
+        val transferRow = row().apply { setPadding(0, dp(4), 0, 0) }
+        val transfer = addButton(transferRow, "导入/导出配置（扫码）") { showSourceTransfer() }
+        content.addView(transferRow)
         content.addView(text("点击源条目切换使用 · 删除需二次确认 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
 
         val dialog = AlertDialog.Builder(activity).setTitle("源管理")
@@ -733,6 +738,21 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         add.nextFocusRightId = import.id
         import.nextFocusLeftId = add.id
         restoreRef?.let { import.nextFocusRightId = it.id; it.nextFocusLeftId = import.id }
+        (restoreRef ?: import).let { last -> last.nextFocusDownId = transfer.id; transfer.nextFocusUpId = last.id }
+    }
+
+    /** 打开手机扫码页：下载当前源配置，或上传配置文件（只追加、不覆盖已有源）。 */
+    private fun showSourceTransfer() {
+        manager?.dismiss()
+        val config = ThirdSourceConfig.encode(store.backupSources())
+        tvTools.sourceTransfer(config, null) { incoming ->
+            val added = store.mergeRestored(incoming)
+            probes.clear()
+            if(added > 0) {
+                backupRequest(); rebuild()
+                Toast.makeText(activity, "已追加 $added 个源（已有源保持不变）", Toast.LENGTH_LONG).show()
+            } else Toast.makeText(activity, "没有需要新增的源（均已存在或已达上限）", Toast.LENGTH_LONG).show()
+        }
     }
 
     private var manager: AlertDialog? = null
@@ -748,7 +768,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
             categoriesCached = false; catalogRequested = false
             Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
-            rebuild()
+            backupRequest(); rebuild()
         }
     }
 
@@ -760,7 +780,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val restored = missing.take(room)
         store.saveSources(sources + restored)
         Toast.makeText(activity, "已恢复 ${restored.size} 个内置源", Toast.LENGTH_SHORT).show()
-        rebuild()
+        backupRequest(); rebuild()
     }
 
     private fun showAddSourceDialog() {
@@ -804,7 +824,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                             categoriesCached = false; catalogRequested = false
                             dialog.dismiss()
                             Toast.makeText(activity, "已添加「${source.name}」", Toast.LENGTH_SHORT).show()
-                            rebuild()
+                            backupRequest(); rebuild()
                         }
                     }
                 }
@@ -889,7 +909,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         parse.requestFocus()
     }
 
-    private fun showImportChecklist(candidates: List<ThirdTvboxSite>, skipped: Int) {
+    private fun showImportChecklist(rawCandidates: List<ThirdTvboxSite>, skipped: Int) {
+        // 同一接口只出现一次；本地已有的源标为「已存在」，不参与探活与勾选
+        val candidates = rawCandidates.distinctBy { it.api }
+        val existingApis = sources.mapTo(HashSet()) { it.api }
+        val existing = BooleanArray(candidates.size) { candidates[it].api in existingApis }
         // 默认全不勾：探活通过的源自动勾上，探活失败的保持不勾；用户手动点过的行不再被结果覆盖
         val checked = BooleanArray(candidates.size) { false }
         val touched = BooleanArray(candidates.size) { false }
@@ -909,10 +933,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val nameColumn = column()
             nameColumn.addView(text(site.name, 15f))
             nameColumn.addView(text(hostOf(site.api), 12f, muted))
-            val status = text("探活中…", 12f, muted)
+            val status = text(if(existing[index]) "已存在" else "探活中…", 12f, muted)
             line.addView(check, lp(-2, -2).apply { rightMargin = dp(8) }); line.addView(nameColumn, lp(0, -2).apply { weight = 1f }); line.addView(status)
             focusStyle(line)
             line.setOnClickListener {
+                if(existing[index]) return@setOnClickListener
                 touched[index] = true
                 checked[index] = !checked[index]
                 paintCheck(index); refreshAction()
@@ -921,7 +946,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             statusViews[index] = status
             line
         }
-        content.addView(text("已自动跳过 $skipped 个不支持源 · 仅默认勾选可连接的源", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        content.addView(text("已自动跳过 $skipped 个不支持源 · 仅默认勾选可连接的源，已存在的源不会重复导入", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         val dialog = AlertDialog.Builder(activity).setTitle("选择要导入的源（${candidates.size}）")
             .setView(ScrollView(activity).apply { addView(content) })
             .setNegativeButton("取消", null)
@@ -941,8 +966,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         dialog.show()
         refreshAction()
         rows.firstOrNull()?.requestFocus()
-        // 逐个探活（单线程执行器天然串行），实时回填状态并自动勾选可连接的源
+        // 逐个探活（单线程执行器天然串行），实时回填状态并自动勾选可连接的源；已存在的源跳过
         candidates.forEachIndexed { index, site ->
+            if(existing[index]) return@forEachIndexed
             val gen = generation
             executor.execute {
                 val probe = client.probe(site.api)
@@ -984,6 +1010,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             if(imported < selected.size) append("，超出上限跳过 ${selected.size - imported - duplicated} 个")
         }
         Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
+        if(imported > 0) backupRequest()
         rebuild()
     }
 
