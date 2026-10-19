@@ -749,7 +749,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
         var restoreRef: TextView? = null
         if(ThirdCms.restoreCandidates(sources).isNotEmpty()) restoreRef = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
-        addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
+        val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
         body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
 
         // 源列表：名称 / 主机 / 探活状态 / 使用中；批量模式下点击勾选
@@ -816,14 +816,18 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             view.nextFocusUpId = rows.getOrNull(index - 1)?.id ?: add.id
             view.nextFocusDownId = rows.getOrNull(index + 1)?.id ?: View.NO_ID
         }
+        // 操作行左右串联：添加源 → 导入配置 →（恢复内置源）→ 导入/导出配置
         add.nextFocusRightId = importTvbox.id
         importTvbox.nextFocusLeftId = add.id
-        importTvbox.nextFocusRightId = (restoreRef ?: rows.firstOrNull())?.id ?: View.NO_ID
+        val afterImport = restoreRef ?: transfer
+        importTvbox.nextFocusRightId = afterImport.id
+        afterImport.nextFocusLeftId = importTvbox.id
         restoreRef?.let { restore ->
-            restore.nextFocusLeftId = importTvbox.id
-            restore.nextFocusRightId = rows.firstOrNull()?.id ?: View.NO_ID
+            restore.nextFocusRightId = transfer.id
+            transfer.nextFocusLeftId = restore.id
         }
-        rows.firstOrNull()?.nextFocusUpId = importTvbox.id
+        transfer.nextFocusRightId = View.NO_ID
+        transfer.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
     }
 
     /** 批量删除：选中项二次确认后移除，当前源被删则顺延到第一个剩余源。 */
