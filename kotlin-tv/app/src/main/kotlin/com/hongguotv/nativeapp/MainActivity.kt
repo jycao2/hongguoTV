@@ -595,8 +595,14 @@ class MainActivity: Activity() {
             return
         }
         if(tab==5) {
-            val scroll=ScrollView(this); val body=column(); scroll.addView(body); container.addView(scroll,lp(-1,0).apply { weight=1f })
-            settings(body); if(focusNav) nav[tab].requestFocus(); return
+            // 设置页：内容可滚动，页脚固定在屏幕底部居中，始终可见；去掉容器下内边距让页脚真正贴底
+            container.setPadding(container.paddingLeft,container.paddingTop,container.paddingRight,0)
+            val page=column()
+            val scroll=ScrollView(this); val body=column(); scroll.addView(body); page.addView(scroll,lp(-1,0).apply { weight=1f })
+            val footerHost=column().apply { gravity=Gravity.CENTER_HORIZONTAL }
+            page.addView(footerHost,lp(-1,-2))
+            container.addView(page,lp(-1,0).apply { weight=1f })
+            settings(body,footerHost); if(focusNav) nav[tab].requestFocus(); return
         }
         if(tab<=1) {
             val types=row().apply { setPadding(0,dp(8),0,dp(6)) }
@@ -1198,7 +1204,7 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun settings(parent: LinearLayout) {
+    private fun settings(parent: LinearLayout, footerHost: LinearLayout) {
         parent.addView(text("按你的习惯播放",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(15),0,dp(7)) })
         parent.addView(text("偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(18)) })
         val groups=row().apply { gravity=Gravity.TOP }
@@ -1340,11 +1346,14 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
         }
-        // The page footer must be focusable and chained: without it the D-pad stalls on the
-        // last setting row and the ScrollView never reveals anything below the two columns.
-        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与进度保存在本机",12f,muted).apply {
-            id=View.generateViewId(); isFocusable=true; setPadding(dp(2),dp(18),0,dp(10))
+        // 页脚固定在滚动区之外（屏幕底部居中）：既保证始终可见，也保持可聚焦，
+        // 否则 D-pad 停在最后一项时滚动区无法再往下滚。
+        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    所有数据保存在本机",12f,muted).apply {
+            id=View.generateViewId(); isFocusable=true; setPadding(dp(10),dp(8),dp(10),dp(3))
             setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
+        }
+        val settingsDisclaimer=text("本应用仅用于技术交流与学习，不提供、不存储、不传播任何视频内容，内容版权归原平台所有。",11f,muted).apply {
+            gravity=Gravity.CENTER; setPadding(dp(10),0,dp(10),dp(6))
         }
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
@@ -1360,7 +1369,8 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=qualityButton.id }
         }
         rechainSettings()
-        parent.addView(settingsFooter)
+        footerHost.addView(settingsFooter,lp(-2,-2))
+        footerHost.addView(settingsDisclaimer,lp(-2,-2))
         nav[tab].requestFocus()
     }
     private fun runSearch(value: String,type: ContentType=library.contentType,fromPhone: Boolean=false) {
