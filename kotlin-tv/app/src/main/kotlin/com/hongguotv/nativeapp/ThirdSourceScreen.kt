@@ -35,10 +35,10 @@ import java.util.concurrent.Executors
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */
 class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit, private val backupRequest: () -> Unit = {}) {
-    private enum class Mode { BROWSE, SEARCH, DETAIL, PLAY }
+    private enum class Mode { BROWSE, SEARCH, SOURCES, DETAIL, PLAY }
     private enum class Dot { RUNNING, OK, DEAD }
 
-    private class ProbeState(val dot: Dot, val total: Int)
+    private class ProbeState(val dot: Dot, val total: Int, val reason: String? = null)
 
     private val main = Handler(Looper.getMainLooper())
     private val muted get() = TvStyle.muted
@@ -143,6 +143,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             }
             mode == Mode.DETAIL && detail != null -> renderDetail(container)
             mode == Mode.SEARCH -> renderSearch(container)
+            mode == Mode.SOURCES -> renderSources(container)
             else -> { mode = Mode.BROWSE; loading = false; loadingMore = false; renderBrowse(container) }
         }
         // 重建时系统可能在首帧布局阶段清掉焦点（片库页同样用 post 兜底）：下一帧再补一次，
@@ -158,6 +159,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         Mode.PLAY -> { saveProgressNow(); mode = Mode.DETAIL; releasePlayback(); rebuild(); true }
         Mode.DETAIL -> { mode = Mode.BROWSE; rebuild(); true }
         Mode.SEARCH -> { mode = Mode.BROWSE; rebuild(); true }
+        Mode.SOURCES -> { sourceBatchMode = false; sourceSelected.clear(); mode = Mode.BROWSE; rebuild(); true }
         // 搜索结果页返回搜索页，方便改关键词；普通浏览交还 MainActivity
         Mode.BROWSE -> if(searchWord != null) {
             suggestions = emptyList(); suggestSeq++; mode = Mode.SEARCH; rebuild(); scheduleSuggest(); true
@@ -222,7 +224,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             sourceButtons = capsuleViews
             capsuleScroll.addView(capsules)
             sourceRow.addView(capsuleScroll, lp(0, -2).apply { weight = 1f })
-            manage = addButton(sourceRow, "管理") { showSourceManager() }
+            manage = addButton(sourceRow, "管理") { openSources() }
             body.addView(sourceRow)
 
             probeSummary = text(probeSummaryText(), 12f, muted).apply { setPadding(0, dp(5), 0, dp(5)) }
@@ -670,8 +672,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     val result = client.probe(source.api)
                     main.post {
                         if(gen != generation) return@post
-                        probes[source.id] = if(result.ok) ProbeState(Dot.OK, result.total) else ProbeState(Dot.DEAD, 0)
+                        probes[source.id] = if(result.ok) ProbeState(Dot.OK, result.total)
+                            else ProbeState(Dot.DEAD, 0, result.reason)
                         capsuleDots[source.id]?.let { dot -> dot.background = rounded(dotColor(source.id), radius = 3) }
+                        // 源管理页里的状态文字就地刷新，避免整页重建导致焦点跳动
+                        sourceStatusViews[source.id]?.let { view ->
+                            val (label, color) = probeLabel(source.id)
+                            view.text = label; view.setTextColor(color)
+                        }
                         probeSummary?.text = probeSummaryText()
                     }
                 }
@@ -695,55 +703,149 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
-    // ================= 源管理 / 添加 / 导入 =================
+    // ================= 源管理（独立页面）/ 添加 / 导入 =================
 
-    private fun showSourceManager() {
-        val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
-        sources.forEachIndexed { index, source ->
-            val isCurrent = source.id == currentId
-            val line = row().apply { setPadding(dp(10), dp(8), dp(10), dp(8)) }
-            val nameColumn = column()
-            nameColumn.addView(text("${source.name}${if(source.builtin) "  [内置]" else ""}", 15f, if(isCurrent) TvStyle.accent else TvStyle.text))
-            nameColumn.addView(text(hostOf(source.api), 12f, muted))
-            val count = probes[source.id]?.let { if(it.dot == Dot.OK) formatCount(it.total) else null }
-            line.addView(nameColumn, lp(0, -2).apply { weight = 1f })
-            line.addView(text(count ?: "", 12f, muted), lp(-2, -2).apply { rightMargin = dp(8) })
-            if(isCurrent) line.addView(text("使用中", 12f, TvStyle.accent))
-            focusStyle(line, selected = isCurrent)
-            line.setOnClickListener { switchSource(source) }
-            content.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
+    private var sourceBatchMode = false
+    private val sourceSelected = mutableSetOf<String>()
+    private val sourceStatusViews = HashMap<String, TextView>()
+
+    private fun openSources() {
+        sourceBatchMode = false; sourceSelected.clear()
+        mode = Mode.SOURCES
+        rebuild()
+    }
+
+    /** 探活状态文案与颜色：与列表里的圆点一致。 */
+    private fun probeLabel(id: String): Pair<String, Int> {
+        val state = probes[id] ?: return "待探活" to muted
+        return when(state.dot) {
+            Dot.OK -> "可连接 · ${formatCount(state.total)}" to Color.rgb(76, 175, 80)
+            Dot.DEAD -> (state.reason ?: "不可用") to muted
+            Dot.RUNNING -> "探活中…" to Color.rgb(255, 180, 80)
         }
+    }
 
-        val actions = row().apply { setPadding(0, dp(8), 0, 0) }
-        val add = addButton(actions, "＋ 添加源") { manager?.dismiss(); showAddSourceDialog() }
-        val import = addButton(actions, "＋ 导入配置") { manager?.dismiss(); showImportDialog() }
+    private fun renderSources(container: LinearLayout) {
+        detachPlayerViews()
+        val body = column().apply { setPadding(0, dp(2), 0, 0) }
+
+        // 顶栏：返回 + 标题 + 批量选择
+        val head = row()
+        addButton(head, "‹ 返回") { onBack() }
+        head.addView(text("源管理", 20f).apply {
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(dp(8), 0, 0, 0); gravity = Gravity.CENTER_VERTICAL
+        }, lp(0, dp(46)).apply { weight = 1f })
+        addButton(head, if(sourceBatchMode) "退出批量" else "批量删除") {
+            sourceBatchMode = !sourceBatchMode
+            sourceSelected.clear()
+            rebuild()
+        }
+        body.addView(head, lp(-1, -2).apply { bottomMargin = dp(8) })
+
+        // 操作行
+        val actions = row()
+        val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
+        val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
         var restoreRef: TextView? = null
-        if(ThirdCms.restoreCandidates(sources).isNotEmpty()) {
-            restoreRef = addButton(actions, "恢复内置源") { manager?.dismiss(); restoreBuiltinSources() }
-        }
-        content.addView(actions)
-        // 源配置的导出/导入都走手机扫码：手机页可下载当前配置，也可上传配置文件恢复
-        val transferRow = row().apply { setPadding(0, dp(4), 0, 0) }
-        val transfer = addButton(transferRow, "导入/导出配置（扫码）") { showSourceTransfer() }
-        content.addView(transferRow)
-        content.addView(text("点击源条目切换使用 · 删除需二次确认 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        if(ThirdCms.restoreCandidates(sources).isNotEmpty()) restoreRef = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
+        addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
+        body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
 
-        val dialog = AlertDialog.Builder(activity).setTitle("源管理")
-            .setView(ScrollView(activity).apply { addView(content) })
-            .setNegativeButton("删除当前源") { _,_ -> confirmDeleteCurrent() }
-            .setPositiveButton("完成", null).create()
-        manager = dialog
-        dialog.show()
-        add.requestFocus()
-        add.nextFocusRightId = import.id
-        import.nextFocusLeftId = add.id
-        restoreRef?.let { import.nextFocusRightId = it.id; it.nextFocusLeftId = import.id }
-        (restoreRef ?: import).let { last -> last.nextFocusDownId = transfer.id; transfer.nextFocusUpId = last.id }
+        // 源列表：名称 / 主机 / 探活状态 / 使用中；批量模式下点击勾选
+        capsuleDots.clear(); sourceStatusViews.clear()
+        val listScroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
+        val list = column()
+        listScroll.addView(list, FrameLayout.LayoutParams(-1, -2))
+        val rows = mutableListOf<View>()
+        sources.forEach { source ->
+            val isCurrent = source.id == currentId
+            val selected = source.id in sourceSelected
+            val line = row().apply {
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                background = rounded(if(selected) TvStyle.selectedSurface else TvStyle.surface)
+            }
+            if(sourceBatchMode) {
+                line.addView(text(if(selected) "✓" else "○", 16f, if(selected) TvStyle.accent else muted),
+                    lp(-2, -2).apply { rightMargin = dp(10) })
+            }
+            val dot = View(activity).apply {
+                background = rounded(dotColor(source.id), radius = 3)
+                layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(8) }
+            }
+            capsuleDots[source.id] = dot
+            line.addView(dot)
+            val nameColumn = column()
+            nameColumn.addView(text(source.name + if(source.builtin) "  [内置]" else "", 15f, if(isCurrent) TvStyle.accent else TvStyle.text))
+            nameColumn.addView(text(hostOf(source.api), 12f, muted))
+            line.addView(nameColumn, lp(0, -2).apply { weight = 1f })
+            val (label, color) = probeLabel(source.id)
+            val status = text(label, 12f, color)
+            sourceStatusViews[source.id] = status
+            line.addView(status, lp(-2, -2).apply { rightMargin = dp(8) })
+            if(isCurrent) line.addView(text("使用中", 12f, TvStyle.accent))
+            focusStyle(line, selected = isCurrent || selected)
+            line.setOnClickListener {
+                if(sourceBatchMode) {
+                    if(!sourceSelected.remove(source.id)) sourceSelected += source.id
+                    rebuild()
+                } else switchSource(source)
+            }
+            list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
+            rows += line
+        }
+        if(sources.isEmpty()) message(list, "已删除全部片源，可添加或恢复内置源")
+        body.addView(listScroll, lp(-1, 0).apply { weight = 1f })
+
+        // 底部：批量删除 / 操作提示
+        if(sourceBatchMode) {
+            val bar = row().apply { setPadding(0, dp(6), 0, 0) }
+            val remove = addButton(bar, "删除所选（${sourceSelected.size}）") { confirmBatchDelete() }
+            remove.isEnabled = sourceSelected.isNotEmpty()
+            body.addView(bar)
+            body.addView(text("点击条目勾选要删除的源，删除前会二次确认", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
+        } else {
+            body.addView(text("点击源条目切换使用 · 顶部「批量删除」可多选 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        }
+
+        container.addView(body, lp(-1, 0).apply { weight = 1f })
+
+        // 焦点：默认第一条源；上下串联，操作行与列表互通
+        topFocusId = rows.firstOrNull()?.id ?: add.id
+        rows.forEachIndexed { index, view ->
+            view.nextFocusUpId = rows.getOrNull(index - 1)?.id ?: add.id
+            view.nextFocusDownId = rows.getOrNull(index + 1)?.id ?: View.NO_ID
+        }
+        add.nextFocusRightId = importTvbox.id
+        importTvbox.nextFocusLeftId = add.id
+        importTvbox.nextFocusRightId = (restoreRef ?: rows.firstOrNull())?.id ?: View.NO_ID
+        restoreRef?.let { restore ->
+            restore.nextFocusLeftId = importTvbox.id
+            restore.nextFocusRightId = rows.firstOrNull()?.id ?: View.NO_ID
+        }
+        rows.firstOrNull()?.nextFocusUpId = importTvbox.id
+    }
+
+    /** 批量删除：选中项二次确认后移除，当前源被删则顺延到第一个剩余源。 */
+    private fun confirmBatchDelete() {
+        val targets = sources.filter { it.id in sourceSelected }
+        if(targets.isEmpty()) return
+        tvTools.confirm("批量删除源", "确定删除选中的 ${targets.size} 个源吗？删除后可通过「恢复内置源」或扫码导入找回。", null) {
+            val remaining = sources.filterNot { it.id in sourceSelected }
+            store.saveSources(remaining.take(ThirdCms.MAX_SOURCES))
+            if(remaining.none { it.id == currentId }) store.setCurrent(remaining.firstOrNull()?.id)
+            targets.forEach { probes.remove(it.id) }
+            sourceSelected.clear(); sourceBatchMode = false
+            categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
+            videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
+            categoriesCached = false; catalogRequested = false
+            Toast.makeText(activity, "已删除 ${targets.size} 个源", Toast.LENGTH_SHORT).show()
+            backupRequest(); rebuild()
+        }
     }
 
     /** 打开手机扫码页：下载当前源配置，或上传配置文件（只追加、不覆盖已有源）。 */
     private fun showSourceTransfer() {
-        manager?.dismiss()
         val config = ThirdSourceConfig.encode(store.backupSources())
         tvTools.sourceTransfer(config, null) { incoming ->
             val added = store.mergeRestored(incoming)
@@ -752,23 +854,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 backupRequest(); rebuild()
                 Toast.makeText(activity, "已追加 $added 个源（已有源保持不变）", Toast.LENGTH_LONG).show()
             } else Toast.makeText(activity, "没有需要新增的源（均已存在或已达上限）", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private var manager: AlertDialog? = null
-
-    private fun confirmDeleteCurrent() {
-        val source = currentSource() ?: return
-        tvTools.confirm("删除片源", "确定删除「${source.name}」吗？删除后可重新添加或恢复内置源。", null) {
-            val remaining = sources.filterNot { it.id == source.id }
-            store.saveSources(remaining.take(ThirdCms.MAX_SOURCES))
-            store.setCurrent(remaining.firstOrNull()?.id)
-            probes.remove(source.id)
-            categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
-            videos.clear(); loadError = null; page = 1; hasMore = false; categories = emptyList()
-            categoriesCached = false; catalogRequested = false
-            Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
-            backupRequest(); rebuild()
         }
     }
 
