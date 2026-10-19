@@ -237,6 +237,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
         // 分类条（搜索态隐藏，改为筛选条）
         var categoryButtons: List<TextView> = emptyList()
+        var filterButtons: List<View> = emptyList()
         if(searchWord != null) {
             // 搜索态：结果统计 + 类型/年份/地区筛选
             val filteredCount = filteredSearchDetails().size
@@ -267,7 +268,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 }
             }
             filterCapsules.forEach { filterRow.addView(it, lp(-2, -2).apply { rightMargin = dp(8) }) }
-            if(filterCapsules.isNotEmpty()) body.addView(filterRow)
+            if(filterCapsules.isNotEmpty()) { body.addView(filterRow); filterButtons = filterCapsules }
         } else {
             val categoryScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
             val categoryRow = row().apply { setPadding(0, dp(2), 0, dp(2)) }
@@ -328,14 +329,17 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             currentCapsule != null -> currentCapsule.id
             else -> capsuleViews.firstOrNull()?.id ?: search.id
         }
-        // 焦点接线：胶囊/搜索/分类 ↓ → 网格；胶囊 → 管理 → 搜索 左右互达
+        // 焦点接线：源胶囊/管理 ↓ → 搜索行 ↓ → 分类（搜索态为筛选项）↓ → 网格，逐层下移不被跳过
         gridRecycler?.id?.let { gridId ->
-            capsuleViews.forEach { it.nextFocusDownId = gridId }
-            search.nextFocusDownId = gridId
-            clearRef?.nextFocusDownId = gridId
-            categoryButtons.forEach { it.nextFocusDownId = gridId }
+            val secondRow = categoryButtons.firstOrNull()?.id ?: filterButtons.firstOrNull()?.id ?: gridId
+            capsuleViews.forEach { it.nextFocusDownId = search.id }
+            manage?.nextFocusDownId = search.id
+            search.nextFocusDownId = secondRow
+            clearRef?.nextFocusDownId = secondRow
+            categoryButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
+            filterButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
         }
-        search.nextFocusUpId = manage?.id ?: View.NO_ID
+        search.nextFocusUpId = currentCapsule?.id ?: manage?.id ?: View.NO_ID
         search.nextFocusLeftId = manage?.id ?: View.NO_ID
         manage?.let { button ->
             button.nextFocusRightId = clearRef?.id ?: search.id
