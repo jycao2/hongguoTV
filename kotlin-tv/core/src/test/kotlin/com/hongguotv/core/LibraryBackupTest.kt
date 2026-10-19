@@ -47,6 +47,13 @@ class LibraryBackupTest {
         assertFalse(LibraryBackup.decode(legacy.toString()).settings.showClock)
         assertTrue(LibraryBackup.merge(data(),on,true).settings.showClock)
     }
+    @Test fun `source hidden setting round trips and legacy backups default to hidden`() {
+        val shown=data().copy(settings=BackupSettings().copy(sourceHidden=false))
+        assertEquals(shown,LibraryBackup.decode(LibraryBackup.encode(shown)))
+        val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("sourceHidden")
+        assertTrue(LibraryBackup.decode(legacy.toString()).settings.sourceHidden)
+        assertFalse(LibraryBackup.merge(data(),shown,true).settings.sourceHidden)
+    }
     @Test fun `danmaku prefs round trip and out of range values normalize`() {
         val custom=data().copy(settings=BackupSettings().copy(danmakuOpacity=60,danmakuFont=0,danmakuSpeed=4,danmakuRows=5))
         assertEquals(custom,LibraryBackup.decode(LibraryBackup.encode(custom)))

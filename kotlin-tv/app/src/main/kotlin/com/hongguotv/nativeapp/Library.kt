@@ -201,10 +201,10 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
-    /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置中开启。 */
+    /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置中开启；随备份一起恢复。 */
     var sourceHidden: Boolean
-        get() = prefs.getBoolean("sourceHidden", true)
-        set(value) { prefs.edit().putBoolean("sourceHidden", value).apply() }
+        get() = state().settings.sourceHidden
+        set(value) { if (value != sourceHidden) { state().settings = state().settings.copy(sourceHidden = value); put("sourceHidden", value) } }
     // Per-series intro/outro skips stay on this device, outside the backup, like the theme.
     private var marksCache: LinkedHashMap<String, SkipMark>? = null
     private fun marks(): LinkedHashMap<String, SkipMark> =
@@ -234,7 +234,8 @@ class Library(context: Context) {
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
             "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
-            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }, "showClock" to { merged.settings.showClock }))
+            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }, "showClock" to { merged.settings.showClock },
+            "sourceHidden" to { merged.settings.sourceHidden }))
         scheduleLocalBackup()
         flush()
     }

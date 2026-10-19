@@ -128,7 +128,8 @@ object LibraryDisk {
             DanmakuPrefs.font((values["danmakuFont"] as? Number)?.toInt() ?: DanmakuPrefs.FONT_DEFAULT),
             DanmakuPrefs.speed((values["danmakuSpeed"] as? Number)?.toInt() ?: DanmakuPrefs.SPEED_DEFAULT),
             DanmakuPrefs.rows((values["danmakuRows"] as? Number)?.toInt() ?: DanmakuPrefs.ROWS_DEFAULT),
-            values["showClock"] as? Boolean ?: false)
+            values["showClock"] as? Boolean ?: false,
+            values["sourceHidden"] as? Boolean ?: true)
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }
         return LibraryIndex(BackupData(series("favorites"), history, ids("watched"),
