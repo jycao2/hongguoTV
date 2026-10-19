@@ -6,6 +6,17 @@ import com.hongguotv.core.BackupThirdSource
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** 三方片源观看记录：按「源接口 + 影片」去重，最近观看在前。标题与封面本地留存，源或影片失效时卡片仍可显示。 */
+data class ThirdHistoryEntry(
+    val sourceApi: String, val sourceName: String, val videoId: String, val title: String, val cover: String,
+    val episodeIndex: Int, val episodeLabel: String, val positionMs: Long, val durationMs: Long,
+    val updatedAt: Long, val completed: Boolean
+) {
+    fun json() = JSONObject().put("sourceApi", sourceApi).put("sourceName", sourceName).put("videoId", videoId)
+        .put("title", title).put("cover", cover).put("episodeIndex", episodeIndex).put("episodeLabel", episodeLabel)
+        .put("positionMs", positionMs).put("durationMs", durationMs).put("updatedAt", updatedAt).put("completed", completed)
+}
+
 /** 三方片源独立持久化：源列表与播放进度存独立 SharedPreferences（third-sources-v1）。
  *  不进 Library、不进收藏/历史/继续观看；源配置随主备份一起迁移，播放进度与搜索历史仍只在本机。 */
 class ThirdStore(context: Context) {
@@ -68,6 +79,33 @@ class ThirdStore(context: Context) {
 
     fun clearSearches() { prefs.edit().remove(KEY_SEARCHES).apply() }
 
+    /** 观看历史：最近在前，最多 100 条；损坏或缺失时静默返回空。 */
+    fun history(): List<ThirdHistoryEntry> = try {
+        val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
+        val array = JSONArray(raw)
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val api = item.optString("sourceApi"); val video = item.optString("videoId")
+            if(api.isEmpty() || video.isEmpty()) null else ThirdHistoryEntry(api, item.optString("sourceName"), video,
+                item.optString("title"), item.optString("cover"), item.optInt("episodeIndex"), item.optString("episodeLabel"),
+                item.optLong("positionMs"), item.optLong("durationMs"), item.optLong("updatedAt"), item.optBoolean("completed"))
+        }
+    } catch (_: Exception) { emptyList() }
+
+    /** 记录/更新一条观看历史：同一源同一影片只保留最新一条，超出上限淘汰最旧的。 */
+    fun rememberHistory(entry: ThirdHistoryEntry) {
+        val next = (listOf(entry) + history().filterNot { it.sourceApi == entry.sourceApi && it.videoId == entry.videoId })
+            .take(MAX_HISTORY)
+        prefs.edit().putString(KEY_HISTORY, JSONArray(next.map { it.json() }).toString()).apply()
+    }
+
+    fun removeHistory(sourceApi: String, videoId: String) {
+        val next = history().filterNot { it.sourceApi == sourceApi && it.videoId == videoId }
+        prefs.edit().putString(KEY_HISTORY, JSONArray(next.map { it.json() }).toString()).apply()
+    }
+
+    fun clearHistory() { prefs.edit().remove(KEY_HISTORY).apply() }
+
     /** 备份/导出用：只保留名称与接口。 */
     fun backupSources(): List<BackupThirdSource> = sources().map { BackupThirdSource(it.name, it.api) }
 
@@ -117,5 +155,7 @@ class ThirdStore(context: Context) {
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_CURRENT = "current"
         private const val KEY_SEARCHES = "searches"
+        private const val KEY_HISTORY = "watchHistory"
+        private const val MAX_HISTORY = 100
     }
 }

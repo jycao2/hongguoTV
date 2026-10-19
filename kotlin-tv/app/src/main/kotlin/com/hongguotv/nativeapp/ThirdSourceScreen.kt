@@ -35,7 +35,7 @@ import java.util.concurrent.Executors
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */
 class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit, private val backupRequest: () -> Unit = {}) {
-    private enum class Mode { BROWSE, SEARCH, SOURCES, DETAIL, PLAY }
+    private enum class Mode { BROWSE, SEARCH, SOURCES, DETAIL, PLAY, HISTORY }
     private enum class Dot { RUNNING, OK, DEAD }
 
     private companion object {
@@ -72,6 +72,13 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var videos: MutableList<ThirdVideo> = mutableListOf()
     private var loading = false
     private var loadingMore = false
+    // ---- 观看历史 ----
+    private var historyEntries: List<ThirdHistoryEntry> = emptyList()
+    private var historyVideos: List<ThirdVideo> = emptyList()
+    private var lastHistoryKey = ""
+    private var lastHistoryAt = 0L
+    /** 详情页来源：true 表示从观看历史点进来，返回时回历史而不是浏览页。 */
+    private var detailFromHistory = false
     // 本次浏览会话是否已发起过列表请求：空结果分类若再自动重发会形成「请求→空→rebuild→再请求」
     // 死循环，界面持续重建吞掉按键（表现为遥控器卡死）
     private var catalogRequested = false
@@ -149,6 +156,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             mode == Mode.DETAIL && detail != null -> renderDetail(container)
             mode == Mode.SEARCH -> renderSearch(container)
             mode == Mode.SOURCES -> renderSources(container)
+            mode == Mode.HISTORY -> renderHistory(container)
             else -> { mode = Mode.BROWSE; loading = false; loadingMore = false; renderBrowse(container) }
         }
         // 重建时系统可能在首帧布局阶段清掉焦点（片库页同样用 post 兜底）：下一帧再补一次，
@@ -162,9 +170,13 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     /** 返回：播放→详情→浏览（搜索页直接回浏览）；浏览态交还 MainActivity（导航焦点/退出确认）。 */
     fun onBack(): Boolean = when(mode) {
         Mode.PLAY -> { saveProgressNow(); mode = Mode.DETAIL; releasePlayback(); rebuild(); true }
-        Mode.DETAIL -> { mode = Mode.BROWSE; rebuild(); true }
+        Mode.DETAIL -> {
+            val back = if(detailFromHistory) Mode.HISTORY else Mode.BROWSE
+            detailFromHistory = false; mode = back; rebuild(); true
+        }
         Mode.SEARCH -> { mode = Mode.BROWSE; rebuild(); true }
         Mode.SOURCES -> { sourceBatchMode = false; sourceSelected.clear(); mode = Mode.BROWSE; rebuild(); true }
+        Mode.HISTORY -> { mode = Mode.BROWSE; rebuild(); true }
         // 搜索结果页返回搜索页，方便改关键词；普通浏览交还 MainActivity
         Mode.BROWSE -> if(searchWord != null) {
             suggestions = emptyList(); suggestSeq++; mode = Mode.SEARCH; rebuild(); scheduleSuggest(); true
@@ -174,7 +186,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     /** 播放页按键接管；浏览态只接管网格上下翻行（RecyclerView 在固定高度容器里不会为焦点自动滚动）。 */
     fun onKey(event: KeyEvent): Boolean {
         if(event.action != KeyEvent.ACTION_DOWN) return false
-        if(mode == Mode.BROWSE && browseGridKey(event.keyCode)) return true
+        if((mode == Mode.BROWSE || mode == Mode.HISTORY) && browseGridKey(event.keyCode)) return true
+        // 历史页：菜单键删除当前聚焦的记录（遥控器长按行为不一致，这里用显式按键）
+        if(mode == Mode.HISTORY && event.keyCode == KeyEvent.KEYCODE_MENU) { deleteFocusedHistory(); return true }
         if(mode != Mode.PLAY || player == null) return false
         val key = event.keyCode
         val focusInOverlay = overlayButtons.any { it.hasFocus() }
@@ -220,6 +234,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 源胶囊条 + 管理（搜索态隐藏，把高度让给结果网格）
         var capsuleViews: List<View> = emptyList()
         var manage: TextView? = null
+        var historyRef: TextView? = null
         if(searchWord == null) {
             val sourceRow = row()
             val capsuleScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
@@ -229,6 +244,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             sourceButtons = capsuleViews
             capsuleScroll.addView(capsules)
             sourceRow.addView(capsuleScroll, lp(0, -2).apply { weight = 1f })
+            historyRef = addButton(sourceRow, "观看历史") { openHistory() }
             manage = addButton(sourceRow, "管理") { openSources() }
             body.addView(sourceRow)
 
@@ -341,14 +357,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         gridRecycler?.id?.let { gridId ->
             val secondRow = categoryButtons.firstOrNull()?.id ?: filterButtons.firstOrNull()?.id ?: gridId
             capsuleViews.forEach { it.nextFocusDownId = search.id }
+            historyRef?.nextFocusDownId = search.id
             manage?.nextFocusDownId = search.id
             search.nextFocusDownId = secondRow
             clearRef?.nextFocusDownId = secondRow
             categoryButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
             filterButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
         }
-        search.nextFocusUpId = currentCapsule?.id ?: manage?.id ?: View.NO_ID
-        search.nextFocusLeftId = manage?.id ?: View.NO_ID
+        search.nextFocusUpId = currentCapsule?.id ?: historyRef?.id ?: manage?.id ?: View.NO_ID
+        search.nextFocusLeftId = manage?.id ?: historyRef?.id ?: View.NO_ID
+        historyRef?.let { button ->
+            button.nextFocusRightId = manage?.id ?: View.NO_ID
+            manage?.nextFocusLeftId = button.id
+        }
         manage?.let { button ->
             button.nextFocusRightId = clearRef?.id ?: search.id
             clearRef?.nextFocusLeftId = button.id
@@ -391,9 +412,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         topFocusId = add.id; add.requestFocus()
     }
 
-    private fun mountGrid(body: LinearLayout) {
+    private fun mountGrid(body: LinearLayout, onOpen: ((ThirdVideo) -> Unit)? = null) {
         val cols = browseCols()
-        val adapter = GridAdapter(cols) { currentDisplay() }
+        val adapter = GridAdapter(cols, { currentDisplay() }, onOpen)
         gridAdapter = adapter
         val grid = GridLayoutManager(activity, cols)
         val recycler = RecyclerView(activity).apply {
@@ -416,10 +437,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     /** 当前结果集：浏览态用列表缓存，搜索态用筛选后的搜索结果。adapter 每次取最新，翻页追加不必重建控件。 */
-    private fun currentDisplay(): List<ThirdVideo> =
-        if(searchWord != null) filteredSearchDetails().map { it.video } else videos
+    private fun currentDisplay(): List<ThirdVideo> = when {
+        mode == Mode.HISTORY -> historyVideos
+        searchWord != null -> filteredSearchDetails().map { it.video }
+        else -> videos
+    }
 
-    private inner class GridAdapter(private val cols: Int, private val source: () -> List<ThirdVideo>) : RecyclerView.Adapter<GridAdapter.Holder>() {
+    private inner class GridAdapter(private val cols: Int, private val source: () -> List<ThirdVideo>,
+                                    private val onOpen: ((ThirdVideo) -> Unit)? = null) : RecyclerView.Adapter<GridAdapter.Holder>() {
         private val contentPx = (activity.resources.displayMetrics.widthPixels * 0.88f).toInt()
         private val cellPx = (contentPx - dp(12) * (cols - 1)) / cols
         private val posterPx = (cellPx / TvStyle.POSTER_ASPECT).toInt()
@@ -460,13 +485,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 holder.name.setTextColor(if(focused) TvStyle.accent else TvStyle.text)
                 if(focused && position >= items.size - 3) maybeLoadMore()
             }
-            holder.card.setOnClickListener { onVideoClick(item) }
+            holder.card.setOnClickListener { onOpen?.invoke(item) ?: onVideoClick(item) }
             if(position >= items.size - 12) maybeLoadMore()
         }
     }
 
     private fun onVideoClick(video: ThirdVideo) {
         val source = currentSource() ?: return
+        detailFromHistory = false
         if(searchWord != null) {
             searchIndex[video.id]?.let { openDetail(it); return }
         }
@@ -483,7 +509,128 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
+    // ================= 观看历史 =================
+
+    private fun openHistory() { mode = Mode.HISTORY; rebuild() }
+
+    private fun historyKey(entry: ThirdHistoryEntry) = entry.sourceApi + "|" + entry.videoId
+
+    private fun renderHistory(container: LinearLayout) {
+        detachPlayerViews()
+        historyEntries = store.history()
+        val aliveApis = sources.mapTo(HashSet()) { it.api }
+        historyVideos = historyEntries.map { entry ->
+            val badge = when {
+                entry.sourceApi !in aliveApis -> "源已移除"
+                entry.completed -> "已看完"
+                else -> entry.episodeLabel.ifBlank { "第 ${entry.episodeIndex + 1} 集" } +
+                    if(entry.positionMs > 0) " · " + formatTime(entry.positionMs) else ""
+            }
+            ThirdVideo(historyKey(entry), entry.title.ifBlank { "未命名影片" }, entry.cover, badge)
+        }
+        val body = column().apply { setPadding(0, dp(4), 0, 0) }
+        val head = row()
+        val back = addButton(head, "‹ 返回") { onBack() }
+        head.addView(text("观看历史  ·  ${historyEntries.size} 条", 20f).apply {
+            setTypeface(null, android.graphics.Typeface.BOLD); setPadding(dp(8), 0, 0, 0); gravity = Gravity.CENTER_VERTICAL
+        }, lp(0, dp(46)).apply { weight = 1f })
+        if(historyEntries.isNotEmpty()) addButton(head, "清空历史") { confirmClearHistory() }
+        body.addView(head, lp(-1, -2).apply { bottomMargin = dp(6) })
+        if(historyEntries.isEmpty()) {
+            message(body, "暂无观看记录，去片源里挑一部吧")
+            body.addView(text("看过的影片会出现在这里，点开即可续播。", 12f, muted))
+        } else {
+            body.addView(text("按菜单键删除当前记录 · 源被删除可重新添加，影片失效可按片名重搜", 12f, muted).apply {
+                setPadding(0, 0, 0, dp(4))
+            })
+        }
+        container.addView(body, lp(-1, 0).apply { weight = 1f })
+        if(historyEntries.isEmpty()) { topFocusId = back.id; back.requestFocus(); return }
+        mountGrid(body) { video -> historyEntries.firstOrNull { historyKey(it) == video.id }?.let { openHistoryEntry(it) } }
+        topFocusId = gridRecycler?.id ?: back.id
+    }
+
+    /** 历史卡片点击：源被删可重新添加；影片失效可在本源按片名重搜。 */
+    private fun openHistoryEntry(entry: ThirdHistoryEntry) {
+        val source = sources.firstOrNull { it.api == entry.sourceApi }
+        if(source == null) {
+            tvTools.choose("源已移除", listOf("重新添加此源", "删除这条记录"), null, { choice ->
+                if(choice == 0) readdHistorySource(entry) else deleteHistory(entry)
+            })
+            return
+        }
+        if(source.id != currentId) {
+            currentId = source.id; store.setCurrent(source.id)
+            categoryId = null; searchWord = null; searchDetails = emptyList(); searchIndex.clear()
+        }
+        // 已看完的记录不再从片尾续播
+        if(entry.completed) store.clearProgress(source.id, entry.videoId)
+        val gen = generation
+        executor.execute {
+            val result = client.detail(source.api, entry.videoId)
+            main.post {
+                if(gen != generation) return@post
+                if(result != null) { detailFromHistory = true; openDetail(result) } else showHistoryMissing(entry, source)
+            }
+        }
+    }
+
+    private fun showHistoryMissing(entry: ThirdHistoryEntry, source: ThirdSource) {
+        val dead = probes[source.id]?.dot == Dot.DEAD
+        val title = if(dead) "源暂时连不上" else "影片可能已下架"
+        val message = if(dead) "「${source.name}」当前无法连接，可返回后切换其他片源再按片名搜索。"
+            else "在「${source.name}」找不到这部影片，可能已下架或更换了编号；可返回切换其他片源再搜索。"
+        tvTools.choose("$title\n$message", listOf("在本源按片名搜索", "删除这条记录"), null, { choice ->
+            if(choice == 0) searchHistoryTitle(entry) else deleteHistory(entry)
+        })
+    }
+
+    private fun searchHistoryTitle(entry: ThirdHistoryEntry) {
+        val title = entry.title.trim()
+        if(title.isEmpty() || currentSource() == null) return
+        submitSearch(title)
+    }
+
+    private fun readdHistorySource(entry: ThirdHistoryEntry) {
+        if(sources.size >= ThirdCms.MAX_SOURCES) {
+            Toast.makeText(activity, "源数量已达上限（${ThirdCms.MAX_SOURCES}）", Toast.LENGTH_SHORT).show(); return
+        }
+        if(sources.any { it.api == entry.sourceApi }) { rebuild(); return }
+        val source = ThirdSource("u" + entry.sourceApi.hashCode().toUInt().toString(),
+            entry.sourceName.ifBlank { hostOf(entry.sourceApi) }, entry.sourceApi, false)
+        store.saveSources(sources + source)
+        backupRequest()
+        Toast.makeText(activity, "已重新添加「${source.name}」", Toast.LENGTH_SHORT).show()
+        rebuild()
+    }
+
+    private fun deleteHistory(entry: ThirdHistoryEntry) {
+        store.removeHistory(entry.sourceApi, entry.videoId)
+        sources.firstOrNull { it.api == entry.sourceApi }?.let { store.clearProgress(it.id, entry.videoId) }
+        Toast.makeText(activity, "已删除这条记录", Toast.LENGTH_SHORT).show()
+        rebuild()
+    }
+
+    private fun deleteFocusedHistory() {
+        val recycler = gridRecycler ?: return
+        val focused = recycler.findFocus() ?: return
+        val position = recycler.getChildAdapterPosition(focused)
+        val entry = historyEntries.getOrNull(position) ?: return
+        tvTools.confirm("删除观看记录", "从观看历史中移除《${entry.title}》？播放进度也会一起清除。", focused) {
+            deleteHistory(entry)
+        }
+    }
+
+    private fun confirmClearHistory() {
+        tvTools.confirm("清空观看历史", "将删除全部 ${historyEntries.size} 条观看记录，不影响片源配置。", null) {
+            store.clearHistory()
+            Toast.makeText(activity, "观看历史已清空", Toast.LENGTH_SHORT).show()
+            rebuild()
+        }
+    }
+
     private fun maybeLoadMore() {
+        if(mode == Mode.HISTORY) return
         if(loadError != null || currentSource() == null) return
         if(searchWord != null) { requestSearch(reset = false); return }
         if(loadingMore || !hasMore) return
@@ -1674,9 +1821,25 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun saveProgressNow() {
         val instance = player ?: return
         val data = detail ?: return
-        val id = currentId ?: return
+        val source = currentSource() ?: return
         val position = instance.currentPosition
-        if(position > 0) store.saveProgress(id, data.video.id, ThirdProgress(playEpisode, position, playGroup))
+        if(position <= 0) return
+        store.saveProgress(source.id, data.video.id, ThirdProgress(playEpisode, position, playGroup))
+        rememberHistory(source, data, position, instance.duration.coerceAtLeast(0))
+    }
+
+    /** 观看历史打点：同一集 30 秒内只更新一次，避免播放中频繁写 prefs；看完时立即落一条「已看完」。 */
+    private fun rememberHistory(source: ThirdSource, data: ThirdDetail, position: Long, duration: Long) {
+        val now = System.currentTimeMillis()
+        val completed = duration > 0 && position >= duration - 5_000
+        val key = source.api + "|" + data.video.id + "|" + playGroup + "|" + playEpisode
+        val finalKey = if(completed) "$key|done" else key
+        if(finalKey == lastHistoryKey && now - lastHistoryAt < 30_000) return
+        lastHistoryKey = finalKey; lastHistoryAt = now
+        val label = data.groups.getOrNull(playGroup)?.second?.getOrNull(playEpisode)?.label.orEmpty()
+        store.rememberHistory(ThirdHistoryEntry(source.api, source.name, data.video.id, data.video.name, data.video.cover,
+            playEpisode, label, position, duration, now, completed))
+        if(completed) store.clearProgress(source.id, data.video.id)
     }
 
     private fun scheduleSave() {
