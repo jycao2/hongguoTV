@@ -74,6 +74,8 @@ class MainActivity: Activity() {
     private var detailAutoplay=true
     private var libraryLoadError: Throwable?=null
     private var localPermissionContinuation: (() -> Unit)?=null
+    private var clockView: TextView?=null
+    private var clockTick: Runnable?=null
     private var workScope: RequestScope?=null
     private var workJob: java.util.concurrent.Future<*>?=null
     private var playerListener: Player.Listener?=null
@@ -183,6 +185,22 @@ class MainActivity: Activity() {
     private var suggestRow: LinearLayout?=null
     private var suggestFirst: View?=null
     private var suggestTicket=0
+    private var suggestVertical=false
+    private var suggestFocusIndex=-1
+    private var searchBody: LinearLayout?=null
+    private var searchColumns=6
+    private var phoneSearched=false
+    private var keyboardLastLabel: String?=null
+    private var keyboardKeys=emptyMap<String,TextView>()
+    private var keyboardRows=emptyList<List<TextView>>()
+    private var historyFirst: TextView?=null
+    private var historyItems=emptyList<TextView>()
+    private var suggestScrollRef: ScrollView?=null
+    private var fullSearchColumns=6
+    private var lastSuggestWords=emptyList<String>()
+    private var lastSuggestKey=""
+    private var resultFirstCard: View?=null
+    private var searchFocusPending=false
     private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
     private var detail: Detail?=null
@@ -234,6 +252,7 @@ class MainActivity: Activity() {
     private val seekRunnable=Runnable { pendingSeek?.let { player?.seekTo(it) }; pendingSeek=null }
     private fun dp(value: Number)=(value.toFloat()*resources.displayMetrics.density).toInt()
     private fun widthDp()=resources.displayMetrics.widthPixels/resources.displayMetrics.density
+    private fun heightDp()=resources.displayMetrics.heightPixels/resources.displayMetrics.density
     private fun lp(w: Int=LinearLayout.LayoutParams.MATCH_PARENT,h: Int=LinearLayout.LayoutParams.WRAP_CONTENT)=LinearLayout.LayoutParams(w,h)
     private fun rounded(color: Int,border: Int=Color.TRANSPARENT)=TvStyle.shape(this,color,border)
     private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
@@ -409,7 +428,31 @@ class MainActivity: Activity() {
                 FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10); rightMargin=dp(14) })
         }
         if(title!=null) { val heading=row(); addButton(heading,"‹ 返回") { goBack() }; heading.addView(text(title,22f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER_VERTICAL },lp(0,dp(44)).apply { weight=1f }); container.addView(heading) }
+        applyClock()
         return container
+    }
+    /** Re-adds the optional top-right clock after every root rebuild; ticks on minute boundaries. */
+    private fun applyClock() {
+        clockTick?.let(main::removeCallbacks); clockTick=null
+        clockView?.let { root.removeView(it) }; clockView=null
+        if(!library.isLoaded || !library.showClock) return
+        val view=text("",15f,muted).apply {
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isFocusable=false; isClickable=false
+            setPadding(dp(8),dp(3),dp(8),dp(3))
+        }
+        // Local test builds show the beta badge in the same corner; keep both visible.
+        val topMargin=if(BuildConfig.VERSION_NAME.contains('+')) dp(10) else dp(30)
+        root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=topMargin; rightMargin=dp(14) })
+        clockView=view
+        val tick=object: Runnable {
+            override fun run() {
+                clockView?.text=java.text.SimpleDateFormat("HH:mm",java.util.Locale.getDefault()).format(java.util.Date())
+                main.postDelayed(this,60_000L-(System.currentTimeMillis()%60_000L)+100L)
+            }
+        }
+        clockTick=tick
+        tick.run()
     }
     private fun loadCover(view: ImageView,url: String) {
         var ancestor: View?=view
@@ -435,6 +478,7 @@ class MainActivity: Activity() {
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
         nav.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
+        suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
         historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; favoriteFilterFirst=null; favoriteFilterButtons=emptyList(); homeUpdates=null; resumeCards.clear()
     }
@@ -468,15 +512,24 @@ class MainActivity: Activity() {
     private fun switchTab(next: Int) {
         leaveCollection()
         tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre); tabFocus[tab]=catalogFocus
+        // 从其他模块切回搜索页时重置为全新搜索状态，不保留上次的搜索词与结果
+        if(next==1) {
+            query=""; phoneSearched=false; lastSuggestWords=emptyList<String>(); lastSuggestKey=""; suggestFocusIndex=-1; keyboardLastLabel=null
+            tabState.remove(1); tabFocus.remove(1)
+        }
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
         rankBoard=saved?.board ?: rankBoard; genre=saved?.genre ?: genre
         showCatalog(load=(next<=2 && catalog.isEmpty() && (next!=1 || query.isNotBlank())))
+        // 切回搜索页时焦点落输入框，避免页面重建后焦点丢失
+        if(next==1) searchInput?.requestFocus()
     }
     private fun switchContentType(type: ContentType) {
         if(library.contentType==type) return
         leaveCollection()
         (searchInput as? EditText)?.let { query=it.text.toString().trim() }
         library.contentType=type
+        // 切换内容类型后旧联想不再适用，清空回显记忆
+        lastSuggestWords=emptyList<String>(); lastSuggestKey=""; phoneSearched=false
         for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) }
         releaseCatalogViews()
         page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""; homePosition=null; genre=null
@@ -553,72 +606,143 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
         }
         if(tab==1) {
+            // 机型分级：≥900dp 三栏（键盘+历史 / 联想 / 结果），700-900dp 两栏，<700dp 回退纵向堆叠
+            val mode=when { widthDp()>=900 -> 3; widthDp()>=700 -> 2; else -> 0 }
+            val tall=heightDp()>=520
+            val roomy=widthDp()>=1100
+            searchColumns=when(mode) {
+                3 -> (((widthDp()-(if(roomy) 380f else 300f)-(if(roomy) 190f else 150f)-24f)+14f)/118f).toInt().coerceIn(3,gridColumns)
+                2 -> (((widthDp()-340f-24f)+14f)/118f).toInt().coerceIn(3,gridColumns)
+                else -> gridColumns
+            }
+            // 无联想词时中栏整列消失，结果网格按全宽重新算列数
+            fullSearchColumns=if(mode==3) (((widthDp()-(if(roomy) 380f else 300f)-24f)+14f)/118f).toInt().coerceIn(3,gridColumns) else searchColumns
             val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入${library.contentType.label}名称，或用字母键拼首拼"; setText(query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons.getValue(library.contentType).id; searchButton?.nextFocusUpId=input.nextFocusUpId
-            lateinit var recent: TextView
-            recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
-            searchActions.addAll(listOf(recent))
+            if(mode==0) {
+                lateinit var recent: TextView
+                recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
+                searchActions.addAll(listOf(recent))
+            }
             typeButtons.values.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
             input.addTextChangedListener(object: android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int) {}
                 override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) {}
-                override fun afterTextChanged(s: android.text.Editable?) { scheduleSuggest() }
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    // 用户编辑输入框后解除手机输入的联想抑制，恢复常规联想
+                    if(phoneSearched && s?.toString()?.trim()!=query) phoneSearched=false
+                    scheduleSuggest()
+                }
             })
+            val keyHeight=if(tall) dp(36) else dp(30)
             fun azKey(label: String): TextView {
                 val view=button(label) { onAzKey(label) }
-                view.textSize=13f; view.minHeight=dp(36); view.setPadding(dp(4),dp(6),dp(4),dp(6))
+                view.textSize=13f; view.minHeight=keyHeight; view.setPadding(dp(4),dp(4),dp(4),dp(4))
+                val paint=view.onFocusChangeListener
+                view.setOnFocusChangeListener { v,focused -> paint?.onFocusChange(v,focused); if(focused) keyboardLastLabel=label }
                 return view
             }
-            // 字母键盘在左（每行7键），数字键盘在右（1-9三行+0一行），左右区域同行互访
-            val keyboardRow=row()
-            val letterColumn=column()
-            val letterRows=((('A'..'Z').map { it.toString() })+listOf("删除","清空")).chunked(7).map { rowKeys ->
+            // 统一键盘：6 列×7 行（字母数字混排），末行删除/清空/手机输入各占两列
+            val keyboard=column()
+            val keyLines=mutableListOf<List<TextView>>()
+            val keyViews=linkedMapOf<String,TextView>()
+            listOf("ABCDEF","GHIJKL","MNOPQR","STUVWX","YZ0123","456789").forEach { keys ->
                 val line=row().apply { setPadding(0,0,0,dp(4)) }
-                val views=rowKeys.map { key -> azKey(key).also { line.addView(it,lp(0,-2).apply { weight=1f; rightMargin=dp(6) }) } }
-                letterColumn.addView(line)
-                views
+                val views=keys.map { key -> azKey(key.toString()).also { line.addView(it,lp(0,-2).apply { weight=1f; rightMargin=dp(6) }); keyViews[key.toString()]=it } }
+                keyboard.addView(line); keyLines+=views
             }
-            keyboardRow.addView(letterColumn,lp(0,-2).apply { weight=1f; rightMargin=dp(6) })
-            val digitColumn=column()
-            val digitRows=listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("0")).map { rowKeys ->
-                val line=row().apply { setPadding(0,0,0,dp(4)) }
-                val views=rowKeys.map { key -> azKey(key).also { line.addView(it,lp(dp(52),-2).apply { rightMargin=dp(6) }) } }
-                digitColumn.addView(line)
-                views
-            }.toMutableList()
-            // 手机输入按钮并入数字键盘末行（0 右侧），样式与数字键一致
+            val lastLine=row().apply { setPadding(0,0,0,dp(4)) }
+            val del=azKey("删除").also { lastLine.addView(it,lp(0,-2).apply { weight=2f; rightMargin=dp(6) }); keyViews["删除"]=it }
+            val clear=azKey("清空").also { lastLine.addView(it,lp(0,-2).apply { weight=2f; rightMargin=dp(6) }); keyViews["清空"]=it }
             lateinit var phone: TextView
-            phone=button("手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }
-            phone.textSize=13f; phone.minHeight=dp(36); phone.setPadding(dp(8),dp(6),dp(8),dp(6))
-            (digitRows.last().first().parent as LinearLayout).addView(phone,lp(dp(110),-2))
-            digitRows[digitRows.size-1]=digitRows.last()+phone
-            keyboardRow.addView(digitColumn,lp(-2,-2))
-            container.addView(keyboardRow)
-            letterRows.forEachIndexed { r,views ->
+            phone=button("手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it,fromPhone=true) } }
+            phone.textSize=13f; phone.minHeight=keyHeight; phone.setPadding(dp(4),dp(4),dp(4),dp(4)); keyViews["手机输入"]=phone
+            lastLine.addView(phone,lp(0,-2).apply { weight=2f })
+            keyboard.addView(lastLine)
+            val lastViews=listOf(del,clear,phone); keyLines+=lastViews
+            keyLines.forEachIndexed { r,views ->
                 views.forEachIndexed { c,key ->
                     key.nextFocusLeftId=views[if(c==0) 0 else c-1].id
-                    key.nextFocusRightId=if(c==views.size-1) digitRows[r].first().id else views[c+1].id
-                    key.nextFocusUpId=if(r==0) input.id else letterRows[r-1][c].id
-                    key.nextFocusDownId=if(r==letterRows.size-1) key.id else letterRows[r+1][c].id
-                }
-            }
-            digitRows.forEachIndexed { r,views ->
-                views.forEachIndexed { c,key ->
-                    key.nextFocusLeftId=if(c==0) letterRows[r].last().id else views[c-1].id
                     key.nextFocusRightId=views[if(c==views.size-1) c else c+1].id
-                    key.nextFocusUpId=if(r==0) input.id else digitRows[r-1][minOf(c,digitRows[r-1].size-1)].id
-                    key.nextFocusDownId=if(r==digitRows.size-1) key.id else digitRows[r+1][minOf(c,digitRows[r+1].size-1)].id
+                    val up=keyLines.getOrNull(r-1); val down=keyLines.getOrNull(r+1)
+                    // 末行三键各覆盖两列：向下按列折半、向上按列展开，保持同列直觉
+                    key.nextFocusUpId=up?.get(if(r==keyLines.size-1) minOf(c*2,up.size-1) else minOf(c,up.size-1))?.id ?: input.id
+                    key.nextFocusDownId=down?.get(if(r==5) minOf(c/2,down.size-1) else minOf(c,down.size-1))?.id ?: key.id
                 }
             }
-            azFirst=letterRows.first().first(); azLastRow.addAll(letterRows.last()+digitRows.last())
-            val suggestScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
-            val suggestLine=row()
-            suggestScroll.addView(suggestLine)
-            suggestRow=suggestLine
-            container.addView(suggestScroll,lp(-1,-2).apply { bottomMargin=dp(4) })
+            azFirst=keyLines.first().first(); azLastRow.clear(); azLastRow.addAll(lastViews)
+            keyboardKeys=keyViews; keyboardRows=keyLines.toList()
+            var catalogBody: LinearLayout?=null
+            if(mode==0) {
+                container.addView(keyboard)
+                val suggestScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
+                val suggestLine=row(); suggestScroll.addView(suggestLine); suggestRow=suggestLine; suggestVertical=false
+                container.addView(suggestScroll,lp(-1,-2).apply { bottomMargin=dp(4) })
+            } else {
+                // 顶部对齐：左栏随历史增多变高时，键盘顶边保持固定，不挤压搜索框间距
+                val contentRow=row().apply { gravity=Gravity.TOP }
+                // 左栏与联想栏包滚动容器：小尺寸电视内容超高时可滚动，焦点移出视口时自动滚入
+                val leftScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
+                val leftColumn=column().apply { setPadding(0,dp(2),dp(10),0) }
+                leftScroll.addView(leftColumn)
+                leftColumn.addView(keyboard)
+                // 左栏底部搜索历史：内嵌最新 4 条 + 全部历史入口，空历史整块隐藏
+                val history=library.searches()
+                if(tall && history.isNotEmpty()) {
+                    val block=column()
+                    val head=row().apply { setPadding(0,dp(2),0,dp(4)) }
+                    head.addView(text("搜索历史",13f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+                    lateinit var clearHistory: TextView
+                    clearHistory=button("清空") { tvTools.confirm("清空搜索历史","清除本机保存的搜索词？",clearHistory) { library.clearSearches(); showCatalog(); main.post { searchInput?.requestFocus() } } }
+                        .apply { textSize=12f; minHeight=dp(28); setPadding(dp(10),dp(4),dp(10),dp(4)) }
+                    head.addView(clearHistory,lp(-2,-2))
+                    block.addView(head)
+                    val items=history.take(4).map { entry ->
+                        button("${entry.type.label} · ${entry.query}") { runSearch(entry.query,entry.type) }.apply {
+                            textSize=13f; minHeight=dp(32); setPadding(dp(10),dp(4),dp(10),dp(4)); gravity=Gravity.CENTER_VERTICAL
+                            maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END
+                        }
+                    }
+                    items.forEachIndexed { index,item ->
+                        block.addView(item,lp(-1,-2).apply { bottomMargin=dp(4) })
+                        item.nextFocusUpId=if(index==0) clearHistory.id else items[index-1].id
+                    }
+                    historyItems=items
+                    if(history.size>4) {
+                        lateinit var all: TextView
+                        all=button("全部历史（${history.size}）›") { showSearchHistory(all) }.apply { textSize=12f; minHeight=dp(30); setPadding(dp(10),dp(4),dp(10),dp(4)) }
+                        block.addView(all,lp(-1,-2)); historyItems=items+all
+                    }
+                    leftColumn.addView(block)
+                    historyFirst=clearHistory
+                    // 历史↑回到离开键盘时的按键，保持焦点记忆
+                    clearHistory.nextFocusUpId=(keyboardLastLabel?.let { keyViews[it] } ?: del).id
+                }
+                val midScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
+                val midColumn=column().apply { setPadding(0,dp(2),dp(10),0) }
+                midScroll.addView(midColumn)
+                val rightColumn=column()
+                if(mode==3) {
+                    suggestRow=midColumn; suggestVertical=true; suggestScrollRef=midScroll
+                    contentRow.addView(leftScroll,lp(if(roomy) dp(380) else dp(300),-1))
+                    contentRow.addView(midScroll,lp(if(roomy) dp(190) else dp(150),-1))
+                    contentRow.addView(rightColumn,lp(0,-1).apply { weight=1f })
+                } else {
+                    contentRow.addView(leftScroll,lp(dp(340),-1))
+                    contentRow.addView(rightColumn,lp(0,-1).apply { weight=1f })
+                    val suggestScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
+                    val suggestLine=row(); suggestScroll.addView(suggestLine); suggestRow=suggestLine; suggestVertical=false
+                    rightColumn.addView(suggestScroll,lp(-1,-2).apply { bottomMargin=dp(4) })
+                }
+                container.addView(contentRow,lp(-1,0).apply { weight=1f })
+                catalogBody=rightColumn
+            }
+            searchBody=catalogBody
+            // 键盘末行先指向历史（结果区建立后由 wireSearchPanel 补全联想与网格指向）
+            azLastRow.forEach { it.nextFocusDownId=historyFirst?.id ?: View.NO_ID }
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
             heading.addView(text("${rankBoard.label}热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -651,7 +775,8 @@ class MainActivity: Activity() {
                 favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }; container.addView(favoriteStatus)
             }
         }
-        val body=column(); container.addView(body,lp(-1,0).apply { weight=1f })
+        // 三栏/两栏搜索页的结果区已在 contentRow 内挂载，其余页面走全宽纵向容器
+        val body=searchBody ?: column().also { container.addView(it,lp(-1,0).apply { weight=1f }) }
         if(tab==3) {
             val groups=library.groups()
             if(favoriteGroupFilter!=null && favoriteGroupFilter !in groups) favoriteGroupFilter=null
@@ -685,9 +810,17 @@ class MainActivity: Activity() {
                     homeScreen?.refresh?.setOnClickListener { catalog=result.items; hasMore=result.hasMore; ranking=result.ranking; showCatalog() }
                 } else {
                     catalog=result.items; hasMore=result.hasMore; ranking=result.ranking
+                    // 手机输入的精确剧名搜索零结果时自动恢复联想，帮助用户纠正剧名
+                    if(requestTab==1 && result.items.isEmpty()) { phoneSearched=false; scheduleSuggest() }
                     val keepNav=nav.any { it.hasFocus() }; val keepType=typeButtons.values.any { it.hasFocus() }
                     rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜"
                     body.removeAllViews(); catalogGrid(body,keepNav || focusNav,keepType || focusType)
+                    // 搜索完成后焦点落结果首卡；零结果回输入框，避免页面重建后焦点丢失
+                    if(requestTab==1 && searchFocusPending) {
+                        searchFocusPending=false
+                        if(result.items.isEmpty()) searchInput?.requestFocus()
+                        else catalogRecycler?.post { (resultFirstCard ?: searchInput)?.requestFocus() }
+                    }
                 }
             }, { problem ->
                 if(requestTab==0 && requestPage==1 && requestGenre==null) {
@@ -696,6 +829,8 @@ class MainActivity: Activity() {
                     return@work
                 }
                 catalog=emptyList(); hasMore=false; ranking=null; rankSubtitle?.text="榜单加载失败"
+                // 搜索失败时焦点回输入框，避免页面重建后焦点丢失
+                if(requestTab==1 && searchFocusPending) { searchFocusPending=false; searchInput?.requestFocus() }
                 if(problem is SearchSessionExpiredException) {
                     page=1; catalogFocus=""
                     Toast.makeText(this,"搜索结果已过期，已回到第 1 页刷新",Toast.LENGTH_LONG).show()
@@ -707,6 +842,8 @@ class MainActivity: Activity() {
                 }
             })
         } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter)
+        // 页面重建后初始化联想区：回显点击联想词前的列表，或无词时收起中栏
+        if(tab==1) fetchSuggest()
     }
     private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false) {
         if(tab==0 && page==1 && collection==null && genre==null) { renderHome(body,focusNav,focusType,loading); return }
@@ -736,12 +873,14 @@ class MainActivity: Activity() {
         displayed+=if(localCatalog()) catalog else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog
         if(displayed.isEmpty()) {
             message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
+            wireSearchPanel(null)
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
         }
-        val adapter=CatalogAdapter(displayed)
-        val grid=GridLayoutManager(this,gridColumns)
-        grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position)) gridColumns else 1 }
+        val cols=if(tab==1) searchColumns else gridColumns
+        val adapter=CatalogAdapter(displayed,cols)
+        val grid=GridLayoutManager(this,cols)
+        grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position)) cols else 1 }
         val recycler=RecyclerView(this).apply {
             id=View.generateViewId(); clipToPadding=false; isVerticalScrollBarEnabled=false; itemAnimator=null
             layoutManager=grid; this.adapter=adapter
@@ -765,7 +904,7 @@ class MainActivity: Activity() {
         searchInput?.nextFocusDownId=azFirst?.id ?: recycler.id
         searchButton?.nextFocusDownId=azFirst?.id ?: recycler.id
         searchActions.forEach { it.nextFocusDownId=azFirst?.id ?: recycler.id }
-        azLastRow.forEach { it.nextFocusDownId=suggestFirst?.id ?: recycler.id }
+        wireSearchPanel(recycler)
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus()
         else {
@@ -813,10 +952,10 @@ class MainActivity: Activity() {
             }
         })
     }
-    private inner class CardHolder(val card: LinearLayout,val image: ImageView,val rank: TextView,val title: TextView,val badge: TextView): RecyclerView.ViewHolder(card) {
+    private inner class CardHolder(val card: LinearLayout,val artwork: FrameLayout,val image: ImageView,val rank: TextView,val title: TextView,val badge: TextView): RecyclerView.ViewHolder(card) {
         var boundId=""
     }
-    private inner class CatalogAdapter(val displayed: MutableList<Series>): RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    private inner class CatalogAdapter(val displayed: MutableList<Series>,val cols: Int): RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         var footer=FOOTER_NONE
         fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size
         override fun getItemCount()=displayed.size+if(footer!=FOOTER_NONE) 1 else 0
@@ -842,8 +981,10 @@ class MainActivity: Activity() {
             artwork.addView(rank,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
             val title=text("",14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
             val badge=text("",12f).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
-            val gridWidth=parent.width.takeIf { it>0 } ?: (resources.displayMetrics.widthPixels*.9f).toInt()
-            val natural=((gridWidth/gridColumns-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt()
+            // 分栏搜索页首次布局时 parent 尚未测量，按列数估算结果区宽度，避免卡片用全屏宽计算
+            val fallback=if(cols==gridColumns) (resources.displayMetrics.widthPixels*.9f).toInt() else dp(118)*cols
+            val gridWidth=parent.width.takeIf { it>0 } ?: fallback
+            val natural=((gridWidth/cols-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt()
             val chrome=dp(13)+dp(7)+title.lineHeight*2+maxOf(dp(19),badge.lineHeight)
             // Reserve room for the end-of-list footer so a focused footer never pushes the last row's badges off screen.
             val posterHeight=if(parent.height>0) minOf(natural,(parent.height-chrome-dp(52)-dp(4)).coerceAtLeast(dp(48))) else natural
@@ -851,12 +992,21 @@ class MainActivity: Activity() {
             card.addView(title,lp(-1,-2))
             card.addView(badge,lp(-1,-2))
             card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
-            return CardHolder(card,image,rank,title,badge)
+            return CardHolder(card,artwork,image,rank,title,badge)
         }
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
             if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
             holder as CardHolder
+            // 联想栏显隐切换列数后，按当前列宽重算海报高度，保持行内整齐
+            val recycler=holder.card.parent as? RecyclerView
+            val spans=recycler?.let { (it.layoutManager as? GridLayoutManager)?.spanCount } ?: cols
+            if(recycler!=null && recycler.width>0 && holder.artwork.layoutParams.height>0) {
+                val natural=((recycler.width/spans-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt().coerceAtLeast(dp(48))
+                val diff=holder.artwork.layoutParams.height-natural
+                if(diff>dp(1) || diff< -dp(1)) holder.artwork.layoutParams.height=natural
+            }
             val item=displayed[position]; holder.boundId=item.id
+            if(position==0) resultFirstCard=holder.card
             val card=holder.card
             card.tag=item.id; card.contentDescription=item.title
             loadCover(holder.image,item.cover)
@@ -885,7 +1035,7 @@ class MainActivity: Activity() {
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
-            card.nextFocusUpId=if(position<gridColumns) azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            card.nextFocusUpId=if(position<spans) suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
             if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
@@ -1114,6 +1264,12 @@ class MainActivity: Activity() {
         themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
             library.theme=TvStyle.toggle().name; recreate()
         }
+        lateinit var clockButton: TextView
+        clockButton=setting(device,"显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}") {
+            library.showClock=!library.showClock
+            clockButton.text="显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}"
+            applyClock()
+        }
         lateinit var backdropButton: TextView
         fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
         backdropButton=setting(device,backdropLabel()) {
@@ -1172,7 +1328,7 @@ class MainActivity: Activity() {
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
                 (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())
-            val right=listOf(themeButton,backdropButton,localBackupButton,backup,hidden,clearCache,updates,license)
+            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,clearCache,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 view.nextFocusDownId=items.getOrNull(index+1)?.id ?: settingsFooter.id
@@ -1186,11 +1342,13 @@ class MainActivity: Activity() {
         parent.addView(settingsFooter)
         nav[tab].requestFocus()
     }
-    private fun runSearch(value: String,type: ContentType=library.contentType) {
+    private fun runSearch(value: String,type: ContentType=library.contentType,fromPhone: Boolean=false) {
         val clean=value.trim(); if(clean.isEmpty() || clean.length>80) return
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
         if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
-        library.rememberSearch(clean,type); query=clean; tab=1; page=1; catalogFocus=""; showCatalog(true)
+        // 手机输入的精确剧名默认不再联想，纯首拼或编辑输入后恢复
+        phoneSearched=fromPhone
+        library.rememberSearch(clean,type); query=clean; tab=1; page=1; catalogFocus=""; searchFocusPending=true; showCatalog(true)
     }
     private fun onAzKey(key: String) {
         val input=searchInput as? EditText ?: return
@@ -1209,28 +1367,74 @@ class MainActivity: Activity() {
     private fun fetchSuggest() {
         if(isDestroyed || tab!=1 || screen!="catalog") return
         val key=(searchInput as? EditText)?.text?.toString()?.trim().orEmpty()
-        if(key.isEmpty() || !key.matches(Regex("[a-zA-Z0-9]+"))) { suggestTicket++; renderSuggest(emptyList()); return }
+        if(key.isEmpty() || !key.matches(Regex("[a-zA-Z0-9]+"))) {
+            suggestTicket++
+            // 搜索词为中文（如点击联想词后）时保留上一次的联想列表，便于继续选择其他词
+            val keep=if(!phoneSearched && lastSuggestWords.isNotEmpty() && (key==query || key==lastSuggestKey)) lastSuggestWords else emptyList()
+            renderSuggest(keep); return
+        }
+        // 手机输入的精确剧名直接出结果，不展示联想；纯首拼仍提供联想辅助
+        if(phoneSearched && !key.matches(Regex("[a-zA-Z]+"))) { suggestTicket++; renderSuggest(emptyList()); return }
         val ticket=++suggestTicket
         io.execute {
             val words=repository.suggest(key)
-            main.post { if(!isDestroyed && ticket==suggestTicket && tab==1 && screen=="catalog") renderSuggest(words) }
+            main.post { if(!isDestroyed && ticket==suggestTicket && tab==1 && screen=="catalog") renderSuggest(words,key) }
         }
     }
-    private fun renderSuggest(words: List<String>) {
+    private fun renderSuggest(words: List<String>,key: String="") {
         val container=suggestRow ?: return
         val refocus=container.hasFocus()
+        val restore=suggestFocusIndex.takeIf { it in words.indices }
         container.removeAllViews(); suggestFirst=null
-        val views=words.map { word -> button(word) { runSearch(word) }.apply { textSize=14f; minHeight=dp(36) } }
+        // 记录最近的联想列表，供点击联想词搜索后回显；空列表同时隐藏中栏整列
+        lastSuggestWords=words; lastSuggestKey=if(words.isEmpty()) "" else key
+        if(words.isEmpty()) {
+            suggestFocusIndex=-1
+            syncSuggestPanel(false)
+            wireSearchPanel(catalogRecycler)
+            return
+        }
+        syncSuggestPanel(true)
+        val views=words.map { word -> button(word) { runSearch(word) }.apply { textSize=14f; minHeight=dp(34); maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; setPadding(dp(10),dp(6),dp(10),dp(6)) } }
         views.forEachIndexed { index,view ->
-            container.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) })
-            view.nextFocusLeftId=views[if(index==0) 0 else index-1].id
-            view.nextFocusRightId=views[if(index==views.size-1) index else index+1].id
-            view.nextFocusUpId=azLastRow.firstOrNull()?.id ?: searchInput?.id ?: View.NO_ID
-            view.nextFocusDownId=catalogRecycler?.id ?: View.NO_ID
+            if(suggestVertical) container.addView(view,lp(-1,-2).apply { bottomMargin=dp(4) })
+            else container.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) })
+            // 竖排联想：左回键盘离开位置、右进结果首卡（结果区空时原地不动，避免焦点跳到导航栏）；横排保持词间左右互连
+            view.nextFocusLeftId=if(suggestVertical) (keyboardLastLabel?.let { keyboardKeys[it] } ?: azFirst)?.id ?: historyFirst?.id ?: View.NO_ID else views[if(index==0) 0 else index-1].id
+            view.nextFocusRightId=if(suggestVertical) resultFirstCard?.id ?: view.id else views[if(index==views.size-1) index else index+1].id
+            view.nextFocusUpId=if(index==0) searchInput?.id ?: View.NO_ID else views[index-1].id
+            view.nextFocusDownId=if(index==views.size-1) resultFirstCard?.id ?: view.id else views[index+1].id
+            // 保留 focusStyle 的焦点绘制，仅追加词条索引记忆
+            val paint=view.onFocusChangeListener
+            view.setOnFocusChangeListener { v,focused -> paint?.onFocusChange(v,focused); if(focused) suggestFocusIndex=index }
         }
         suggestFirst=views.firstOrNull()
-        azLastRow.forEach { it.nextFocusDownId=suggestFirst?.id ?: catalogRecycler?.id ?: View.NO_ID }
-        if(refocus) (suggestFirst ?: azLastRow.firstOrNull() ?: searchInput)?.requestFocus()
+        wireSearchPanel(catalogRecycler)
+        // 联想刷新后优先回到记忆中的词条，避免焦点跳回第一条
+        val target=restore?.let { views[it] } ?: suggestFirst
+        if(refocus) (target ?: azLastRow.firstOrNull() ?: searchInput)?.requestFocus()
+    }
+    /** 联想栏动态显隐：无词时中栏整列消失，结果网格按全宽列数重新分布。 */
+    private fun syncSuggestPanel(hasWords: Boolean) {
+        val scroll=suggestScrollRef ?: return
+        val target=if(hasWords) View.VISIBLE else View.GONE
+        if(scroll.visibility!=target) {
+            scroll.visibility=target
+            (catalogRecycler?.layoutManager as? GridLayoutManager)?.spanCount=if(hasWords) searchColumns else fullSearchColumns
+            catalogAdapter?.notifyDataSetChanged()
+        }
+    }
+    /** 统一接线：键盘末列右移出键盘、键盘末行 → 历史 → 联想 → 结果网格，历史区可整体缺省。 */
+    private fun wireSearchPanel(recycler: View?) {
+        // 键盘每行末列按右移出键盘：有联想词进联想，否则直达结果网格
+        keyboardRows.forEach { row -> row.last().nextFocusRightId=suggestFirst?.id ?: recycler?.id ?: row.last().id }
+        azLastRow.forEach { it.nextFocusDownId=historyFirst?.id ?: suggestFirst?.id ?: recycler?.id ?: searchInput?.id ?: View.NO_ID }
+        historyFirst?.let { first -> first.nextFocusUpId=(keyboardLastLabel?.let { keyboardKeys[it] } ?: azLastRow.firstOrNull())?.id ?: searchInput?.id ?: View.NO_ID }
+        historyItems.forEachIndexed { index,item ->
+            if(index>0) item.nextFocusUpId=historyItems[index-1].id
+            item.nextFocusDownId=historyItems.getOrNull(index+1)?.id ?: recycler?.id ?: searchInput?.id ?: View.NO_ID
+            item.nextFocusRightId=suggestFirst?.id ?: recycler?.id ?: View.NO_ID
+        }
     }
     private fun showSearchHistory(anchor: View) {
         val history=library.searches()
@@ -1560,6 +1764,7 @@ class MainActivity: Activity() {
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
+        applyClock()
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
