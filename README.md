@@ -1,74 +1,34 @@
-# hongguoTV
+# 红果 TV
 
-自家电视使用的非官方红果短剧客户端，与红果官方无关联。当前主线是 **Kotlin 原生独立 APK**：安装后联网即可浏览播放，无需 Node / Docker / 服务器。最低 Android 8.0，电视遥控器操作。
+自家电视使用的非官方红果短剧客户端，与红果官方无关联。**Kotlin 原生独立 APK**：安装后联网即可浏览播放，无需 Node / Docker / 服务器。最低 Android 8.0（API 26），电视遥控器操作，ARM32 / ARM64 / x86 / x86_64 通用。
 
-**[下载最新原生版 APK](https://github.com/jycao2/hongguoTV/releases/latest)** · [原生版说明与版本记录](kotlin-tv/README.md) · [自动更新机制](kotlin-tv/AUTO_UPDATES.md)
+**[下载最新版 APK](https://github.com/jycao2/hongguoTV/releases/latest)** · [版本记录与构建说明](kotlin-tv/README.md) · [自动更新机制](kotlin-tv/AUTO_UPDATES.md)
 
-当前版本 0.19.5，主要功能：收藏追剧更新提示、系列剧自动连播与播完推荐、漫剧 / 短剧热播榜、题材浏览、片头片尾跳过、双系统风格（深夜影院 / 暖玉白）等；支持应用内自动更新，覆盖安装保留本机收藏与观看记录。
+## 主要功能
 
-## hongguotv-bridge 容器镜像
+- **浏览**：首页接着看 / 收藏有更新 / 稍后看 / 热门发现横向剧架，随机荐剧一键换一批，漫剧 / 短剧热播榜，24+8 个题材分类浏览
+- **搜索**：漫剧 / 短剧分类型，联想词、搜索历史、同一局域网手机扫码输入，键盘 / 联想 / 结果三栏同屏
+- **播放**：自动连播、系列剧跨季连播、片头片尾按剧跳过、0.75-2× 倍速、清晰度档位、定时停止、播完推荐
+- **弹幕**：接入平台官方弹幕源，不透明度 / 字号 / 速度 / 行数可调，表情代码自动展开
+- **收藏**：分组管理、更新自动检查与提示
+- **数据**：全部保存在本机；本地自动备份，卸载重装后授权一次即可自动恢复；支持手机扫码导入导出
+- **外观**：深夜影院 / 暖玉白双主题，扫码上传自定义背景
+- **更新**：应用内自动检测与下载，github.com 不通时自动切换国内镜像；覆盖安装保留本机记录
 
-`ghcr.io/jycao2/hongguotv-bridge` 是旧版 React Native 客户端的配套内容服务镜像（**Kotlin 原生版不需要它**），面向家庭网络中的电脑或 NAS，提供 `linux/amd64` 与 `linux/arm64`，标签为固定版本（如 `0.1.1`）与 `latest`。
+## 工程结构
 
-直接运行：
+- `kotlin-tv/`：当前唯一维护的客户端工程（Kotlin + Android 原生 View + Media3），单测、构建与发布说明见其 README
+- `docs/`：接口研究、部署与历史交付资料
+- 根目录其余文件（`App.tsx`、`src/`、`server/`、`android/`、`ios/` 等）为首版 React Native 客户端的历史归档，已停止维护，仅作资料保留
 
-```sh
-docker run -d --name hongguotv-bridge --restart unless-stopped \
-  -p 8787:8787 ghcr.io/jycao2/hongguotv-bridge:latest
-```
+## 隐私
 
-或使用根目录 Compose（固定到 `0.1.1`，可配置口令与绑定网卡）：
+应用每次启动向自建腾讯云函数发送一次匿名 GET（随机安装 ID + 版本号），用于估算真实装机量；不收集 IP、机型、观看内容或任何账号信息，失败静默。除此之外无任何第三方统计 / 广告 / 崩溃上报 SDK。详见 [隐私与匿名统计](kotlin-tv/README.md#隐私与匿名统计)。
 
-```sh
-cp .env.example .env
-docker compose --env-file .env up -d
-docker compose --env-file .env ps
-```
+## 免责声明
 
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `BRIDGE_TOKEN` | 空 | 访问口令，留空不启用；设置后电视端填写相同值，未认证请求返回 401 |
-| `BRIDGE_BIND_IP` | `0.0.0.0` | 宿主机监听网卡（Compose），可填宿主机家庭网络地址 |
-| `BRIDGE_PORT` | `8787` | 宿主机发布端口（Compose），容器内始终为 8787 |
-| `BRIDGE_HOST` / `PORT` | `0.0.0.0` / `8787` | 容器内监听地址与端口 |
+本项目仅做技术交流与学习用途，旨在研究 Android 原生开发、媒体播放、网络请求签名等技术实现，不提供、不存储、不传播任何视频内容。应用内置的第三方 CMS 接口地址仅为技术演示与学习用途，其内容的合法性由对应源站自行负责。
 
-电视（旧版客户端）「设置」中填 `http://宿主机局域网IP:8787`，不要填容器内部地址或 `127.0.0.1`。无口令时可在宿主机用 `curl --fail http://127.0.0.1:8787/health` 自查。镜像以非 root 用户运行；Compose 配置另启用只读文件系统、自动重启与日志轮转。服务按家庭网络设计，公网或跨家庭访问需另行设计访问控制。完整部署、更新与排查见 [Docker 部署指南](docs/DOCKER.md)。
+## 许可证
 
-镜像由 [verify-publish.yml](.github/workflows/verify-publish.yml) 在推送 `v*` 版本标签时构建发布，推送与 PR 时执行类型检查、测试、Compose 校验及 AMD64 / ARM64 构建启动检查；认证使用临时 `GITHUB_TOKEN`，第三方 Actions 固定提交 SHA。
-
-## 旧版 React Native 客户端（保留资料）
-
-首版客户端 v0.1.1（React Native TV + TypeScript）需搭配上面的 bridge 服务使用：**[v0.1.1 APK、源码及 Docker 部署包](https://github.com/jycao2/hongguoTV/releases/tag/v0.1.1)**。功能包括推荐、搜索、分页、详情选集、自动连播、本地收藏、断点续播与口令鉴权。
-
-源码方式运行服务（Node.js 22+）：
-
-```sh
-npm ci
-npm run bridge -- --lan
-# 或只部署服务：npm ci --prefix server && node server/index.mjs --lan
-```
-
-服务默认仅监听 `127.0.0.1`，`--lan` 显式开放家庭网络访问；可通过 `BRIDGE_TOKEN` 设置访问口令。开发与验证：
-
-```sh
-npm run typecheck
-npm test
-npm run probe        # 访问真实平台，结果写入 outputs/probe.json
-npm run build:android  # 需 JDK 17、Android SDK 36、Build Tools 36.0.0、NDK 27.1.12297006
-```
-
-## 项目资料
-
-- [Docker 部署](docs/DOCKER.md)
-- [接口说明](docs/API.md)
-- [v0.1.1 交付与验收](docs/RELEASE_0.1.1.md)
-- [首版交付与验收](docs/FIRST_RELEASE.md)
-- [项目状态](docs/PROJECT_STATUS.md)
-- [React Native 与多平台架构](docs/ARCHITECTURE.md)
-- [接口研究](docs/research/2026-09-21-hongguo-open-source.md)
-
-## 来源与许可证
-
-项目与红果官方无关联。内容接口为非官方实现，平台变化可能导致失效；错误会明确显示，不会替换为虚假内容。
-
-Node 服务使用固定提交的 `drpys` 源，保留原文件、GPL-3.0 许可证和来源记录，见 [第三方说明](server/vendor/NOTICE.md)。Android / tvOS 工程骨架源于 MIT 许可的 RN TV 模板。本项目代码按 [GPL-3.0](LICENSE) 提供，第三方部分保留各自许可。
+本项目代码按 [GPL-3.0](LICENSE) 提供，第三方部分保留各自许可（见 `kotlin-tv/NOTICE.md`）。
