@@ -135,11 +135,18 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if(state == Player.STATE_READY) { playLoading?.visibility = View.GONE; updatePlayUi() }
-            if(state == Player.STATE_ENDED) showOverlay()
+            if(state == Player.STATE_ENDED) { keepScreenOn(false); showOverlay() }
         }
+        override fun onIsPlayingChanged(isPlaying: Boolean) { keepScreenOn(isPlaying) }
         override fun onPlayerError(error: PlaybackException) {
             playErrorText?.text = "该集播放失败，可换一集或切换线路"; showOverlay()
         }
+    }
+
+    /** 播放期间保持屏幕常亮，避免电视空闲十几分钟后弹出系统屏保；暂停/结束/退出即释放。 */
+    private fun keepScreenOn(on: Boolean) {
+        if(on) activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // ================= 生命周期 =================
@@ -211,7 +218,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
-    fun pause() { player?.pause(); saveProgressNow() }
+    fun pause() { player?.pause(); saveProgressNow(); keepScreenOn(false) }
 
     fun stop() {
         saveProgressNow()
@@ -1862,6 +1869,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         playerHost = null
         player?.let { instance -> instance.removeListener(playerListener); instance.release() }
         player = null
+        keepScreenOn(false)
     }
 
     private fun detachPlayerViews() {
