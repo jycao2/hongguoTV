@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.hongguotv.core.PhoneField
 import com.hongguotv.core.PhoneForm
+import com.hongguotv.core.PlaybackSpeed
 import com.hongguotv.core.ThirdSourceConfig
 import java.util.concurrent.Executors
 
@@ -200,13 +201,22 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(mode == Mode.HISTORY && event.keyCode == KeyEvent.KEYCODE_MENU) { deleteFocusedHistory(); return true }
         if(mode != Mode.PLAY || player == null) return false
         val key = event.keyCode
-        val focusInOverlay = overlayButtons.any { it.hasFocus() }
-        if(overlayVisible && focusInOverlay) return false   // 控制层内走原生焦点导航
+        val focusInOverlay = overlayButtons.any { it.hasFocus() } || activity.currentFocus?.tag == "seekbar"
+        if(overlayVisible && focusInOverlay) {
+            // 焦点在进度条上时，左右键直接拖动进度；按住连发会按重复次数加速
+            if(activity.currentFocus?.tag == "seekbar") {
+                when(key) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-seekStep(event.repeatCount)); return true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(seekStep(event.repeatCount)); return true }
+                }
+            }
+            return false   // 控制层内其余按键走原生焦点导航
+        }
         return when(key) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER ->
                 if(overlayVisible) { togglePlay(); true } else { showOverlay(); true }
-            KeyEvent.KEYCODE_DPAD_LEFT -> if(overlayVisible) false else { seek(-10_000L); true }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> if(overlayVisible) false else { seek(10_000L); true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> if(overlayVisible) false else { seek(-seekStep(event.repeatCount)); true }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if(overlayVisible) false else { seek(seekStep(event.repeatCount)); true }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU -> {
                 if(!overlayVisible) { showOverlay(); true } else false
             }
@@ -1733,6 +1743,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         instance.addListener(playerListener)
         instance.setMediaItem(MediaItem.fromUri(episode.url), startMs.coerceAtLeast(0L))
         instance.prepare()
+        instance.setPlaybackSpeed(store.playbackSpeed)
         instance.playWhenReady = autoplay
 
         player = instance; playerHost = host
@@ -1756,10 +1767,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val track = FrameLayout(activity).apply { setBackgroundColor(Color.argb(70, 255, 255, 255)) }
         val fill = View(activity).apply { setBackgroundColor(TvStyle.accent) }
         track.addView(fill, FrameLayout.LayoutParams(0, -1))
-        bottom.addView(track, lp(-1, dp(5)))
+        // 进度条本身可聚焦：聚焦后左右键直接拖动进度，按住连发时步长递增
+        val seekBar = FrameLayout(activity).apply {
+            isFocusable = true; tag = "seekbar"; setPadding(dp(2), dp(6), dp(2), dp(6)); focusStyle(this)
+        }
+        seekBar.addView(track, FrameLayout.LayoutParams(-1, dp(5), Gravity.CENTER_VERTICAL))
+        bottom.addView(seekBar, lp(-1, -2))
         val controls = row().apply { setPadding(0, dp(8), 0, 0) }
         overlayButtons.clear()
         val prev = addButton(controls, "上一集") { jumpEpisode(-1) }
+        val rewind = addButton(controls, "快退") { seek(-10_000L) }
+        val forward = addButton(controls, "快进") { seek(10_000L) }
+        lateinit var speed: TextView
+        speed = addButton(controls, "倍速 ${PlaybackSpeed.label(store.playbackSpeed)}") { cycleSpeed(speed) }
         val next = addButton(controls, "下一集") { jumpEpisode(1) }
         val back = addButton(controls, "返回详情") { onBack() }
         val time = text("", 13f)
@@ -1768,12 +1788,36 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         bottom.visibility = View.GONE
         host.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         overlay = bottom; overlayTopView = topBar; progressFill = fill; progressTrackView = track; playTime = time
-        prev.nextFocusRightId = next.id; next.nextFocusLeftId = prev.id; next.nextFocusRightId = back.id; back.nextFocusLeftId = next.id
+        val chain = listOf(prev, rewind, forward, speed, next, back)
+        chain.forEachIndexed { index, view ->
+            view.nextFocusRightId = chain.getOrNull(index + 1)?.id ?: View.NO_ID
+            view.nextFocusLeftId = chain.getOrNull(index - 1)?.id ?: View.NO_ID
+            view.nextFocusUpId = seekBar.id
+        }
+        seekBar.nextFocusDownId = prev.id
+        seekBar.nextFocusLeftId = seekBar.id
+        seekBar.nextFocusRightId = seekBar.id
+        overlayButtons += chain
     }
+
+    /** 倍速循环切换并记忆：0.75× → 1× → 1.25× → 1.5× → 1.75× → 2×。 */
+    private fun cycleSpeed(button: TextView) {
+        val options = PlaybackSpeed.options
+        val index = options.indexOf(store.playbackSpeed).takeIf { it >= 0 } ?: options.indexOf(1f)
+        val next = options[(index + 1) % options.size]
+        store.playbackSpeed = next
+        player?.setPlaybackSpeed(next)
+        button.text = "倍速 ${PlaybackSpeed.label(next)}"
+        Toast.makeText(activity, "播放速度 ${PlaybackSpeed.label(next)}", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 快进/快退步长：单击 10 秒，按住时按重复次数递增到 60 秒。 */
+    private fun seekStep(repeat: Int) = 10_000L + repeat.coerceIn(0, 10) * 5_000L
 
     private val overlayButtons = mutableListOf<TextView>()
     private var overlayTopView: View? = null
     private var progressTrackView: View? = null
+    private var lastSeekAt = 0L
 
     private fun showOverlay() {
         overlayVisible = true
@@ -1801,6 +1845,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun seek(deltaMs: Long) {
         val instance = player ?: return
+        // 按住连发会每秒产生多次按键：限制定位频率，避免大量 seek 把播放器拖死
+        val now = android.os.SystemClock.uptimeMillis()
+        if(now - lastSeekAt < 120L) return
+        lastSeekAt = now
         val target = (instance.currentPosition + deltaMs).coerceIn(0L, (instance.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
         instance.seekTo(target)
         if(!overlayVisible) showOverlay() else { main.removeCallbacks(hideOverlayRun); main.postDelayed(hideOverlayRun, 10_000L) }

@@ -4,6 +4,7 @@ package com.hongguotv.nativeapp
 import android.content.Context
 import com.hongguotv.core.BackupThirdHistory
 import com.hongguotv.core.BackupThirdSource
+import com.hongguotv.core.PlaybackSpeed
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -79,6 +80,11 @@ class ThirdStore(context: Context) {
     }
 
     fun clearSearches() { prefs.edit().remove(KEY_SEARCHES).apply() }
+
+    /** 片源播放器的倍速偏好：仅本机记忆，默认 1×。 */
+    var playbackSpeed: Float
+        get() = PlaybackSpeed.normalize(prefs.getFloat(KEY_SPEED, 1f))
+        set(value) { prefs.edit().putFloat(KEY_SPEED, PlaybackSpeed.normalize(value)).apply() }
 
     /** 观看历史：最近在前，最多 100 条；损坏或缺失时静默返回空。 */
     fun history(): List<ThirdHistoryEntry> = try {
@@ -176,6 +182,7 @@ class ThirdStore(context: Context) {
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_CURRENT = "current"
         private const val KEY_SEARCHES = "searches"
+        private const val KEY_SPEED = "playbackSpeed"
         private const val KEY_HISTORY = "watchHistory"
         private const val MAX_HISTORY = 100
     }
