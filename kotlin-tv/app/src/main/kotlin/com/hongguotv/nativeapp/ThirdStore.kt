@@ -19,6 +19,9 @@ data class ThirdHistoryEntry(
         .put("positionMs", positionMs).put("durationMs", durationMs).put("updatedAt", updatedAt).put("completed", completed)
 }
 
+/** 片源播放器的片头/片尾跳过设置（秒，0 表示关闭）。 */
+data class ThirdSkipMark(val intro: Int, val outro: Int)
+
 /** 三方片源独立持久化：源列表与播放进度存独立 SharedPreferences（third-sources-v1）。
  *  不进 Library、不进收藏/历史/继续观看；源配置与观看历史随主备份一起迁移，播放进度与搜索历史仍只在本机。 */
 class ThirdStore(context: Context) {
@@ -85,6 +88,41 @@ class ThirdStore(context: Context) {
     var playbackSpeed: Float
         get() = PlaybackSpeed.normalize(prefs.getFloat(KEY_SPEED, 1f))
         set(value) { prefs.edit().putFloat(KEY_SPEED, PlaybackSpeed.normalize(value)).apply() }
+
+    /** 片源播放器的画面比例偏好：0 适应 / 1 拉伸 / 2 裁剪，仅本机记忆。 */
+    var resizeMode: Int
+        get() = prefs.getInt(KEY_RESIZE, 0).coerceIn(0, 2)
+        set(value) { prefs.edit().putInt(KEY_RESIZE, value.coerceIn(0, 2)).apply() }
+
+    /** 片头/片尾跳过秒数：按「源接口 + 影片」记忆，仅本机，损坏时静默忽略。 */
+    fun skipMark(key: String): ThirdSkipMark? = try {
+        val raw = prefs.getString(KEY_SKIP, null) ?: return null
+        JSONObject(raw).optJSONObject(key)?.let {
+            ThirdSkipMark(it.optInt("intro", 0).coerceIn(0, MAX_SKIP_SECONDS), it.optInt("outro", 0).coerceIn(0, MAX_SKIP_SECONDS))
+        }
+    } catch (_: Exception) { null }
+
+    fun setSkipMark(key: String, mark: ThirdSkipMark?) {
+        runCatching {
+            val next = LinkedHashMap<String, ThirdSkipMark>()
+            (prefs.getString(KEY_SKIP, null)?.let { raw ->
+                JSONObject(raw).let { obj ->
+                    obj.keys().asSequence().forEach { id ->
+                        obj.optJSONObject(id)?.let {
+                            next[id] = ThirdSkipMark(it.optInt("intro", 0).coerceIn(0, MAX_SKIP_SECONDS),
+                                it.optInt("outro", 0).coerceIn(0, MAX_SKIP_SECONDS))
+                        }
+                    }
+                }
+            })
+            if(mark == null || (mark.intro <= 0 && mark.outro <= 0)) next.remove(key)
+            else next[key] = ThirdSkipMark(mark.intro.coerceIn(0, MAX_SKIP_SECONDS), mark.outro.coerceIn(0, MAX_SKIP_SECONDS))
+            while(next.size > MAX_SKIP_MARKS) next.remove(next.keys.first())
+            val json = JSONObject()
+            next.forEach { (id, value) -> json.put(id, JSONObject().put("intro", value.intro).put("outro", value.outro)) }
+            prefs.edit().putString(KEY_SKIP, json.toString()).apply()
+        }
+    }
 
     /** 观看历史：最近在前，最多 100 条；损坏或缺失时静默返回空。 */
     fun history(): List<ThirdHistoryEntry> = try {
@@ -183,8 +221,12 @@ class ThirdStore(context: Context) {
         private const val KEY_CURRENT = "current"
         private const val KEY_SEARCHES = "searches"
         private const val KEY_SPEED = "playbackSpeed"
+        private const val KEY_RESIZE = "resizeMode"
+        private const val KEY_SKIP = "skipMarks"
         private const val KEY_HISTORY = "watchHistory"
         private const val MAX_HISTORY = 100
+        private const val MAX_SKIP_SECONDS = 600
+        private const val MAX_SKIP_MARKS = 200
     }
 }
 

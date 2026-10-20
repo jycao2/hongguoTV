@@ -24,6 +24,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -118,12 +120,21 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     // ---- 播放态 ----
     private var player: ExoPlayer? = null
     private var playerHost: FrameLayout? = null
+    private var playerView: PlayerView? = null
     private var playLoading: TextView? = null
     private var playErrorText: TextView? = null
     private var overlay: View? = null
     private var progressFill: View? = null
+    private var progressThumb: View? = null
+    private var progressBubble: TextView? = null
+    private var seekBarView: View? = null
     private var playTime: TextView? = null
     private var overlayVisible = false
+    // 平滑快进快退：按住左右键时虚拟位置按节奏推进并实时渲染关键帧预览，松开才精确定位
+    private var scrubbing = false
+    private var scrubDirection = 0
+    private var scrubPositionMs = 0L
+    private var scrubStartAt = 0L
     private var playGroup = 0
     private var playEpisode = 0
     private var pendingStartMs = 0L
@@ -133,6 +144,20 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private val hideOverlayRun = Runnable { hideOverlay() }
     private val saveRun = Runnable { saveProgressNow(); scheduleSave() }
     private val uiTick = Runnable { updatePlayUi() }
+    /** 平滑快进快退节奏器：步长随按住时长爬坡（起步 5 秒、每秒加 10 秒、封顶 60 秒）。 */
+    private val scrubTick = object : Runnable {
+        override fun run() {
+            val instance = player
+            if(!scrubbing || instance == null) return
+            val heldMs = android.os.SystemClock.uptimeMillis() - scrubStartAt
+            val step = (5_000L + heldMs / 1_000L * 10_000L).coerceAtMost(60_000L)
+            val duration = instance.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+            scrubPositionMs = (scrubPositionMs + scrubDirection * step).coerceIn(0L, duration)
+            instance.seekTo(scrubPositionMs)
+            updatePlayUi()
+            main.postDelayed(this, 180L)
+        }
+    }
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if(state == Player.STATE_READY) { playLoading?.visibility = View.GONE; updatePlayUi() }
@@ -195,28 +220,36 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     /** 播放页按键接管；浏览态只接管网格上下翻行（RecyclerView 在固定高度容器里不会为焦点自动滚动）。 */
     fun onKey(event: KeyEvent): Boolean {
-        if(event.action != KeyEvent.ACTION_DOWN) return false
-        if((mode == Mode.BROWSE || mode == Mode.HISTORY) && browseGridKey(event.keyCode)) return true
+        if(event.action == KeyEvent.ACTION_DOWN && (mode == Mode.BROWSE || mode == Mode.HISTORY) && browseGridKey(event.keyCode)) return true
         // 历史页：菜单键删除当前聚焦的记录（遥控器长按行为不一致，这里用显式按键）
-        if(mode == Mode.HISTORY && event.keyCode == KeyEvent.KEYCODE_MENU) { deleteFocusedHistory(); return true }
+        if(event.action == KeyEvent.ACTION_DOWN && mode == Mode.HISTORY && event.keyCode == KeyEvent.KEYCODE_MENU) { deleteFocusedHistory(); return true }
         if(mode != Mode.PLAY || player == null) return false
         val key = event.keyCode
+        // 平滑快进快退：覆盖层未展开或焦点在进度条上时，按住左右键持续预览，松开落点
+        if(key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            val direction = if(key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+            if(event.action == KeyEvent.ACTION_UP) {
+                if(scrubbing) { endScrub(); return true }
+                return false
+            }
+            if(event.action != KeyEvent.ACTION_DOWN) return false
+            val onSeekBar = activity.currentFocus?.tag == "seekbar"
+            if(!overlayVisible || onSeekBar) {
+                if(event.repeatCount == 0) startScrub(direction)
+                return true
+            }
+            if(scrubbing) endScrub()
+            return false   // 覆盖层按钮焦点上：左右键走原生焦点导航
+        }
+        if(event.action != KeyEvent.ACTION_DOWN) return false
+        if(scrubbing) endScrub()
         val focusInOverlay = overlayButtons.any { it.hasFocus() } || activity.currentFocus?.tag == "seekbar"
         if(overlayVisible && focusInOverlay) {
-            // 焦点在进度条上时，左右键直接拖动进度；按住连发会按重复次数加速
-            if(activity.currentFocus?.tag == "seekbar") {
-                when(key) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-seekStep(event.repeatCount)); return true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(seekStep(event.repeatCount)); return true }
-                }
-            }
             return false   // 控制层内其余按键走原生焦点导航
         }
         return when(key) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER ->
                 if(overlayVisible) { togglePlay(); true } else { showOverlay(); true }
-            KeyEvent.KEYCODE_DPAD_LEFT -> if(overlayVisible) false else { seek(-seekStep(event.repeatCount)); true }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> if(overlayVisible) false else { seek(seekStep(event.repeatCount)); true }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU -> {
                 if(!overlayVisible) { showOverlay(); true } else false
             }
@@ -1723,12 +1756,18 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun attachPlayer(startMs: Long, autoplay: Boolean) {
         detachPlayerViews()
+        // 换集/重建时先停掉进行中的快进预览，并释放可能残存的旧实例，避免音频串音
+        scrubbing = false; main.removeCallbacks(scrubTick)
+        player?.let { stale -> stale.removeListener(playerListener); stale.release() }
+        player = null
         val data = detail ?: return
         val group = data.groups.getOrNull(playGroup) ?: return
         val episode = group.second.getOrNull(playEpisode) ?: return
-        val host = FrameLayout(activity).apply { isFocusable = false }
-        val playerView = PlayerView(activity).apply { useController = false }
-        host.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        // 不透明黑底：盖住下层目录导航栏，避免 SurfaceView 打孔区透出导航
+        val host = FrameLayout(activity).apply { isFocusable = false; setBackgroundColor(Color.BLACK) }
+        val view = PlayerView(activity).apply { useController = false; resizeMode = resizeModeValue(store.resizeMode) }
+        playerView = view
+        host.addView(view, FrameLayout.LayoutParams(-1, -1))
         val loading = text("正在加载…", 15f, muted).apply { gravity = Gravity.CENTER }
         val errorView = text("", 14f, TvStyle.accent).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) }
         val center = column().apply { gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -1739,11 +1778,20 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val instance = ExoPlayer.Builder(activity).build()
         instance.setAudioAttributes(AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
-        playerView.player = instance
+        view.player = instance
         instance.addListener(playerListener)
         instance.setMediaItem(MediaItem.fromUri(episode.url), startMs.coerceAtLeast(0L))
         instance.prepare()
         instance.setPlaybackSpeed(store.playbackSpeed)
+        // 从头播放时应用片头跳过；续播不动，避免把用户拽回已看位置
+        val startMark = store.skipMark(skipKey(data.video.id))
+        if(startMs <= 0L && (startMark?.intro ?: 0) > 0) {
+            instance.seekTo(startMark!!.intro * 1000L)
+            Toast.makeText(activity, "已跳过片头 ${startMark.intro} 秒", Toast.LENGTH_SHORT).show()
+        }
+        outroTriggered = false
+        main.removeCallbacks(outroTick)
+        main.postDelayed(outroTick, 1_000L)
         instance.playWhenReady = autoplay
 
         player = instance; playerHost = host
@@ -1764,14 +1812,34 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
         // 底部控制层：上一集 / 下一集 / 返回详情 + 进度条 + 时间
         val bottom = column().apply { setBackgroundColor(Color.argb(170, 0, 0, 0)); setPadding(dp(14), dp(10), dp(14), dp(12)) }
-        val track = FrameLayout(activity).apply { setBackgroundColor(Color.argb(70, 255, 255, 255)) }
-        val fill = View(activity).apply { setBackgroundColor(TvStyle.accent) }
-        track.addView(fill, FrameLayout.LayoutParams(0, -1))
-        // 进度条本身可聚焦：聚焦后左右键直接拖动进度，按住连发时步长递增
-        val seekBar = FrameLayout(activity).apply {
-            isFocusable = true; tag = "seekbar"; setPadding(dp(2), dp(6), dp(2), dp(6)); focusStyle(this)
+        // 进度条聚焦时不做整框高亮：轨道加粗、端点出现滑块圆点、上方浮出时间气泡
+        val track = FrameLayout(activity).apply {
+            background = rounded(Color.argb(70, 255, 255, 255), radius = 6); clipChildren = false
         }
-        seekBar.addView(track, FrameLayout.LayoutParams(-1, dp(5), Gravity.CENTER_VERTICAL))
+        val fill = View(activity).apply { background = rounded(TvStyle.accent, radius = 6) }
+        track.addView(fill, FrameLayout.LayoutParams(0, -1))
+        val thumb = View(activity).apply {
+            background = rounded(TvStyle.accent, Color.WHITE, 12); visibility = View.GONE
+        }
+        track.addView(thumb, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
+        // 气泡用 INVISIBLE 而非 GONE：占位不变，聚焦/失焦时进度条高度不跳动
+        val bubble = text("", 13f).apply {
+            background = rounded(Color.argb(210, 0, 0, 0), radius = 8)
+            setPadding(dp(10), dp(4), dp(10), dp(4)); visibility = View.INVISIBLE
+        }
+        // 进度条本身可聚焦：聚焦后左右键按住平滑拖动进度
+        val seekBar = FrameLayout(activity).apply {
+            id = View.generateViewId(); isFocusable = true; tag = "seekbar"; setPadding(dp(2), dp(6), dp(2), dp(6))
+        }
+        seekBar.addView(bubble, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        seekBar.addView(track, FrameLayout.LayoutParams(-1, dp(4), Gravity.CENTER_VERTICAL))
+        seekBar.setOnFocusChangeListener { _, focused ->
+            (track.layoutParams as FrameLayout.LayoutParams).height = dp(if(focused) 8 else 4)
+            track.requestLayout()
+            thumb.visibility = if(focused) View.VISIBLE else View.GONE
+            bubble.visibility = if(focused) View.VISIBLE else View.INVISIBLE
+            if(focused) updatePlayUi()
+        }
         bottom.addView(seekBar, lp(-1, -2))
         val controls = row().apply { setPadding(0, dp(8), 0, 0) }
         overlayButtons.clear()
@@ -1780,6 +1848,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val forward = addButton(controls, "快进") { seek(10_000L) }
         lateinit var speed: TextView
         speed = addButton(controls, "倍速 ${PlaybackSpeed.label(store.playbackSpeed)}") { cycleSpeed(speed) }
+        lateinit var ratio: TextView
+        ratio = addButton(controls, "比例 ${resizeModeLabel(store.resizeMode)}") { cycleResize(ratio) }
+        lateinit var skip: TextView
+        skip = addButton(controls, "跳过") { showSkipDialog(skip) }
         val next = addButton(controls, "下一集") { jumpEpisode(1) }
         val back = addButton(controls, "返回详情") { onBack() }
         val time = text("", 13f)
@@ -1787,8 +1859,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         bottom.addView(controls)
         bottom.visibility = View.GONE
         host.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-        overlay = bottom; overlayTopView = topBar; progressFill = fill; progressTrackView = track; playTime = time
-        val chain = listOf(prev, rewind, forward, speed, next, back)
+        overlay = bottom; overlayTopView = topBar; progressFill = fill; progressTrackView = track
+        progressThumb = thumb; progressBubble = bubble; seekBarView = seekBar; playTime = time
+        val chain = listOf(prev, rewind, forward, speed, ratio, skip, next, back)
         chain.forEachIndexed { index, view ->
             view.nextFocusRightId = chain.getOrNull(index + 1)?.id ?: View.NO_ID
             view.nextFocusLeftId = chain.getOrNull(index - 1)?.id ?: View.NO_ID
@@ -1811,23 +1884,146 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         Toast.makeText(activity, "播放速度 ${PlaybackSpeed.label(next)}", Toast.LENGTH_SHORT).show()
     }
 
-    /** 快进/快退步长：单击 10 秒，按住时按重复次数递增到 60 秒。 */
-    private fun seekStep(repeat: Int) = 10_000L + repeat.coerceIn(0, 10) * 5_000L
+    /** 画面比例循环：适应(原始比例) → 拉伸(满屏) → 裁剪(去黑边)，本机记忆。 */
+    private fun cycleResize(button: TextView) {
+        val next = (store.resizeMode + 1) % 3
+        store.resizeMode = next
+        playerView?.resizeMode = resizeModeValue(next)
+        button.text = "比例 ${resizeModeLabel(next)}"
+        Toast.makeText(activity, "画面比例：${resizeModeLabel(next)}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun resizeModeLabel(mode: Int) = when(mode) { 1 -> "拉伸"; 2 -> "裁剪"; else -> "适应" }
+    private fun resizeModeValue(mode: Int) = when(mode) {
+        1 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+        2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
+    /** 开始平滑快进/快退：暂停声音、只跳关键帧做画面预览，由节奏器按爬坡步长推进。 */
+    private fun startScrub(direction: Int) {
+        val instance = player ?: return
+        if(scrubbing) {
+            if(scrubDirection != direction) { scrubDirection = direction; scrubStartAt = android.os.SystemClock.uptimeMillis() }
+            return
+        }
+        scrubbing = true
+        scrubDirection = direction
+        scrubPositionMs = instance.currentPosition.coerceAtLeast(0L)
+        scrubStartAt = android.os.SystemClock.uptimeMillis()
+        instance.pause()
+        // 预览阶段只定位关键帧：雷鸟鹏7这类低端电视上解码开销最小，画面跟手
+        instance.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        if(!overlayVisible) showOverlay(focusButtons = false)
+        main.removeCallbacks(hideOverlayRun)   // 按住期间不收起控制层
+        main.postDelayed(scrubTick, 180L)
+    }
+
+    /** 松开按键：回到精确定位落点，恢复播放与控制层自动收起。 */
+    private fun endScrub() {
+        if(!scrubbing) return
+        scrubbing = false
+        main.removeCallbacks(scrubTick)
+        val instance = player ?: return
+        instance.setSeekParameters(SeekParameters.DEFAULT)
+        val duration = instance.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+        instance.seekTo(scrubPositionMs.coerceIn(0L, duration))
+        // 松开即恢复播放：预览前的暂停只是实现细节，用户预期松开继续看
+        instance.play()
+        // 焦点放回进度条，方便继续微调或下移到按钮
+        seekBarView?.requestFocus()
+        main.removeCallbacks(hideOverlayRun); main.postDelayed(hideOverlayRun, 6_000L)
+        updatePlayUi()
+    }
+
+    /** 片头片尾设置的存储键：源接口 + 影片，换源后各自独立。 */
+    private fun skipKey(videoId: String) = currentSource()?.api.orEmpty() + "|" + videoId
+
+    private fun showSkipDialog(anchor: View) {
+        val videoId = detail?.video?.id ?: return
+        val key = skipKey(videoId)
+        val mark = store.skipMark(key) ?: ThirdSkipMark(0, 0)
+        tvTools.choose("跳过片头片尾 · 仅当前影片", listOf(
+            "片头  ${if(mark.intro > 0) "${mark.intro} 秒" else "关闭"}",
+            "片尾  ${if(mark.outro > 0) "${mark.outro} 秒" else "关闭"}",
+            "关闭全部"
+        ), anchor, { choice ->
+            when(choice) {
+                0 -> pickSkipSeconds(anchor, "跳过片头") { seconds ->
+                    store.setSkipMark(key, ThirdSkipMark(seconds, mark.outro))
+                    if(seconds > 0) skipToIntro(seconds)
+                }
+                1 -> pickSkipSeconds(anchor, "跳过片尾") { seconds ->
+                    store.setSkipMark(key, ThirdSkipMark(mark.intro, seconds))
+                    outroTriggered = false
+                    Toast.makeText(activity, if(seconds > 0) "片尾将跳过最后 $seconds 秒" else "已关闭片尾跳过", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    store.setSkipMark(key, null)
+                    Toast.makeText(activity, "已关闭片头片尾跳过", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
+    }
+
+    private fun pickSkipSeconds(anchor: View, title: String, onPick: (Int) -> Unit) {
+        val options = listOf(0, 30, 60, 90, 120)
+        tvTools.choose("$title · 仅当前影片", options.map { if(it == 0) "关闭" else "$it 秒" }, anchor, { index ->
+            onPick(options.getOrElse(index) { 0 })
+        })
+    }
+
+    /** 设置片头后立刻生效：当前播放位置还在片头范围内时直接跳到新位置。 */
+    private fun skipToIntro(seconds: Int) {
+        val instance = player ?: return
+        val target = seconds * 1000L
+        if(instance.currentPosition < target) instance.seekTo(target)
+        Toast.makeText(activity, "已跳过片头 $seconds 秒", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 每秒检查一次片尾：到达片尾窗口且正在播放时自动跳下一集，只触发一次。 */
+    private fun checkOutro() {
+        if(outroTriggered) return
+        val instance = player ?: return
+        if(!instance.isPlaying) return
+        val data = detail ?: return
+        val mark = store.skipMark(skipKey(data.video.id)) ?: return
+        if(mark.outro <= 0) return
+        val duration = instance.duration
+        if(duration <= 0 || instance.currentPosition < duration - mark.outro * 1000L) return
+        outroTriggered = true
+        val episodes = data.groups.getOrNull(playGroup)?.second ?: return
+        if(playEpisode + 1 < episodes.size) {
+            Toast.makeText(activity, "已跳过片尾，播放下一集", Toast.LENGTH_SHORT).show()
+            jumpEpisode(1)
+        } else showOverlay()
+    }
 
     private val overlayButtons = mutableListOf<TextView>()
     private var overlayTopView: View? = null
     private var progressTrackView: View? = null
     private var lastSeekAt = 0L
+    /** 片尾只自动跳一次，避免用户在片尾附近来回拖动时反复跳集。 */
+    private var outroTriggered = false
+    private val outroTick: Runnable = object : Runnable {
+        override fun run() {
+            checkOutro()
+            if(player != null) main.postDelayed(this, 1_000L)
+        }
+    }
 
-    private fun showOverlay() {
+    private fun showOverlay(focusButtons: Boolean = true) {
         overlayVisible = true
         overlayTopView?.visibility = View.VISIBLE
         overlay?.visibility = View.VISIBLE
         updatePlayUi()
         main.removeCallbacks(hideOverlayRun)
         main.postDelayed(hideOverlayRun, 10_000L)
-        val focusTarget = overlayButtons.firstOrNull { it.text == "上一集" && playEpisode > 0 } ?: overlayButtons.firstOrNull()
-        focusTarget?.requestFocus()
+        // 快进预览期间不抢焦点：焦点跳到按钮会中断对左右键的拦截
+        if(focusButtons) {
+            val focusTarget = overlayButtons.firstOrNull { it.text == "上一集" && playEpisode > 0 } ?: overlayButtons.firstOrNull()
+            focusTarget?.requestFocus()
+        }
     }
 
     private fun hideOverlay() {
@@ -1865,14 +2061,28 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun updatePlayUi() {
         val instance = player ?: return
         val duration = instance.duration.takeIf { it > 0 } ?: 0L
-        val position = instance.currentPosition.coerceIn(0L, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
-        playTime?.text = "${formatTime(position)} / ${if(duration > 0) formatTime(duration) else "直播中"}"
+        // 快进预览期间以虚拟位置为准：播放器实际位置异步追赶，直接读会来回跳
+        val rawPosition = if(scrubbing) scrubPositionMs else instance.currentPosition
+        val position = rawPosition.coerceIn(0L, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
+        val timeText = "${formatTime(position)} / ${if(duration > 0) formatTime(duration) else "直播中"}"
+        playTime?.text = timeText
+        progressBubble?.text = timeText
         val track = progressTrackView
         val fill = progressFill
-        if(track != null && fill != null && track.width > 0) {
+        if(track != null && track.width > 0) {
             val ratio = if(duration > 0) position.toDouble() / duration else 0.0
-            fill.layoutParams = FrameLayout.LayoutParams((track.width * ratio).toInt().coerceAtLeast(1), -1)
-            fill.requestLayout()
+            if(fill != null) {
+                fill.layoutParams = FrameLayout.LayoutParams((track.width * ratio).toInt().coerceAtLeast(1), -1)
+                fill.requestLayout()
+            }
+            progressThumb?.let { thumb ->
+                val size = thumb.layoutParams.width
+                if(size > 0) {
+                    val thumbLp = thumb.layoutParams as FrameLayout.LayoutParams
+                    thumbLp.leftMargin = ((track.width * ratio).toInt() - size / 2).coerceIn(0, (track.width - size).coerceAtLeast(0))
+                    thumb.layoutParams = thumbLp
+                }
+            }
         }
         if(overlayVisible) { main.removeCallbacks(uiTick); main.postDelayed(uiTick, 500) }
     }
@@ -1909,9 +2119,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun releasePlayback() {
-        main.removeCallbacks(saveRun); main.removeCallbacks(hideOverlayRun); main.removeCallbacks(uiTick)
+        main.removeCallbacks(saveRun); main.removeCallbacks(hideOverlayRun); main.removeCallbacks(uiTick); main.removeCallbacks(outroTick)
+        scrubbing = false; main.removeCallbacks(scrubTick)
+        outroTriggered = false
         overlayVisible = false; overlayButtons.clear()
         overlay = null; overlayTopView = null; progressFill = null; progressTrackView = null; playTime = null
+        progressThumb = null; progressBubble = null; seekBarView = null; playerView = null
         playLoading = null; playErrorText = null
         playerHost?.let { host -> (host.parent as? FrameLayout)?.removeView(host) }
         playerHost = null
