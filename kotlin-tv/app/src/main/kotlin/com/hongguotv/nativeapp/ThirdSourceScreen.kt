@@ -25,6 +25,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
@@ -37,6 +38,8 @@ import java.util.concurrent.Executors
 
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */
+// 播放器用到 media3 未稳定 API（PlayerView/AspectRatioFrameLayout/SeekParameters），整类显式接受
+@androidx.annotation.OptIn(UnstableApi::class)
 class ThirdSourceScreen(private val activity: Activity, private val rebuild: () -> Unit, private val backupRequest: () -> Unit = {}) {
     private enum class Mode { BROWSE, SEARCH, SOURCES, DETAIL, PLAY, HISTORY }
     private enum class Dot { RUNNING, OK, DEAD }
