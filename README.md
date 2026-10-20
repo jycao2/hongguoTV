@@ -17,9 +17,10 @@
 
 ## 工程结构
 
-- `kotlin-tv/`：当前唯一维护的客户端工程（Kotlin + Android 原生 View + Media3），单测、构建与发布说明见其 README
+- `kotlin-tv/`：客户端工程（Kotlin + Android 原生 View + Media3），单测、构建与发布说明见其 README
+- `scripts/`：正式包构建与发布脚本
+- `deploy/`：匿名装机统计的云函数部署
 - `docs/`：接口研究、部署与历史交付资料
-- 根目录其余文件（`App.tsx`、`src/`、`server/`、`android/`、`ios/` 等）为首版 React Native 客户端的历史归档，已停止维护，仅作资料保留
 
 ## 隐私
 

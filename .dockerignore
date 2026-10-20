@@ -1,8 +1,0 @@
-.git
-node_modules
-outputs
-android
-ios
-server/node_modules
-server/.local
-.env*
