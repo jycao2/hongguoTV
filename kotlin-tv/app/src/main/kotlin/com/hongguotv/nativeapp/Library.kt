@@ -65,6 +65,11 @@ class Library(context: Context) {
                 synchronized(retiredWrites) { retiredWrites.removeAll(retired.toSet()) }
                 val values = prefs.all
                 val loaded = LibraryDisk.decode(values)
+                // 0.19.7 片源入口默认隐藏：升级后首次加载放开一次，之后尊重用户在设置里的手动选择
+                if(!values.containsKey("sourceEntryShownV2")) {
+                    loaded.settings = loaded.settings.copy(sourceHidden = false)
+                    prefs.edit().putBoolean("sourceEntryShownV2", true).putBoolean("sourceHidden", false).apply()
+                }
                 val now = System.currentTimeMillis()
                 val cached = mutableMapOf<ContentType, CatalogPage>()
                 val stamps = mutableMapOf<ContentType, Long>()
@@ -223,15 +228,18 @@ class Library(context: Context) {
         prefs.edit().putString("skipMarks", SkipMarks.encode(next)).apply()
     }
     fun snapshot() = state().snapshot(
-        // 三方源/观看历史来自独立存储，任何异常都退化为空列表，不能让备份整体失败
+        // 三方源/观看历史/收藏来自独立存储，任何异常都退化为空列表，不能让备份整体失败
         runCatching { thirdSourcesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
-        runCatching { thirdHistoryProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()))
+        runCatching { thirdHistoryProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
+        runCatching { thirdFavoritesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()))
 
-    /** 由 MainActivity 注入：三方片源配置与观看历史随主备份一起写入与恢复。 */
+    /** 由 MainActivity 注入：三方片源配置、观看历史与收藏随主备份一起写入与恢复。 */
     var thirdSourcesProvider: (() -> List<BackupThirdSource>)? = null
     var thirdSourcesRestore: ((List<BackupThirdSource>) -> Unit)? = null
     var thirdHistoryProvider: (() -> List<BackupThirdHistory>)? = null
     var thirdHistoryRestore: ((List<BackupThirdHistory>) -> Unit)? = null
+    var thirdFavoritesProvider: (() -> List<BackupThirdFavorite>)? = null
+    var thirdFavoritesRestore: ((List<BackupThirdFavorite>) -> Unit)? = null
 
     /** 三方片源变化后尽快落盘，避免只有片源变更时备份长期停留在旧内容。 */
     fun requestBackup() = scheduleLocalBackup()
@@ -240,9 +248,10 @@ class Library(context: Context) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
         index = LibraryIndex(merged, state().updates())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
-        // 三方源与观看历史各自合并：任一侧异常都只跳过该段，不影响其余记录恢复
+        // 三方源、观看历史与收藏各自合并：任一侧异常都只跳过该段，不影响其余记录恢复
         if(incoming.thirdSources.isNotEmpty()) runCatching { thirdSourcesRestore?.invoke(incoming.thirdSources) }
         if(incoming.thirdHistory.isNotEmpty()) runCatching { thirdHistoryRestore?.invoke(incoming.thirdHistory) }
+        if(incoming.thirdFavorites.isNotEmpty()) runCatching { thirdFavoritesRestore?.invoke(incoming.thirdFavorites) }
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },

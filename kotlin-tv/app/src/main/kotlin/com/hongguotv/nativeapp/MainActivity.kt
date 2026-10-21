@@ -284,6 +284,8 @@ class MainActivity: Activity() {
         library.thirdSourcesRestore={ thirdStore.mergeRestored(it) }
         library.thirdHistoryProvider={ thirdStore.backupHistory() }
         library.thirdHistoryRestore={ thirdStore.mergeHistory(it) }
+        library.thirdFavoritesProvider={ thirdStore.backupFavorites() }
+        library.thirdFavoritesRestore={ thirdStore.mergeFavorites(it) }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
@@ -566,6 +568,8 @@ class MainActivity: Activity() {
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false) {
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
+        // 片源入口隐藏时导航栏没有第 7 项，避免 nav[6] 越界
+        if(tab==6 && library.sourceHidden) tab=0
         // Never cache a new page number with the previous page's results while a request is pending.
         if(load) {
             val cached=if(tab==0 && page==1 && genre==null) library.cachedHome(library.contentType) else null
