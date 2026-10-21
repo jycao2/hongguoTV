@@ -3,6 +3,7 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
@@ -356,17 +357,41 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             body.addView(probeSummary)
         } else sourceButtons = emptyList()
 
-        // 搜索行
-        val searchRow = row()
-        val search = addButton(searchRow, "搜索片源") { openSearch() }
-        var clearRef: TextView? = null
-        if(searchWord != null) clearRef = addButton(searchRow, "重新搜索") { openSearch(clear = true) }
-        body.addView(searchRow)
-
-        // 分类条（搜索态隐藏，改为筛选条）
+        // 分类 + 搜索：浏览态合为一行（分类居左、搜索居右上），搜索态只保留「重新搜索」
         var categoryButtons: List<TextView> = emptyList()
         var filterButtons: List<View> = emptyList()
-        if(searchWord != null) {
+        var clearRef: TextView? = null
+        val searchRow = row()
+        val search: TextView
+        if(searchWord == null) {
+            // 分类入口：分类多时单行横滑要按很多次右键，改为弹窗网格一屏直选
+            val options = listOf(ThirdCategory("", "全部")) + categories
+            val currentName = options.firstOrNull { it.id.ifEmpty { null } == categoryId }?.name ?: "全部"
+            val categoryChip = text("分类：$currentName ▾", 14f, if(categoryId != null) TvStyle.accent else TvStyle.text).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                focusStyle(this, selected = categoryId != null)
+                setOnClickListener { showCategoryPicker() }
+            }
+            categoryButtons = listOf(categoryChip)
+            searchRow.addView(categoryChip, lp(-2, -2))
+            // 撑开左右两端：空白 View 若用 WRAP_CONTENT 会在 AT_MOST 下占满整行高度，这里固定 1dp
+            searchRow.addView(View(activity), lp(0, dp(1)).apply { weight = 1f })
+            search = text("搜索", 14f, TvStyle.text).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(8), dp(16), dp(8))
+                setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0)
+                compoundDrawablePadding = dp(6)
+                setCompoundDrawableTintList(ColorStateList.valueOf(TvStyle.accent))
+                focusStyle(this)
+                setOnClickListener { openSearch() }
+            }
+            searchRow.addView(search, lp(-2, -2))
+            body.addView(searchRow, lp(-1, -2))
+        } else {
+            search = addButton(searchRow, "重新搜索") { openSearch(clear = true) }
+            clearRef = search
+            body.addView(searchRow, lp(-1, -2))
             // 搜索态：结果统计 + 搜索范围 + 类型/年份/地区筛选
             searchStatusView = text(searchSummaryText(), 13f).apply { setPadding(0, dp(6), 0, dp(2)) }
             body.addView(searchStatusView)
@@ -403,18 +428,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             }
             filterCapsules.forEach { filterRow.addView(it, lp(-2, -2).apply { rightMargin = dp(8) }) }
             if(filterCapsules.isNotEmpty()) { body.addView(filterRow); filterButtons = filterCapsules }
-        } else {
-            // 分类入口：分类多时单行横滑要按很多次右键，改为弹窗网格一屏直选
-            val options = listOf(ThirdCategory("", "全部")) + categories
-            val currentName = options.firstOrNull { it.id.ifEmpty { null } == categoryId }?.name ?: "全部"
-            val categoryChip = text("分类：$currentName ▾", 14f, if(categoryId != null) TvStyle.accent else TvStyle.text).apply {
-                gravity = Gravity.CENTER
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                focusStyle(this, selected = categoryId != null)
-                setOnClickListener { showCategoryPicker() }
-            }
-            body.addView(categoryChip, lp(-2, -2).apply { topMargin = dp(2); bottomMargin = dp(2) })
-            categoryButtons = listOf(categoryChip)
         }
 
         // 结果区
@@ -460,20 +473,27 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             currentCapsule != null -> currentCapsule.id
             else -> capsuleViews.firstOrNull()?.id ?: search.id
         }
-        // 焦点接线：源胶囊/管理 ↓ → 搜索行 ↓ → 分类（搜索态为筛选项）↓ → 网格，逐层下移不被跳过
+        // 焦点接线：源胶囊 ↓ → 分类（搜索态为重新搜索）；管理 ↓ → 右上角搜索；分类/搜索 ↓ → 网格
+        val rowAbove = currentCapsule?.id ?: historyRef?.id ?: favoriteRef?.id ?: manage?.id ?: View.NO_ID
         gridRecycler?.id?.let { gridId ->
-            val secondRow = categoryButtons.firstOrNull()?.id ?: filterButtons.firstOrNull()?.id ?: gridId
-            capsuleViews.forEach { it.nextFocusDownId = search.id }
-            historyRef?.nextFocusDownId = search.id
-            favoriteRef?.nextFocusDownId = search.id
+            val browseRow = categoryButtons.firstOrNull()?.id
+            val secondRow = browseRow ?: filterButtons.firstOrNull()?.id ?: gridId
+            capsuleViews.forEach { it.nextFocusDownId = browseRow ?: search.id }
+            historyRef?.nextFocusDownId = browseRow ?: search.id
+            favoriteRef?.nextFocusDownId = browseRow ?: search.id
             manage?.nextFocusDownId = search.id
-            search.nextFocusDownId = secondRow
+            search.nextFocusDownId = if(browseRow != null) gridId else secondRow
             clearRef?.nextFocusDownId = secondRow
-            categoryButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
+            categoryButtons.forEach { it.nextFocusDownId = gridId }
             filterButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
         }
-        search.nextFocusUpId = currentCapsule?.id ?: historyRef?.id ?: favoriteRef?.id ?: manage?.id ?: View.NO_ID
-        search.nextFocusLeftId = manage?.id ?: favoriteRef?.id ?: historyRef?.id ?: View.NO_ID
+        categoryButtons.forEach { chip ->
+            chip.nextFocusUpId = rowAbove
+            chip.nextFocusRightId = search.id
+        }
+        // 搜索入口在右上角，↑ 优先回到正上方的「管理」
+        search.nextFocusUpId = manage?.id ?: rowAbove
+        search.nextFocusLeftId = categoryButtons.firstOrNull()?.id ?: manage?.id ?: favoriteRef?.id ?: historyRef?.id ?: View.NO_ID
         historyRef?.let { button ->
             button.nextFocusRightId = favoriteRef?.id ?: manage?.id ?: View.NO_ID
         }
