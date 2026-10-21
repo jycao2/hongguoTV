@@ -1,8 +1,5 @@
 name: Build and publish TV update
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['README.md', 'docs/**', 'kotlin-tv/*.md']
   workflow_dispatch:
 permissions:
   contents: write
