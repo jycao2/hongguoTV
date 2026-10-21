@@ -10,14 +10,24 @@ data class BackupProgress(val series: Series,val episodeId: String,val episodeIn
 }
 data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val autoSeason: Boolean=true,val danmaku: Boolean=true,
     val danmakuOpacity: Int=DanmakuPrefs.OPACITY_DEFAULT,val danmakuFont: Int=DanmakuPrefs.FONT_DEFAULT,val danmakuSpeed: Int=DanmakuPrefs.SPEED_DEFAULT,val danmakuRows: Int=DanmakuPrefs.ROWS_DEFAULT,
-    val showClock: Boolean=false,val sourceHidden: Boolean=true) {
+    val showClock: Boolean=false,val sourceHidden: Boolean=false) {
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock).put("sourceHidden",sourceHidden)
 }
-data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap(),val thirdSources: List<BackupThirdSource> = emptyList(),val thirdHistory: List<BackupThirdHistory> = emptyList())
+data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap(),val thirdSources: List<BackupThirdSource> = emptyList(),val thirdHistory: List<BackupThirdHistory> = emptyList(),val thirdFavorites: List<BackupThirdFavorite> = emptyList())
 
 /** 三方片源配置：只保存名称与接口，随主备份一起迁移；恢复时只追加不覆盖。 */
 data class BackupThirdSource(val name: String,val api: String)
+
+/** 三方片源收藏：随主备份迁移，恢复时按「源接口 + 影片」保留较新的一条。 */
+data class BackupThirdFavorite(
+    val sourceApi: String,val sourceName: String,val videoId: String,val title: String,val cover: String,
+    val episodeIndex: Int,val episodeLabel: String,val positionMs: Long,val updatedAt: Long
+) {
+    fun json()=JSONObject().put("sourceApi",sourceApi).put("sourceName",sourceName).put("videoId",videoId)
+        .put("title",title).put("cover",cover).put("episodeIndex",episodeIndex).put("episodeLabel",episodeLabel)
+        .put("positionMs",positionMs).put("updatedAt",updatedAt)
+}
 
 /** 三方片源观看记录：随主备份迁移，恢复时按「源接口 + 影片」合并并保留较新的进度。 */
 data class BackupThirdHistory(
@@ -33,6 +43,7 @@ data class BackupThirdHistory(
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
     const val MAX_THIRD_HISTORY=100
+    const val MAX_THIRD_FAVORITES=100
     private val idPattern=Regex("[0-9]{1,30}")
     private fun id(value: String)=value.also { require(idPattern.matches(it)) { "剧集标识无效" } }
     private fun cleanCover(value: String): String=runCatching {
@@ -57,6 +68,12 @@ object LibraryBackup {
                 .put("episodeIndex",hit.episodeIndex.coerceIn(0,100_000)).put("episodeLabel",cleanText(hit.episodeLabel,60))
                 .put("positionMs",hit.positionMs.coerceAtLeast(0)).put("durationMs",hit.durationMs.coerceAtLeast(0))
                 .put("updatedAt",hit.updatedAt.coerceAtLeast(0)).put("completed",hit.completed)
+            }))
+            .put("thirdFavorites",JSONArray(data.thirdFavorites.take(MAX_THIRD_FAVORITES).map { fav -> JSONObject()
+                .put("sourceApi",cleanText(fav.sourceApi,500)).put("sourceName",cleanText(fav.sourceName,40))
+                .put("videoId",cleanText(fav.videoId,80)).put("title",cleanText(fav.title,200)).put("cover",cleanText(fav.cover,2048))
+                .put("episodeIndex",fav.episodeIndex.coerceIn(0,100_000)).put("episodeLabel",cleanText(fav.episodeLabel,60))
+                .put("positionMs",fav.positionMs.coerceAtLeast(0)).put("updatedAt",fav.updatedAt.coerceAtLeast(0))
             }))
             .put("watched",JSONArray(data.watched.intersect((data.favorites.map { it.id }+data.history.map { it.series.id }).toSet()).take(500)))
             .put("searches",JSONArray(SearchHistory.encode(data.searches.map { it.copy(query=cleanText(it.query,80)) }))).put("settings",data.settings.json()).toString()
@@ -124,8 +141,8 @@ object LibraryBackup {
         val danmakuSpeed=DanmakuPrefs.speed(settings.optInt("danmakuSpeed",DanmakuPrefs.SPEED_DEFAULT))
         val danmakuRows=DanmakuPrefs.rows(settings.optInt("danmakuRows",DanmakuPrefs.ROWS_DEFAULT))
         val showClock=settings.optBoolean("showClock",false)
-        // 旧备份没有该字段时按默认「隐藏」处理
-        val sourceHidden=settings.optBoolean("sourceHidden",true)
+        // 旧备份没有该字段时按默认「显示」处理
+        val sourceHidden=settings.optBoolean("sourceHidden",false)
         // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复
         val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
             val api=runCatching { row.string("api",500) }.getOrNull() ?: return@mapNotNull null
@@ -151,7 +168,23 @@ object LibraryBackup {
                 }.getOrNull()
             }
         }.getOrDefault(emptyList()) else emptyList()
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory)
+        // 三方收藏：缺字段、类型异常或单条损坏都只影响这一段，绝不拖垮整份备份
+        val thirdFavorites: List<BackupThirdFavorite> = if(o.has("thirdFavorites")) runCatching {
+            val rows=o.optJSONArray("thirdFavorites") ?: return@runCatching emptyList<BackupThirdFavorite>()
+            (0 until minOf(rows.length(),MAX_THIRD_FAVORITES)).mapNotNull { index ->
+                runCatching {
+                    val row=rows.optJSONObject(index) ?: return@runCatching null
+                    val api=row.optString("sourceApi").take(500)
+                    val videoId=row.optString("videoId").take(80)
+                    if(!api.startsWith("http") || videoId.isBlank()) null else BackupThirdFavorite(
+                        api,row.optString("sourceName").take(40),videoId,row.optString("title").take(200),
+                        row.optString("cover").take(2048),
+                        row.optInt("episodeIndex",0).coerceIn(0,100_000),row.optString("episodeLabel").take(60),
+                        row.optLong("positionMs",0).coerceIn(0,604_800_000),row.optLong("updatedAt",0).coerceIn(0,4_102_444_800_000))
+                }.getOrNull()
+            }
+        }.getOrDefault(emptyList()) else emptyList()
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {
@@ -177,6 +210,11 @@ object LibraryBackup {
             .groupBy { it.sourceApi to it.videoId }
             .mapNotNull { (_,rows) -> rows.maxByOrNull { it.updatedAt } }
             .sortedByDescending { it.updatedAt }.take(MAX_THIRD_HISTORY)
-        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet(),favoriteGroups,thirdSources,thirdHistory)
+        // 三方收藏：同「源接口 + 影片」同样保留较新的一条
+        val thirdFavorites=(local.thirdFavorites+incoming.thirdFavorites)
+            .groupBy { it.sourceApi to it.videoId }
+            .mapNotNull { (_,rows) -> rows.maxByOrNull { it.updatedAt } }
+            .sortedByDescending { it.updatedAt }.take(MAX_THIRD_FAVORITES)
+        return BackupData(favorites,history,watched.intersect(retained).take(500).toSet(),(local.searches+incoming.searches).distinct().take(20),if(restoreSettings) incoming.settings else local.settings,(local.later+incoming.later).distinctBy { it.id }.take(100),(local.hidden+incoming.hidden).take(500).toSet(),favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
     }
 }

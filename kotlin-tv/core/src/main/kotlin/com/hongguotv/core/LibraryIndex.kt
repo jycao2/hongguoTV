@@ -100,7 +100,8 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
         return true
     }
     fun snapshot(thirdSources: List<BackupThirdSource> = emptyList(),
-                 thirdHistory: List<BackupThirdHistory> = emptyList()) = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds, groupById, thirdSources, thirdHistory)
+                 thirdHistory: List<BackupThirdHistory> = emptyList(),
+                 thirdFavorites: List<BackupThirdFavorite> = emptyList()) = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds, groupById, thirdSources, thirdHistory, thirdFavorites)
 }
 
 /** Keeps the native-library-v1 disk keys and rich local metadata compatible with older APKs. */
@@ -130,7 +131,7 @@ object LibraryDisk {
             DanmakuPrefs.speed((values["danmakuSpeed"] as? Number)?.toInt() ?: DanmakuPrefs.SPEED_DEFAULT),
             DanmakuPrefs.rows((values["danmakuRows"] as? Number)?.toInt() ?: DanmakuPrefs.ROWS_DEFAULT),
             values["showClock"] as? Boolean ?: false,
-            values["sourceHidden"] as? Boolean ?: true)
+            values["sourceHidden"] as? Boolean ?: false)
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }
         return LibraryIndex(BackupData(series("favorites"), history, ids("watched"),
