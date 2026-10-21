@@ -2156,7 +2156,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val view = PlayerView(activity).apply { useController = false; resizeMode = resizeModeValue(store.resizeMode) }
         playerView = view
         host.addView(view, FrameLayout.LayoutParams(-1, -1))
-        val loading = text("正在加载…", 15f, muted).apply { gravity = Gravity.CENTER }
+        // 加载/缓冲提示用白色：播放器黑底上灰色文字看不清
+        val loading = text("正在加载…", 15f, Color.WHITE).apply { gravity = Gravity.CENTER }
         val errorView = text("", 14f, TvStyle.accent).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) }
         val center = column().apply { gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         center.addView(loading); center.addView(errorView)
