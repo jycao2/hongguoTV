@@ -9,6 +9,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -403,18 +404,17 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             filterCapsules.forEach { filterRow.addView(it, lp(-2, -2).apply { rightMargin = dp(8) }) }
             if(filterCapsules.isNotEmpty()) { body.addView(filterRow); filterButtons = filterCapsules }
         } else {
-            val categoryScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
-            val categoryRow = row().apply { setPadding(0, dp(2), 0, dp(2)) }
+            // 分类入口：分类多时单行横滑要按很多次右键，改为弹窗网格一屏直选
             val options = listOf(ThirdCategory("", "全部")) + categories
-            categoryButtons = options.map { option ->
-                val id = option.id.ifEmpty { null }
-                addButton(categoryRow, option.name, categoryId == id) {
-                    categoryId = id; videos.clear(); loadError = null; page = 1; hasMore = false
-                    catalogRequested = false; rebuild()
-                }
+            val currentName = options.firstOrNull { it.id.ifEmpty { null } == categoryId }?.name ?: "全部"
+            val categoryChip = text("分类：$currentName ▾", 14f, if(categoryId != null) TvStyle.accent else TvStyle.text).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                focusStyle(this, selected = categoryId != null)
+                setOnClickListener { showCategoryPicker() }
             }
-            categoryScroll.addView(categoryRow)
-            body.addView(categoryScroll)
+            body.addView(categoryChip, lp(-2, -2).apply { topMargin = dp(2); bottomMargin = dp(2) })
+            categoryButtons = listOf(categoryChip)
         }
 
         // 结果区
@@ -450,10 +450,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 焦点归属：搜索结果→首张卡片；选中的分类→该分类；空态→「全部」；其余→当前使用的源胶囊
         // （点源 tab 切换后不要把焦点甩回第一个胶囊）
         val emptyBrowse = display.isEmpty() && !loading && searchWord == null && loadError == null
-        val selectedCategory = if(searchWord == null && categoryId != null) {
-            val index = categories.indexOfFirst { it.id == categoryId }
-            if(index >= 0) categoryButtons.getOrNull(index + 1) else null
-        } else null
+        val selectedCategory = if(searchWord == null && categoryId != null) categoryButtons.firstOrNull() else null
         val currentCapsule = capsuleViews.getOrNull(sources.indexOfFirst { it.id == currentId })
         topFocusId = when {
             selectedCategory != null -> selectedCategory.id
@@ -1079,6 +1076,60 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             .setItems(labels) { dialog, which ->
                 onPick(options[which]); dialog.dismiss()
             }.show()
+    }
+
+    /** 分类选择：网格弹窗一屏铺开，避免长分类条逐个横移；当前分类获得焦点并自动滚到可见位置。 */
+    private fun showCategoryPicker() {
+        if(categories.isEmpty()) { Toast.makeText(activity, "分类还在加载，稍后再试", Toast.LENGTH_SHORT).show(); return }
+        val options = listOf(ThirdCategory("", "全部")) + categories
+        val cols = 5
+        val buttons = mutableListOf<TextView>()
+        val content = column().apply { setPadding(dp(18), dp(10), dp(18), dp(10)) }
+        lateinit var dialog: AlertDialog
+        options.chunked(cols).forEach { chunk ->
+            val line = row()
+            chunk.forEach { option ->
+                val id = option.id.ifEmpty { null }
+                val chip = text(option.name, 15f, if(id == categoryId) TvStyle.accent else TvStyle.text).apply {
+                    gravity = Gravity.CENTER
+                    setPadding(dp(10), dp(9), dp(10), dp(9)); minHeight = dp(40)
+                    focusStyle(this, selected = id == categoryId)
+                    setOnClickListener { dialog?.dismiss(); pickCategory(id) }
+                }
+                buttons += chip
+                line.addView(chip, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
+            }
+            content.addView(line)
+        }
+        buttons.forEachIndexed { index, button ->
+            button.nextFocusLeftId = buttons[if(index % cols == 0) index else index - 1].id
+            button.nextFocusRightId = buttons[if(index % cols == cols - 1 || index == buttons.lastIndex) index else index + 1].id
+            button.nextFocusUpId = if(index < cols) button.id else buttons[index - cols].id
+            button.nextFocusDownId = if(index + cols <= buttons.lastIndex) buttons[index + cols].id else button.id
+        }
+        val scroll = ScrollView(activity).apply { addView(content) }
+        dialog = AlertDialog.Builder(activity).setTitle("选择分类").setView(scroll)
+            .setNegativeButton("取消", null).create()
+        dialog.setOnShowListener {
+            dialog.window?.setLayout((activity.resources.displayMetrics.widthPixels * 0.68).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+            // 末行按 ↓ 落到「取消」，避免焦点困在网格里
+            val cancel = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+            buttons.forEach { button -> if(button.nextFocusDownId == button.id) button.nextFocusDownId = cancel.id }
+            val currentIndex = options.indexOfFirst { it.id.ifEmpty { null } == categoryId }.coerceAtLeast(0)
+            scroll.post {
+                buttons.getOrNull(currentIndex)?.let { button ->
+                    button.requestFocus()
+                    scroll.requestChildRectangleOnScreen(button, android.graphics.Rect(0, 0, button.width, button.height), false)
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun pickCategory(id: String?) {
+        if(id == categoryId) return
+        categoryId = id; videos.clear(); loadError = null; page = 1; hasMore = false
+        catalogRequested = false; rebuild()
     }
 
     // ---- 源切换与探活 ----
