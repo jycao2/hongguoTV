@@ -33,6 +33,8 @@ data class ThirdSearchResult(val page: ThirdSearchPage?, val error: String?)
 data class ThirdProbe(val ok: Boolean, val total: Int, val reason: String?)
 data class ThirdTvboxSite(val name: String, val api: String)
 data class ThirdTvboxParse(val candidates: List<ThirdTvboxSite>, val skipped: Int)
+/** 聚合搜索命中：详情与来源源一起保留，跨源展示、换源与收藏都依赖它。 */
+data class ThirdSearchHit(val source: ThirdSource, val detail: ThirdDetail)
 
 /** CMS v10 协议与三方配置解析（纯函数，可单测）。
  *  播放地址格式实测：vod_play_from=`liangzi$$$lzm3u8`，vod_play_url=`第01集$https://a#第02集$https://b$$$第01集$https://c`。 */
@@ -42,24 +44,57 @@ object ThirdCms {
     const val SUGGEST_LIMIT = 10       // 联想词条数上限
     const val TIMEOUT_SECONDS = 10L
 
-    /** 内置源名单（2026-10-20 实测探活通过；失效源随版本更新在名单中替换）。 */
+    /** 内置源名单（2026-10-21 实测探活通过；失效源随版本更新在名单中替换）。 */
     val BUILTIN_SOURCES = listOf(
         ThirdSource("liangzi", "量子", "https://cj.lziapi.com/api.php/provide/vod", true),
         ThirdSource("baofeng", "暴风", "https://bfzyapi.com/api.php/provide/vod", true),
         ThirdSource("feifan", "非凡", "https://ffzy5.tv/api.php/provide/vod", true),
-        ThirdSource("tianya", "天涯", "https://tyyszy.com/api.php/provide/vod", true)
+        ThirdSource("tianya", "天涯", "https://tyyszy.com/api.php/provide/vod", true),
+        ThirdSource("hongniu", "红牛", "https://hongniuzy3.com/api.php/provide/vod", true),
+        ThirdSource("jinying", "金鹰", "https://jinyingzy.com/api.php/provide/vod", true)
     )
 
-    /** 次级名单（实测可用，供「恢复内置源」补齐）。 */
+    /** 次级名单（2026-10-21 实测可用，供「恢复内置源」补齐）。
+     *  原「360」源站 SSL 握手失败，已从两份名单移除。 */
     val SPARE_SOURCES = listOf(
-        ThirdSource("hongniu", "红牛", "https://hongniuzy3.com/api.php/provide/vod", true),
-        ThirdSource("sanliuling", "360", "https://360zy.com/api.php/provide/vod", true),
-        ThirdSource("jinying", "金鹰", "https://jinyingzy.com/api.php/provide/vod", true)
+        ThirdSource("zuida", "最大", "https://api.zuidapi.com/api.php/provide/vod", true),
+        ThirdSource("jisu", "极速", "https://jszyapi.com/api.php/provide/vod", true),
+        ThirdSource("modu", "魔都", "https://www.mdzyapi.com/api.php/provide/vod", true),
+        ThirdSource("douban", "豆瓣", "https://caiji.dbzy5.com/api.php/provide/vod", true),
+        ThirdSource("guangsu", "光速", "https://api.guangsuapi.com/api.php/provide/vod", true),
+        ThirdSource("xinlang", "新浪", "https://api.xinlangapi.com/xinlangapi.php/provide/vod", true),
+        ThirdSource("huya", "虎牙", "https://www.huyaapi.com/api.php/provide/vod", true),
+        ThirdSource("wujin", "无尽", "https://api.wujinapi.me/api.php/provide/vod", true),
+        ThirdSource("yaya", "丫丫", "https://cj.yayazy.net/api.php/provide/vod", true)
     )
 
     /** 「恢复内置源」：返回当前不存在的内置/次级源。 */
     fun restoreCandidates(existing: List<ThirdSource>): List<ThirdSource> =
         (BUILTIN_SOURCES + SPARE_SOURCES).filter { spare -> existing.none { it.api == spare.api } }
+
+    /** 聚合搜索去重键：片名去掉《》与空白、统一大小写，再拼年份；年份缺失时只按片名。 */
+    fun searchKey(name: String, year: String?): String =
+        name.replace("《", "").replace("》", "").replace(Regex("\\s+"), "").lowercase() +
+            "|" + year?.trim().orEmpty()
+
+    fun episodeCount(detail: ThirdDetail): Int = detail.groups.sumOf { it.second.size }
+
+    /** 聚合搜索去重：同键优先保留当前源，其次保留集数更多者；保持首次出现顺序。 */
+    fun dedupeHits(hits: List<ThirdSearchHit>, preferredApi: String?): List<ThirdSearchHit> {
+        val chosen = LinkedHashMap<String, ThirdSearchHit>()
+        hits.forEach { hit ->
+            val key = searchKey(hit.detail.video.name, hit.detail.year)
+            val prior = chosen[key]
+            chosen[key] = when {
+                prior == null -> hit
+                prior.source.api == preferredApi -> prior
+                hit.source.api == preferredApi -> hit
+                episodeCount(hit.detail) > episodeCount(prior.detail) -> hit
+                else -> prior
+            }
+        }
+        return chosen.values.toList()
+    }
 
     /** 接口地址拼参数：源地址可能自带 query，按 ?/& 正确衔接。 */
     fun apiUrl(api: String, params: List<Pair<String, String>>): String {
@@ -229,16 +264,24 @@ class ThirdCmsClient {
     // 在途 catalog 请求登记：切换分类/片源时统一取消，避免慢请求占满线程池导致界面长时间空态
     private val catalogCalls = java.util.Collections.synchronizedList(mutableListOf<okhttp3.Call>())
 
+    // 在途聚合搜索请求：返回搜索页或切换关键字时取消，避免旧源结果串入新关键字
+    private val searchCalls = java.util.Collections.synchronizedList(mutableListOf<okhttp3.Call>())
+
     fun cancelCatalog() {
         synchronized(catalogCalls) { catalogCalls.forEach { it.cancel() }; catalogCalls.clear() }
     }
 
-    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。catalog=true 时登记可取消。 */
-    fun get(url: String, catalog: Boolean = false): ThirdHttp {
+    fun cancelSearch() {
+        synchronized(searchCalls) { searchCalls.forEach { it.cancel() }; searchCalls.clear() }
+    }
+
+    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。catalog/search 时登记可取消。 */
+    fun get(url: String, catalog: Boolean = false, search: Boolean = false): ThirdHttp {
         val call = http.newCall(Request.Builder().url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; TV) AppleWebKit/537.36")
             .build())
         if(catalog) catalogCalls += call
+        if(search) searchCalls += call
         return try {
             call.execute().use { response ->
                 val bytes = response.body?.bytes()
@@ -256,6 +299,7 @@ class ThirdCmsClient {
             })
         } finally {
             if(catalog) catalogCalls -= call
+            if(search) searchCalls -= call
         }
     }
 
@@ -307,7 +351,7 @@ class ThirdCmsClient {
     fun searchPage(api: String, word: String, page: Int): ThirdSearchResult {
         val key = "$api|search|$word|$page"
         (cached(key) as? ThirdSearchPage)?.let { return ThirdSearchResult(it, null) }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())))
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())), search = true)
         response.body ?: return ThirdSearchResult(null, response.error ?: "连接失败")
         val parsed = try { ThirdCms.parseDetailPage(response.body!!) } catch(_: Exception) { null }
             ?: return ThirdSearchResult(null, "该片源未开启搜索")
