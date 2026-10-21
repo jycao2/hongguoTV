@@ -95,6 +95,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var lastHistoryBackupAt = 0L
     /** 详情页返回目标：历史/收藏/浏览，避免从二级页面返回时落到浏览页。 */
     private var detailReturnMode = Mode.BROWSE
+    /** 浏览态网格里最近聚焦的卡片（显示用视频 id）：进详情/播放返回时把焦点恢复到这张卡片上。 */
+    private var browseFocusKey: String? = null
     // 本次浏览会话是否已发起过列表请求：空结果分类若再自动重发会形成「请求→空→rebuild→再请求」
     // 死循环，界面持续重建吞掉按键（表现为遥控器卡死）
     private var catalogRequested = false
@@ -460,18 +462,27 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         body.addView(gridStatus)
 
         container.addView(body, lp(-1, 0).apply { weight = 1f })
-        // 焦点归属：搜索结果→首张卡片；选中的分类→该分类；空态→「全部」；其余→当前使用的源胶囊
-        // （点源 tab 切换后不要把焦点甩回第一个胶囊）
+        // 焦点归属：从详情返回→上次聚焦的网格卡片；搜索结果→首张卡片；选中的分类→该分类；空态→「全部」；
+        // 其余→当前使用的源胶囊（点源 tab 切换后不要把焦点甩回第一个胶囊）
+        val restorePosition = browseFocusKey?.let { key -> display.indexOfFirst { it.id == key } } ?: -1
         val emptyBrowse = display.isEmpty() && !loading && searchWord == null && loadError == null
         val selectedCategory = if(searchWord == null && categoryId != null) categoryButtons.firstOrNull() else null
         val currentCapsule = capsuleViews.getOrNull(sources.indexOfFirst { it.id == currentId })
         topFocusId = when {
+            restorePosition >= 0 && gridRecycler != null -> gridRecycler!!.id
             selectedCategory != null -> selectedCategory.id
             searchWord != null && gridRecycler != null -> gridRecycler!!.id
             searchWord != null -> search.id
             emptyBrowse && categoryButtons.isNotEmpty() -> categoryButtons[0].id
             currentCapsule != null -> currentCapsule.id
             else -> capsuleViews.firstOrNull()?.id ?: search.id
+        }
+        // 网格是 RecyclerView，卡片要等布局绑定后才存在：先滚动到目标位置，下一帧再把焦点落到那张卡片
+        if(restorePosition >= 0) gridRecycler?.let { recycler ->
+            recycler.post {
+                (recycler.layoutManager as? GridLayoutManager)?.scrollToPositionWithOffset(restorePosition, 0)
+                recycler.post { recycler.findViewHolderForAdapterPosition(restorePosition)?.itemView?.requestFocus() }
+            }
         }
         // 焦点接线：源胶囊 ↓ → 分类（搜索态为重新搜索）；管理 ↓ → 右上角搜索；分类/搜索 ↓ → 网格
         val rowAbove = currentCapsule?.id ?: historyRef?.id ?: favoriteRef?.id ?: manage?.id ?: View.NO_ID
@@ -629,6 +640,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             holder.card.setOnFocusChangeListener { v, focused ->
                 paint?.onFocusChange(v, focused)
                 holder.name.setTextColor(if(focused) TvStyle.accent else TvStyle.text)
+                if(focused && mode == Mode.BROWSE) browseFocusKey = item.id
                 if(focused && position >= items.size - 3) maybeLoadMore()
             }
             holder.card.setOnClickListener { onOpen?.invoke(item) ?: onVideoClick(item) }
