@@ -215,17 +215,6 @@ class ThirdCmsTest {
         assertEquals("https://a/vod?at=json&ac=detail&wd=%E6%9C%AB%E6%97%A5", ThirdCms.apiUrl("https://a/vod?at=json", listOf("ac" to "detail", "wd" to "末日")))
     }
 
-    // ---------- restoreCandidates ----------
-
-    @Test
-    fun `restoreCandidates 只返回当前不存在的内置源`() {
-        val existing = listOf(ThirdSource("liangzi", "量子", ThirdCms.BUILTIN_SOURCES[0].api, false))
-        val candidates = ThirdCms.restoreCandidates(existing)
-        assertTrue(candidates.none { it.api == ThirdCms.BUILTIN_SOURCES[0].api })
-        // 内置 6 + 次级 9，去掉已存在 1 个
-        assertEquals(14, candidates.size)
-    }
-
     // ---------- searchKey / dedupeHits ----------
 
     private fun detail(id: String, name: String, year: String?, episodes: Int): ThirdDetail {
@@ -242,8 +231,8 @@ class ThirdCmsTest {
 
     @Test
     fun `dedupeHits 同片名年份合并并优先当前源`() {
-        val a = ThirdSource("a", "A源", "https://a/vod", true)
-        val b = ThirdSource("b", "B源", "https://b/vod", true)
+        val a = ThirdSource("a", "A源", "https://a/vod")
+        val b = ThirdSource("b", "B源", "https://b/vod")
         val hits = listOf(
             ThirdSearchHit(b, detail("1", "末日重生", "2025", 30)),
             ThirdSearchHit(a, detail("2", "《末日重生》", "2025", 10)),
@@ -259,7 +248,7 @@ class ThirdCmsTest {
 
     @Test
     fun `dedupeHits 年份不同视为不同作品`() {
-        val a = ThirdSource("a", "A源", "https://a/vod", true)
+        val a = ThirdSource("a", "A源", "https://a/vod")
         val hits = listOf(
             ThirdSearchHit(a, detail("1", "同名剧", "2024", 10)),
             ThirdSearchHit(a, detail("2", "同名剧", "2025", 10))

@@ -22,11 +22,11 @@
 
 ## 三、界面设计（6 屏）
 
-### ① 首启预填态
-- 首次进入片源 tab：自动预置 5 个内置源并后台探活，浏览页直接可用（默认源：量子）
-- 源条为**源胶囊组**：每个源带探活状态点（绿=就绪 / 转圈=探活中 / 灰=不可用），当前源 accent 边框高亮，左右键直接切换源
-- 底部提示「已预置 5 个内置片源 · 探活 N/5 就绪，其余后台继续」
-- 用户删光所有源后才出现真正的空态：文案「已删除全部片源，可添加或恢复内置源」+ 添加源按钮
+### ① 首启空态
+- 首次进入片源 tab：源列表为空，不预置任何内置源，展示空态与「添加源 / 导入配置 / 导入导出配置（扫码）」入口
+- 用户添加或导入源后，源条为**源胶囊组**：每个源带探活状态点（绿=就绪 / 转圈=探活中 / 灰=不可用），当前源 accent 边框高亮，左右键直接切换源
+- 空态常驻免责声明：三方接口由用户自行添加，应用不提供、不存储、不传播任何视频内容
+- 删除全部源后回到同一空态，可通过导入配置或扫码导入找回
 
 ### ② 有源浏览态
 - 源条：源胶囊组（左右切换）+「管理」按钮 + 片源内搜索行
@@ -50,9 +50,9 @@
 - 进度每 5 秒防抖保存（键：源id:vod_id → 集号/位置/组号），再进详情自动定位
 
 ### ⑤ 源管理弹窗
-- 源列表：名称 + 域名 + 条目数 + 标签（内置 / 使用中），当前源 accent 左边条
-- 按钮组：`[＋ 添加源] [＋ 导入配置] [删除] [完成]`
-- 底部小字：删除需二次确认 · 误删内置源可「恢复内置源」 · 上限 30 个
+- 源列表：名称 + 域名 + 条目数 + 标签（使用中），当前源 accent 左边条
+- 按钮组：`[＋ 添加源] [＋ 导入配置] [导入/导出配置（扫码）] [批量删除]`
+- 底部小字：删除需二次确认 · 删除后可通过导入配置找回 · 上限 30 个
 - 添加源：输入名称 + 接口地址 → 保存时探活（HTTP 200 + JSON 含 list 字段即通过），失败报明确原因（超时/非 CMS 接口/HTTP 错误）
 
 ### ⑥ 一键导入 TVBox 配置
@@ -60,12 +60,12 @@
 - 流程：粘贴配置链接 → OK 解析 → 解析 sites[] → 只取 type=1 且 api 为 http 链接的 CMS 源 → 勾选清单（每项实时探活：可连接·条目数 / 超时）→ 导入所选
 - 自动跳过：type=0（spider jar）、type=3/4（加密 app 源），底部注明「已自动跳过 N 个不支持源」
 - 加密混淆配置提示「该配置不支持导入」（仅支持明文 JSON）
-- 导入完成显示成功 N 个 / 失败 N 个，与内置源同列表管理
+- 导入完成显示成功 N 个 / 失败 N 个，与手动添加的源同列表管理
 
 ## 四、数据模型
 
 ```kotlin
-data class ThirdSource(val id:String, val name:String, val api:String, val builtin:Boolean)
+data class ThirdSource(val id:String, val name:String, val api:String)
 data class ThirdCategory(val id:String, val name:String)
 data class ThirdVideo(val id:String, val name:String, val cover:String, val remarks:String)
 data class ThirdEpisode(val label:String, val url:String)
@@ -89,20 +89,12 @@ data class ThirdProgress(val episode:Int, val positionMs:Long, val group:Int)
 - 分页容错：page/pagecount 缺失时用「返回条数 < limit」判断尾页
 - 探活规则：HTTP 200 + JSON 含 `list` 字段
 
-### 内置源名单（2026-10-20 实测探活通过）
+### 默认空源策略
 
-| 源 | 接口 | 库存量 | 搜索耗时 |
-|---|---|---|---|
-| 量子（默认） | https://cj.lziapi.com/api.php/provide/vod | 16.0万 | 0.8s |
-| 暴风 | https://bfzyapi.com/api.php/provide/vod | 16.5万 | 1.7s |
-| 非凡 | https://ffzy5.tv/api.php/provide/vod | 9.9万 | 1.7s |
-| 天涯 | https://tyyszy.com/api.php/provide/vod | 7.3万 | 0.7s |
-
-- 全部验证：ac=list 分类/列表正常、ac=detail&wd= 搜索正常、播放地址为标准 m3u8
-- 次级名单（实测可用，供「恢复内置源」）：红牛 hongniuzy3.com、360 360zy.com、金鹰 jinyingzy.com
-- 已失效（勿用）：非凡主域名 api.ffzyplay.com、快看 kuaikanzy.net、卧龙、乐视、木耳、优质、塞班、魔爪、白嫖
-- 已移出内置名单：索尼 suonizy.net（2026-10-20，需用户手动添加）
-- 内置名单硬编码在 ThirdCms.kt，版本迭代时维护更新，失效源在版本更新日志中替换
+- 应用不内置、不预置任何第三方 CMS 接口地址，首次启动源列表为空
+- 源完全由用户通过「添加源」「导入配置」「扫码导入」三种方式自行添加
+- 不提供「恢复内置源」，源列表删除后只能通过导入配置或扫码导入找回
+- 应用不对源内容做任何存储或转码，播放为直连源站的实时流
 
 ## 六、播放地址格式实测样例
 
@@ -127,9 +119,9 @@ vod_play_url:  第01集$https://v.xxx.com/share/xxx#第02集$https://…   （# 
 
 | 文件 | 内容 |
 |---|---|
-| kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/ThirdCms.kt | 新建：CMS 协议客户端 + 播放地址解析 + 内置源名单 + TVBox 配置解析（纯函数可测） |
+| kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/ThirdCms.kt | 新建：CMS 协议客户端 + 播放地址解析 + TVBox 配置解析（纯函数可测），不含任何内置源 |
 | kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/ThirdStore.kt | 新建：源列表与进度持久化（独立 prefs） |
-| kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/ThirdSourceScreen.kt | 新建：片源页全部界面逻辑（首启预填/浏览/详情/播放控制） |
+| kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/ThirdSourceScreen.kt | 新建：片源页全部界面逻辑（空态/浏览/详情/播放控制） |
 | kotlin-tv/app/src/test/…/ThirdCmsTest.kt | 新建：解析容错/GBK/分页/$#$$ 解析/TVBox 配置提取用例 |
 | kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/MainActivity.kt | 仅 +1 nav 项、+1 行分发、+release 清理一行 |
 | README.md | 免责声明追加一句（见第十一节） |
@@ -138,7 +130,7 @@ vod_play_url:  第01集$https://v.xxx.com/share/xxx#第02集$https://…   （# 
 
 ## 十、分期
 
-- **一期（本设计范围）**：内置源预填 + 源管理（添加/删除/切换/探活/恢复内置源）+ 分类浏览 + 分页网格 + 详情 + 独立播放（组/集切换 + 续播）+ 片源内搜索 + 一键导入 TVBox 配置
+- **一期（本设计范围）**：默认空源 + 源管理（添加/导入/删除/切换/探活/扫码导入导出）+ 分类浏览 + 分页网格 + 详情 + 独立播放（组/集切换 + 续播）+ 片源内搜索 + 一键导入 TVBox 配置
 - **二期（可选）**：源测速排序、跨源聚合搜索
 - **永久不做**：spider jar 动态加载（安全风险与维护地狱）
 
@@ -146,6 +138,6 @@ vod_play_url:  第01集$https://v.xxx.com/share/xxx#第02集$https://…   （# 
 
 README 免责声明在保留现有核心表述（仅做技术交流与学习用途，不提供、不存储、不传播任何视频内容）基础上追加一句：
 
-> 应用内置的第三方 CMS 接口地址仅为技术演示与学习用途，其内容的合法性由对应源站自行负责。
+> 三方片源接口需由用户自行添加，应用不内置任何接口地址，其内容的合法性由对应源站自行负责。
 
-内置源机制说明：内置源可删除、可恢复，应用不对源内容做任何存储或转码，播放为直连源站的实时流。
+默认空源说明：应用不提供、不预置任何源，用户添加的源可删除、可通过导入配置恢复，应用不对源内容做任何存储或转码。

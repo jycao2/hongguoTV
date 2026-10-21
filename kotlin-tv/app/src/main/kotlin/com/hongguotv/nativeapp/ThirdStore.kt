@@ -41,12 +41,12 @@ data class ThirdSkipMark(val intro: Int, val outro: Int)
 class ThirdStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** 首次启动预置内置源（默认源：量子），此后完全以用户列表为准（删光即真实空态）。 */
+    /** 首次启动为空源：不预置任何片源，由用户自行添加或导入；此后完全以用户列表为准。 */
     fun ensureSources(): List<ThirdSource> {
         val initialized = prefs.getBoolean(KEY_INITIALIZED, false)
         if(initialized) return sources()
-        prefs.edit().putBoolean(KEY_INITIALIZED, true).putString(KEY_SOURCES, writeSources(ThirdCms.BUILTIN_SOURCES)).apply()
-        return ThirdCms.BUILTIN_SOURCES
+        prefs.edit().putBoolean(KEY_INITIALIZED, true).putString(KEY_SOURCES, "[]").apply()
+        return emptyList()
     }
 
     fun sources(): List<ThirdSource> = try {
@@ -278,11 +278,11 @@ class ThirdStore(context: Context) {
             .filter { it.api.startsWith("http") && known.add(it.api) }
             .take(room)
             .map { ThirdSource("u" + it.api.hashCode().toUInt().toString(),
-                it.name.ifBlank { it.api.removePrefix("https://").removePrefix("http://").substringBefore('/') }, it.api, false) }
+                it.name.ifBlank { it.api.removePrefix("https://").removePrefix("http://").substringBefore('/') }, it.api) }
             .toList()
         if(added.isEmpty()) return 0
         saveSources(local + added)
-        // 恢复后视为已初始化，避免首次启动再用内置源覆盖用户配置
+        // 恢复后视为已初始化，避免首次启动再覆盖用户配置
         prefs.edit().putBoolean(KEY_INITIALIZED, true).apply()
         return added.size
     }
@@ -296,14 +296,14 @@ class ThirdStore(context: Context) {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val id = item.optString("id"); val api = item.optString("api")
             if(id.isEmpty() || api.isEmpty()) null
-            else ThirdSource(id, item.optString("name"), api, item.optBoolean("builtin"))
+            else ThirdSource(id, item.optString("name"), api)
         }
     }
 
     private fun writeSources(list: List<ThirdSource>): String {
         val array = JSONArray()
         list.forEach { source ->
-            array.put(JSONObject().put("id", source.id).put("name", source.name).put("api", source.api).put("builtin", source.builtin))
+            array.put(JSONObject().put("id", source.id).put("name", source.name).put("api", source.api))
         }
         return array.toString()
     }

@@ -48,7 +48,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private companion object {
         /** 三方片源免责声明：空态与源管理页常驻展示。 */
-        const val SOURCE_DISCLAIMER = "内置第三方 CMS 接口仅为技术交流与学习用途，应用不提供、不存储、不传播任何视频内容，内容合法性由对应源站负责。"
+        const val SOURCE_DISCLAIMER = "第三方 CMS 接口由用户自行添加，仅为技术交流与学习用途，应用不提供、不存储、不传播任何视频内容，内容合法性由对应源站负责。"
         /** 聚合搜索单次最多参与的源数：当前源优先，独立线程池并发，避免被慢源拖成多轮。 */
         const val AGGREGATE_LIMIT = 6
         /** 探活缓存有效期：30 分钟内的结果直接复用，冷启动不再全量请求。 */
@@ -525,19 +525,17 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun renderEmptySources(container: LinearLayout) {
         val body = column().apply { setPadding(0, dp(24), 0, 0) }
-        message(body, "暂无片源信息，可添加、导入配置或恢复内置源")
+        message(body, "暂无片源信息，请添加源或导入配置")
         body.addView(text("若重装后没有自动恢复：可能是本机备份文件不存在或未授予存储权限，可在「设置 → 本地备份与恢复」中查看。", 13f, muted)
             .apply { setPadding(0, dp(2), 0, dp(10)) })
-        // 空态同样给全入口：添加 / 导入配置 / 恢复内置源 / 扫码导入导出
+        // 空态同样给全入口：添加 / 导入配置 / 扫码导入导出
         val actions = row().apply { setPadding(0, dp(4), 0, 0) }
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
         val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
-        val restore = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
         val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
         add.nextFocusRightId = importTvbox.id
-        importTvbox.nextFocusLeftId = add.id; importTvbox.nextFocusRightId = restore.id
-        restore.nextFocusLeftId = importTvbox.id; restore.nextFocusRightId = transfer.id
-        transfer.nextFocusLeftId = restore.id
+        importTvbox.nextFocusLeftId = add.id; importTvbox.nextFocusRightId = transfer.id
+        transfer.nextFocusLeftId = importTvbox.id
         body.addView(actions)
         body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(20), 0, 0) })
         container.addView(body, lp(-1, 0).apply { weight = 1f })
@@ -749,7 +747,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             Toast.makeText(activity, "源数量已达上限（${ThirdCms.MAX_SOURCES}）", Toast.LENGTH_SHORT).show(); return
         }
         if(sources.any { it.api == api }) { rebuild(); return }
-        val source = ThirdSource("u" + api.hashCode().toUInt().toString(), name.ifBlank { hostOf(api) }, api, false)
+        val source = ThirdSource("u" + api.hashCode().toUInt().toString(), name.ifBlank { hostOf(api) }, api)
         store.saveSources(sources + source)
         backupRequest()
         Toast.makeText(activity, "已重新添加「${source.name}」", Toast.LENGTH_SHORT).show()
@@ -1278,8 +1276,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val actions = row()
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
         val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
-        var restoreRef: TextView? = null
-        if(ThirdCms.restoreCandidates(sources).isNotEmpty()) restoreRef = addButton(actions, "恢复内置源") { restoreBuiltinSources() }
         val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
         body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
 
@@ -1309,7 +1305,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             capsuleDots[source.id] = dot
             line.addView(dot)
             val nameColumn = column()
-            nameColumn.addView(text(source.name + if(source.builtin) "  [内置]" else "", 15f, if(isCurrent) TvStyle.accent else TvStyle.text))
+            nameColumn.addView(text(source.name, 15f, if(isCurrent) TvStyle.accent else TvStyle.text))
             nameColumn.addView(text(hostOf(source.api), 12f, muted))
             line.addView(nameColumn, lp(0, -2).apply { weight = 1f })
             val (label, color) = probeLabel(source.id)
@@ -1328,7 +1324,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             rows += line
         }
-        if(sources.isEmpty()) message(list, "暂无片源信息，可添加、导入配置或恢复内置源")
+        if(sources.isEmpty()) message(list, "暂无片源信息，请添加源或导入配置")
         body.addView(listScroll, lp(-1, 0).apply { weight = 1f })
 
         // 底部：全选 / 批量删除 / 操作提示
@@ -1369,16 +1365,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 remove.nextFocusUpId = rows.lastOrNull()?.id ?: View.NO_ID
             }
         }
-        // 操作行左右串联：添加源 → 导入配置 →（恢复内置源）→ 导入/导出配置
+        // 操作行左右串联：添加源 → 导入配置 → 导入/导出配置
         add.nextFocusRightId = importTvbox.id
         importTvbox.nextFocusLeftId = add.id
-        val afterImport = restoreRef ?: transfer
-        importTvbox.nextFocusRightId = afterImport.id
-        afterImport.nextFocusLeftId = importTvbox.id
-        restoreRef?.let { restore ->
-            restore.nextFocusRightId = transfer.id
-            transfer.nextFocusLeftId = restore.id
-        }
+        importTvbox.nextFocusRightId = transfer.id
+        transfer.nextFocusLeftId = importTvbox.id
         transfer.nextFocusRightId = View.NO_ID
         transfer.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
     }
@@ -1402,7 +1393,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun confirmBatchDelete() {
         val targets = sources.filter { it.id in sourceSelected }
         if(targets.isEmpty()) return
-        tvTools.confirm("批量删除源", "确定删除选中的 ${targets.size} 个源吗？删除后可通过「恢复内置源」或扫码导入找回。", null) {
+        tvTools.confirm("批量删除源", "确定删除选中的 ${targets.size} 个源吗？删除后可通过导入配置或扫码导入找回。", null) {
             val remaining = sources.filterNot { it.id in sourceSelected }
             store.saveSources(remaining.take(ThirdCms.MAX_SOURCES))
             if(remaining.none { it.id == currentId }) store.setCurrent(remaining.firstOrNull()?.id)
@@ -1424,24 +1415,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 backupRequest(); rebuild()
                 Toast.makeText(activity, "已追加 $added 个源（已有源保持不变）", Toast.LENGTH_LONG).show()
             } else Toast.makeText(activity, "没有需要新增的源（均已存在或已达上限）", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun restoreBuiltinSources() {
-        val missing = ThirdCms.restoreCandidates(sources)
-        if(missing.isEmpty()) { Toast.makeText(activity, "内置源均已存在", Toast.LENGTH_SHORT).show(); return }
-        val room = ThirdCms.MAX_SOURCES - sources.size
-        if(room <= 0) { Toast.makeText(activity, "源数量已达上限（${ThirdCms.MAX_SOURCES}）", Toast.LENGTH_SHORT).show(); return }
-        val restored = missing.take(room)
-        // 恢复内置源属于批量写入，二次确认并同时展示免责声明
-        tvTools.confirm("恢复内置源",
-            "将补充 ${restored.size} 个内置源，已有源不会被覆盖。\n\n$SOURCE_DISCLAIMER", null) {
-            val existApis = sources.mapTo(HashSet()) { it.api }
-            val fresh = restored.filterNot { it.api in existApis }.take((ThirdCms.MAX_SOURCES - sources.size).coerceAtLeast(0))
-            if(fresh.isEmpty()) { Toast.makeText(activity, "内置源均已存在", Toast.LENGTH_SHORT).show(); return@confirm }
-            store.saveSources(sources + fresh)
-            Toast.makeText(activity, "已恢复 ${fresh.size} 个内置源", Toast.LENGTH_SHORT).show()
-            backupRequest(); rebuild()
         }
     }
 
@@ -1478,7 +1451,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                             if(sources.size >= ThirdCms.MAX_SOURCES) { errorText.text = "源数量已达上限（${ThirdCms.MAX_SOURCES}）"; return@post }
                             if(sources.any { it.api == api }) { errorText.text = "该源已存在"; return@post }
                             val id = "u" + api.hashCode().toUInt().toString()
-                            val source = ThirdSource(id, name.ifEmpty { hostOf(api) }, api, false)
+                            val source = ThirdSource(id, name.ifEmpty { hostOf(api) }, api)
                             store.saveSources(sources + source); store.setCurrent(source.id)
                             probes[source.id] = ProbeState(Dot.OK, probe.total)
                             resetBrowseState()
@@ -1658,7 +1631,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 room <= 0 -> {}
                 else -> {
                     val id = "u" + site.api.hashCode().toUInt().toString()
-                    added += ThirdSource(id, site.name, site.api, false)
+                    added += ThirdSource(id, site.name, site.api)
                     existingApis += site.api; room--; imported++
                 }
             }

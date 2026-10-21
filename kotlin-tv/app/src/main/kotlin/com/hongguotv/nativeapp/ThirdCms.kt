@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /** 三方片源数据模型：与红果内容体系完全隔离，不进 Library/收藏/历史/备份。 */
-data class ThirdSource(val id: String, val name: String, val api: String, val builtin: Boolean)
+data class ThirdSource(val id: String, val name: String, val api: String)
 data class ThirdCategory(val id: String, val name: String)
 data class ThirdVideo(val id: String, val name: String, val cover: String, val remarks: String)
 data class ThirdEpisode(val label: String, val url: String)
@@ -43,34 +43,6 @@ object ThirdCms {
     const val MAX_SOURCES = 30         // 源列表上限
     const val SUGGEST_LIMIT = 10       // 联想词条数上限
     const val TIMEOUT_SECONDS = 10L
-
-    /** 内置源名单（2026-10-21 实测探活通过；失效源随版本更新在名单中替换）。 */
-    val BUILTIN_SOURCES = listOf(
-        ThirdSource("liangzi", "量子", "https://cj.lziapi.com/api.php/provide/vod", true),
-        ThirdSource("baofeng", "暴风", "https://bfzyapi.com/api.php/provide/vod", true),
-        ThirdSource("feifan", "非凡", "https://ffzy5.tv/api.php/provide/vod", true),
-        ThirdSource("tianya", "天涯", "https://tyyszy.com/api.php/provide/vod", true),
-        ThirdSource("hongniu", "红牛", "https://hongniuzy3.com/api.php/provide/vod", true),
-        ThirdSource("jinying", "金鹰", "https://jinyingzy.com/api.php/provide/vod", true)
-    )
-
-    /** 次级名单（2026-10-21 实测可用，供「恢复内置源」补齐）。
-     *  原「360」源站 SSL 握手失败，已从两份名单移除。 */
-    val SPARE_SOURCES = listOf(
-        ThirdSource("zuida", "最大", "https://api.zuidapi.com/api.php/provide/vod", true),
-        ThirdSource("jisu", "极速", "https://jszyapi.com/api.php/provide/vod", true),
-        ThirdSource("modu", "魔都", "https://www.mdzyapi.com/api.php/provide/vod", true),
-        ThirdSource("douban", "豆瓣", "https://caiji.dbzy5.com/api.php/provide/vod", true),
-        ThirdSource("guangsu", "光速", "https://api.guangsuapi.com/api.php/provide/vod", true),
-        ThirdSource("xinlang", "新浪", "https://api.xinlangapi.com/xinlangapi.php/provide/vod", true),
-        ThirdSource("huya", "虎牙", "https://www.huyaapi.com/api.php/provide/vod", true),
-        ThirdSource("wujin", "无尽", "https://api.wujinapi.me/api.php/provide/vod", true),
-        ThirdSource("yaya", "丫丫", "https://cj.yayazy.net/api.php/provide/vod", true)
-    )
-
-    /** 「恢复内置源」：返回当前不存在的内置/次级源。 */
-    fun restoreCandidates(existing: List<ThirdSource>): List<ThirdSource> =
-        (BUILTIN_SOURCES + SPARE_SOURCES).filter { spare -> existing.none { it.api == spare.api } }
 
     /** 聚合搜索去重键：片名去掉《》与空白、统一大小写，再拼年份；年份缺失时只按片名。 */
     fun searchKey(name: String, year: String?): String =
