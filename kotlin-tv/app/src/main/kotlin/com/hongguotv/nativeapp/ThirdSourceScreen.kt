@@ -1883,9 +1883,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val episodeCount = data.groups.getOrNull(detailGroup)?.second?.size ?: 0
         right.addView(text(listOfNotNull(data.typeName, data.year, data.area, "共 $episodeCount 集").joinToString(" · "), 13f, muted).apply { setPadding(0, dp(6), 0, dp(6)) })
         val sourceRow = row()
-        sourceRow.addView(text("来源：${detailSource?.name.orEmpty()}", 12f, muted).apply { setPadding(0, 0, 0, dp(6)) }, lp(-2, -2))
+        sourceRow.addView(text("来源：${detailSource?.name.orEmpty()}", 12f, muted), lp(-2, -2))
         if(sources.size > 1) sourceRow.addView(text("换源 ›", 12f, TvStyle.accent).apply {
-            setPadding(dp(10), 0, dp(10), dp(6)); focusStyle(this)
+            // 文字在胶囊内水平垂直居中，避免默认左上对齐
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(4), dp(10), dp(4)); focusStyle(this)
             setOnClickListener { showSourceSwitcher(data) }
         }, lp(-2, -2).apply { leftMargin = dp(4) })
         right.addView(sourceRow)
