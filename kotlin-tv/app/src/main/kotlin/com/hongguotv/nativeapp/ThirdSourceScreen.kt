@@ -27,6 +27,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -162,6 +163,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var overlayVisible = false
     // 平滑快进快退：按住左右键时虚拟位置按节奏推进并实时渲染关键帧预览，松开才精确定位
     private var scrubbing = false
+    /** ExoPlayer 最近一次带宽估计（bps）：缓冲提示用它显示实时网速。 */
+    private var lastBandwidthBps = 0L
     private var scrubDirection = 0
     private var scrubPositionMs = 0L
     private var scrubStartAt = 0L
@@ -192,6 +195,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
+            // 缓冲中给出「正在缓冲 + 实时网速」提示，避免慢网卡顿时画面静止却没有任何反馈
+            if(state == Player.STATE_BUFFERING && mode == Mode.PLAY && !scrubbing) showBuffering()
             if(state == Player.STATE_READY) { playLoading?.visibility = View.GONE; updatePlayUi() }
             if(state == Player.STATE_ENDED) { keepScreenOn(false); showOverlay() }
         }
@@ -223,6 +228,18 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun keepScreenOn(on: Boolean) {
         if(on) activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /** 缓冲提示文案：已知带宽时附上实时网速，让用户直观判断是源慢还是本地网络问题。 */
+    private fun bufferText(): String {
+        if(lastBandwidthBps <= 0) return "正在缓冲…"
+        val kbs = lastBandwidthBps / 8 / 1024
+        val speed = if(kbs >= 1024) String.format("%.1f MB/s", kbs / 1024f) else "$kbs KB/s"
+        return "正在缓冲 · $speed"
+    }
+
+    private fun showBuffering() {
+        playLoading?.let { it.text = bufferText(); it.visibility = View.VISIBLE }
     }
 
     // ================= 生命周期 =================
@@ -2128,7 +2145,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun attachPlayer(startMs: Long, autoplay: Boolean) {
         detachPlayerViews()
         // 换集/重建时先停掉进行中的快进预览，并释放可能残存的旧实例，避免音频串音
-        scrubbing = false; main.removeCallbacks(scrubTick)
+        scrubbing = false; main.removeCallbacks(scrubTick); lastBandwidthBps = 0
         player?.let { stale -> stale.removeListener(playerListener); stale.release() }
         player = null
         val data = detail ?: return
@@ -2151,6 +2168,13 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         view.player = instance
         instance.addListener(playerListener)
+        // 带宽估计回调：刷新缓冲提示里的实时网速
+        instance.addAnalyticsListener(object : AnalyticsListener {
+            override fun onBandwidthEstimate(eventTime: AnalyticsListener.EventTime, totalLoadTimeMs: Int, totalBytesLoaded: Long, bitrateEstimate: Long) {
+                lastBandwidthBps = bitrateEstimate
+                if(playLoading?.visibility == View.VISIBLE) showBuffering()
+            }
+        })
         instance.setMediaItem(MediaItem.fromUri(episode.url), startMs.coerceAtLeast(0L))
         instance.prepare()
         instance.setPlaybackSpeed(store.playbackSpeed)
