@@ -2,6 +2,7 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import com.hongguotv.core.BackupThirdFavorite
 import com.hongguotv.core.BackupThirdHistory
 import com.hongguotv.core.BackupThirdSource
 import com.hongguotv.core.PlaybackSpeed
@@ -18,6 +19,19 @@ data class ThirdHistoryEntry(
         .put("title", title).put("cover", cover).put("episodeIndex", episodeIndex).put("episodeLabel", episodeLabel)
         .put("positionMs", positionMs).put("durationMs", durationMs).put("updatedAt", updatedAt).put("completed", completed)
 }
+
+/** 片源内收藏：独立存储并随主备份迁移；标题与封面本地留存，源失效时卡片仍可显示。 */
+data class ThirdFavorite(
+    val sourceApi: String, val sourceName: String, val videoId: String, val title: String, val cover: String,
+    val episodeIndex: Int, val episodeLabel: String, val positionMs: Long, val updatedAt: Long
+) {
+    fun json() = JSONObject().put("sourceApi", sourceApi).put("sourceName", sourceName).put("videoId", videoId)
+        .put("title", title).put("cover", cover).put("episodeIndex", episodeIndex).put("episodeLabel", episodeLabel)
+        .put("positionMs", positionMs).put("updatedAt", updatedAt)
+}
+
+/** 探活结果缓存：TTL 由界面判断，落盘避免每次冷启动都全量探活。 */
+data class ThirdProbeRecord(val ok: Boolean, val total: Int, val reason: String?, val at: Long)
 
 /** 片源播放器的片头/片尾跳过设置（秒，0 表示关闭）。 */
 data class ThirdSkipMark(val intro: Int, val outro: Int)
@@ -151,6 +165,87 @@ class ThirdStore(context: Context) {
 
     fun clearHistory() { prefs.edit().remove(KEY_HISTORY).apply() }
 
+    /** 片源内收藏：最近收藏在前，最多 100 条；损坏或缺失时静默返回空。 */
+    fun favorites(): List<ThirdFavorite> = try {
+        val raw = prefs.getString(KEY_FAVORITES, null) ?: return emptyList()
+        val array = JSONArray(raw)
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val api = item.optString("sourceApi"); val video = item.optString("videoId")
+            if(api.isEmpty() || video.isEmpty()) null else ThirdFavorite(api, item.optString("sourceName"), video,
+                item.optString("title"), item.optString("cover"), item.optInt("episodeIndex"), item.optString("episodeLabel"),
+                item.optLong("positionMs"), item.optLong("updatedAt"))
+        }
+    } catch (_: Exception) { emptyList() }
+
+    fun isFavorite(sourceApi: String, videoId: String): Boolean =
+        favorites().any { it.sourceApi == sourceApi && it.videoId == videoId }
+
+    /** 收藏/取消收藏：返回操作后是否处于收藏状态。 */
+    fun toggleFavorite(item: ThirdFavorite): Boolean {
+        val list = favorites()
+        val exists = list.any { it.sourceApi == item.sourceApi && it.videoId == item.videoId }
+        val next = if(exists) list.filterNot { it.sourceApi == item.sourceApi && it.videoId == item.videoId }
+            else (listOf(item) + list).take(MAX_FAVORITES)
+        prefs.edit().putString(KEY_FAVORITES, JSONArray(next.map { it.json() }).toString()).apply()
+        return !exists
+    }
+
+    fun removeFavorite(sourceApi: String, videoId: String) {
+        val next = favorites().filterNot { it.sourceApi == sourceApi && it.videoId == videoId }
+        prefs.edit().putString(KEY_FAVORITES, JSONArray(next.map { it.json() }).toString()).apply()
+    }
+
+    /** 备份用：收藏随主备份迁移。 */
+    fun backupFavorites(): List<BackupThirdFavorite> = favorites().map {
+        BackupThirdFavorite(it.sourceApi, it.sourceName, it.videoId, it.title, it.cover, it.episodeIndex,
+            it.episodeLabel, it.positionMs, it.updatedAt)
+    }
+
+    /** 恢复收藏：同「源接口 + 影片」保留较新的一条，最多 100 条；任何异常都静默忽略。 */
+    fun mergeFavorites(incoming: List<BackupThirdFavorite>) {
+        runCatching {
+            val merged = LinkedHashMap<String, ThirdFavorite>()
+            (favorites() + incoming.map { it.toFavorite() }).forEach { item ->
+                val key = item.sourceApi + "|" + item.videoId
+                val prior = merged[key]
+                if(prior == null || item.updatedAt > prior.updatedAt) merged[key] = item
+            }
+            val next = merged.values.sortedByDescending { it.updatedAt }.take(MAX_FAVORITES)
+            prefs.edit().putString(KEY_FAVORITES, JSONArray(next.map { it.json() }).toString()).apply()
+        }
+    }
+
+    /** 探活结果缓存（按接口地址），TTL 由调用方判断。 */
+    fun probes(): Map<String, ThirdProbeRecord> = try {
+        val raw = prefs.getString(KEY_PROBES, null) ?: return emptyMap()
+        val json = JSONObject(raw)
+        json.keys().asSequence().mapNotNull { api ->
+            json.optJSONObject(api)?.let {
+                api to ThirdProbeRecord(it.optBoolean("ok"), it.optInt("total"), it.optString("reason").ifBlank { null }, it.optLong("at"))
+            }
+        }.toMap()
+    } catch (_: Exception) { emptyMap() }
+
+    fun saveProbe(api: String, record: ThirdProbeRecord) {
+        runCatching {
+            val next = LinkedHashMap(probes().filterKeys { it != api })
+            next[api] = record
+            while(next.size > 60) next.remove(next.keys.first())
+            val json = JSONObject()
+            next.forEach { (key, value) ->
+                json.put(key, JSONObject().put("ok", value.ok).put("total", value.total)
+                    .put("reason", value.reason.orEmpty()).put("at", value.at))
+            }
+            prefs.edit().putString(KEY_PROBES, json.toString()).apply()
+        }
+    }
+
+    /** 聚合搜索偏好：默认全部源；用户切到「仅当前源」后本机记忆。 */
+    var searchAllSources: Boolean
+        get() = prefs.getBoolean(KEY_SEARCH_ALL, true)
+        set(value) { prefs.edit().putBoolean(KEY_SEARCH_ALL, value).apply() }
+
     /** 备份用：观看历史随主备份迁移。 */
     fun backupHistory(): List<BackupThirdHistory> = history().map {
         BackupThirdHistory(it.sourceApi, it.sourceName, it.videoId, it.title, it.cover, it.episodeIndex,
@@ -224,7 +319,11 @@ class ThirdStore(context: Context) {
         private const val KEY_RESIZE = "resizeMode"
         private const val KEY_SKIP = "skipMarks"
         private const val KEY_HISTORY = "watchHistory"
+        private const val KEY_FAVORITES = "favorites"
+        private const val KEY_PROBES = "probeCache"
+        private const val KEY_SEARCH_ALL = "searchAllSources"
         private const val MAX_HISTORY = 100
+        private const val MAX_FAVORITES = 100
         private const val MAX_SKIP_SECONDS = 600
         private const val MAX_SKIP_MARKS = 200
     }
@@ -232,3 +331,6 @@ class ThirdStore(context: Context) {
 
 private fun BackupThirdHistory.toEntry() = ThirdHistoryEntry(sourceApi, sourceName, videoId, title, cover,
     episodeIndex, episodeLabel, positionMs, durationMs, updatedAt, completed)
+
+private fun BackupThirdFavorite.toFavorite() = ThirdFavorite(sourceApi, sourceName, videoId, title, cover,
+    episodeIndex, episodeLabel, positionMs, updatedAt)
