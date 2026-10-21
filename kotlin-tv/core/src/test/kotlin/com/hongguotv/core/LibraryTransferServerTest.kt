@@ -10,12 +10,12 @@ import java.util.concurrent.TimeUnit
 class LibraryTransferServerTest {
     private val data=BackupData(listOf(Series("1","测试")),emptyList(),emptySet(),emptyList(),BackupSettings())
     private val backup=LibraryBackup.encode(data)
-    private fun request(server: LibraryTransferServer,path: String="",body: String?=null,headers: String="",host: String?=null): String {
+    private fun request(server: LibraryTransferServer,path: String="",body: String?=null,headers: String="",host: String?=null,method: String?=null): String {
         val uri=URI(server.url)
         return Socket("127.0.0.1",uri.port).use { socket ->
             socket.soTimeout=3000
             val bytes=body?.toByteArray(Charsets.UTF_8) ?: byteArrayOf()
-            val head="${if(body==null) "GET" else "POST"} ${uri.path}$path HTTP/1.1\r\nHost: ${host ?: uri.authority}\r\n$headers"+(if(body==null) "\r\n" else "Content-Type: application/json\r\nContent-Length: ${bytes.size}\r\n\r\n")
+            val head="${method ?: if(body==null) "GET" else "POST"} ${uri.path}$path HTTP/1.1\r\nHost: ${host ?: uri.authority}\r\n$headers"+(if(body==null) "\r\n" else "Content-Type: application/json\r\nContent-Length: ${bytes.size}\r\n\r\n")
             socket.getOutputStream().write(head.toByteArray()+bytes)
             socket.getInputStream().readBytes().toString(Charsets.UTF_8)
         }
@@ -23,7 +23,13 @@ class LibraryTransferServerTest {
     @Test fun `download is one use and validated import is delivered once then listener closes`() {
         val latch=CountDownLatch(1); var received: BackupData?=null
         LibraryTransferServer("127.0.0.1",backup,{ received=it; latch.countDown() }).use { server ->
-            assertTrue(request(server).contains("frame-ancestors 'none'"))
+            val page=request(server)
+            assertTrue(page.contains("frame-ancestors 'none'"))
+            // 页面内联备份，手机本地生成文件，避免系统下载器二次请求电视
+            assertTrue(page.contains("textarea id=\"data\" readonly"))
+            assertTrue(page.contains("getElementById('save').onclick"))
+            assertTrue(page.contains("hongguotv-library-"))
+            assertTrue(request(server,"/download",method="HEAD").startsWith("HTTP/1.1 200"))
             val download=request(server,"/download")
             assertTrue(download.contains("Content-Disposition: attachment")); assertEquals(backup,download.substringAfter("\r\n\r\n"))
             assertTrue(request(server,"/download").startsWith("HTTP/1.1 410"))
