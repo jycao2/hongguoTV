@@ -1302,13 +1302,13 @@ class MainActivity: Activity() {
         danmakuPrefRows.addAll(listOf(danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,danmakuReset))
         lateinit var blockedWords: TextView
         blockedWords=setting(playback,"弹幕屏蔽词  ·  ${extras.blockedWords.size} 个") { showBlockedWordDialog(blockedWords) }
+        lateinit var keySettings: TextView
+        keySettings=setting(playback,"遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒") { showKeySettings(keySettings) }
         lateinit var autoSkipButton: TextView
         autoSkipButton=setting(playback,"不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}") {
             extras.autoSkipUnplayable=!extras.autoSkipUnplayable
             autoSkipButton.text="不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}"
         }
-        lateinit var keySettings: TextView
-        keySettings=setting(playback,"遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒") { showKeySettings(keySettings) }
         syncDanmakuRows()
 
         lateinit var themeButton: TextView
@@ -2145,7 +2145,7 @@ class MainActivity: Activity() {
         val words=(presets+current.filterNot { it in presets }).distinct()
         val checked=BooleanArray(words.size) { words[it] in current }
         val dialog=AlertDialog.Builder(this).setTitle("弹幕屏蔽词")
-            .setMultiChoiceItems(words.toTypedArray(),checked,null)
+            .setMultiChoiceItems(words.toTypedArray(),checked) { _,index,isChecked -> checked[index]=isChecked }
             .setNegativeButton("取消",null)
             .setNeutralButton("清空") { _,_-> extras.blockedWords=emptySet(); applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  0 个" }
             .setPositiveButton("保存") { _,_->
@@ -2190,7 +2190,6 @@ class MainActivity: Activity() {
         fun check(name: String,probe: ()->String) {
             if(checking) return
             checking=true; status.text="正在检测 $name…"
-            buttons.forEach { it.isEnabled=false; it.alpha=.5f }
             val started=android.os.SystemClock.elapsedRealtime()
             io.execute {
                 val result=runCatching(probe)
@@ -2200,7 +2199,6 @@ class MainActivity: Activity() {
                     status.text=result.fold(
                         { detail -> "$name · 正常 · $detail · ${elapsed}ms" },
                         { problem -> "$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}" })
-                    buttons.forEach { it.isEnabled=true; it.alpha=1f }
                     checking=false
                 }
             }
