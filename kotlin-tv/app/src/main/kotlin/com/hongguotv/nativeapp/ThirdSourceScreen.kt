@@ -1911,9 +1911,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         } else {
             suggestions.forEach { name ->
                 val item = text(name, 15f).apply {
-                    setPadding(dp(12), dp(8), dp(12), dp(8)); maxLines = 1
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    // setSingleLine 开启横向滚动模式，marquee 才能按全文宽度布局滚动
+                    setSingleLine(true); marqueeRepeatLimit = -1
                     ellipsize = android.text.TextUtils.TruncateAt.END
                     focusStyle(this); setOnClickListener { submitSearch(name) }
+                    // 超长联想词获得焦点时跑马灯滚动全名，失焦回退省略号
+                    val paint = onFocusChangeListener
+                    onFocusChangeListener = View.OnFocusChangeListener { view, hasFocus ->
+                        paint?.onFocusChange(view, hasFocus)
+                        val tv = view as TextView
+                        tv.ellipsize = if(hasFocus) android.text.TextUtils.TruncateAt.MARQUEE else android.text.TextUtils.TruncateAt.END
+                        tv.isSelected = hasFocus
+                    }
                 }
                 views += item
                 host.addView(item, lp(-1, -2).apply { bottomMargin = dp(4) })

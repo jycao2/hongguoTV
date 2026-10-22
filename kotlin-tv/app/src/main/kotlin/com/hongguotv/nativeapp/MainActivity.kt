@@ -1005,19 +1005,20 @@ class MainActivity: Activity() {
                 return object: RecyclerView.ViewHolder(frame) {}
             }
             val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card)
-            val artwork=FrameLayout(this@MainActivity)
+            // 海报容器按自身实际测量宽度定高，回收复用、列宽变化都不会出现同屏高低不一
+            val artwork=object: FrameLayout(this@MainActivity) {
+                override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
+                    val w=MeasureSpec.getSize(widthMeasureSpec)
+                    super.onMeasure(widthMeasureSpec,MeasureSpec.makeMeasureSpec((w/TvStyle.POSTER_ASPECT).toInt(),MeasureSpec.EXACTLY))
+                }
+            }
             val image=ImageView(this@MainActivity).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
             artwork.addView(image,FrameLayout.LayoutParams(-1,-1))
             val rank=TextView(this@MainActivity).apply { textSize=11f; setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(4),dp(8),dp(4)) }
             artwork.addView(rank,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
             val title=text("",14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
             val badge=text("",12f).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
-            // 分栏搜索页首次布局时 parent 尚未测量，按列数估算结果区宽度，避免卡片用全屏宽计算
-            val fallback=if(cols==gridColumns) (resources.displayMetrics.widthPixels*.9f).toInt() else dp(118)*cols
-            val gridWidth=parent.width.takeIf { it>0 } ?: fallback
-            val natural=((gridWidth/cols-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt()
-            // 海报高度固定为列宽推导值：不要按父容器高度压缩，否则首屏卡片与滚动新建卡片高度不一致
-            card.addView(artwork,lp(-1,natural))
+            card.addView(artwork,lp(-1,-2))
             card.addView(title,lp(-1,-2))
             card.addView(badge,lp(-1,-2))
             card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
@@ -1026,14 +1027,6 @@ class MainActivity: Activity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
             if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
             holder as CardHolder
-            // 联想栏显隐切换列数后，按当前列宽重算海报高度，保持行内整齐
-            val recycler=holder.card.parent as? RecyclerView
-            val spans=recycler?.let { (it.layoutManager as? GridLayoutManager)?.spanCount } ?: cols
-            if(recycler!=null && recycler.width>0 && holder.artwork.layoutParams.height>0) {
-                val natural=((recycler.width/spans-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt().coerceAtLeast(dp(48))
-                val diff=holder.artwork.layoutParams.height-natural
-                if(diff>dp(1) || diff< -dp(1)) holder.artwork.layoutParams.height=natural
-            }
             val item=displayed[position]; holder.boundId=item.id
             if(position==0) resultFirstCard=holder.card
             val card=holder.card
@@ -1064,7 +1057,7 @@ class MainActivity: Activity() {
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
-            card.nextFocusUpId=if(position<spans) suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            card.nextFocusUpId=if(position<cols) suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
             if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
@@ -1473,7 +1466,8 @@ class MainActivity: Activity() {
             return
         }
         syncSuggestPanel(true)
-        val views=words.map { word -> button(word) { runSearch(word) }.apply { textSize=14f; minHeight=dp(34); maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; setPadding(dp(10),dp(6),dp(10),dp(6)) } }
+        // setSingleLine 开启横向滚动模式，marquee 才按全文宽度布局滚得起来；仅 maxLines=1 只会截断省略
+        val views=words.map { word -> button(word) { runSearch(word) }.apply { textSize=14f; minHeight=dp(34); setSingleLine(true); marqueeRepeatLimit=-1; ellipsize=android.text.TextUtils.TruncateAt.END; setPadding(dp(10),dp(6),dp(10),dp(6)) } }
         views.forEachIndexed { index,view ->
             if(suggestVertical) container.addView(view,lp(-1,-2).apply { bottomMargin=dp(4) })
             else container.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) })
@@ -1482,9 +1476,15 @@ class MainActivity: Activity() {
             view.nextFocusRightId=if(suggestVertical) resultFirstCard?.id ?: catalogRecycler?.id ?: view.id else views[if(index==views.size-1) index else index+1].id
             view.nextFocusUpId=if(index==0) searchInput?.id ?: View.NO_ID else views[index-1].id
             view.nextFocusDownId=if(index==views.size-1) resultFirstCard?.id ?: catalogRecycler?.id ?: view.id else views[index+1].id
-            // 保留 focusStyle 的焦点绘制，仅追加词条索引记忆
+            // 保留 focusStyle 的焦点绘制，追加词条索引记忆；超长联想词获得焦点时跑马灯滚动全名，失焦回退省略号
             val paint=view.onFocusChangeListener
-            view.setOnFocusChangeListener { v,focused -> paint?.onFocusChange(v,focused); if(focused) suggestFocusIndex=index }
+            view.setOnFocusChangeListener { v,focused ->
+                paint?.onFocusChange(v,focused)
+                if(focused) suggestFocusIndex=index
+                view.ellipsize=if(focused) android.text.TextUtils.TruncateAt.MARQUEE else android.text.TextUtils.TruncateAt.END
+                view.isSelected=focused
+                view.marqueeRepeatLimit=-1
+            }
         }
         suggestFirst=views.firstOrNull()
         wireSearchPanel(catalogRecycler)
@@ -2190,21 +2190,42 @@ class MainActivity: Activity() {
     }
 
     /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。
-     *  每个按钮左侧带状态圆点：灰=未检测，绿=通，红=不通。 */
+     *  状态圆点内嵌在按钮文字前：灰=未检测，橙=检测中，绿=通，红=不通；3 秒内重复点击直接忽略。 */
     private fun showInterfaceCheck(anchor: TextView) {
         val content=column()
         val status=text("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
         content.addView(status)
         lateinit var dialog: AlertDialog
-        var checking=false
         val actions=row()
         val buttons=mutableListOf<TextView>()
+        val dotIdle=TvStyle.outline
         val dotOk=Color.rgb(86,196,122)
         val dotFail=Color.rgb(235,95,95)
-        fun check(name: String,dot: View,probe: ()->String) {
-            if(checking) return
-            checking=true; status.text="正在检测 $name…"
-            dot.background=TvStyle.shape(this,TvStyle.outline,radius=4)
+        // 每个按钮独立的冷却与在检状态，互不影响
+        val lastAt=mutableMapOf<String,Long>()
+        val busy=mutableSetOf<String>()
+        fun dotLabel(name: String,color: Int): CharSequence {
+            val span=android.text.SpannableString("●  $name")
+            span.setSpan(object: android.text.style.ReplacementSpan() {
+                override fun getSize(paint: android.graphics.Paint,text: CharSequence?,start: Int,end: Int,fm: android.graphics.Paint.FontMetricsInt?): Int =
+                    (paint.textSize*0.55f).toInt()
+                override fun draw(canvas: android.graphics.Canvas,text: CharSequence?,start: Int,end: Int,x: Float,top: Int,y: Int,bottom: Int,paint: android.graphics.Paint) {
+                    val r=paint.textSize*0.22f
+                    val cy=(top+bottom)/2f
+                    val oldColor=paint.color
+                    paint.color=color
+                    canvas.drawCircle(x+r,cy,r,paint)
+                    paint.color=oldColor
+                }
+            },0,1,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            return span
+        }
+        fun check(name: String,btn: TextView,probe: ()->String) {
+            val now=System.currentTimeMillis()
+            if(name in busy || now-(lastAt[name] ?: 0L)<3_000) { status.text="$name 请稍候再试"; return }
+            lastAt[name]=now
+            busy+=name; status.text="正在检测 $name…"
+            btn.text=dotLabel(name,accent)
             val started=android.os.SystemClock.elapsedRealtime()
             io.execute {
                 val result=runCatching(probe)
@@ -2212,20 +2233,18 @@ class MainActivity: Activity() {
                     if(!dialog.isShowing) return@post
                     val elapsed=android.os.SystemClock.elapsedRealtime()-started
                     result.fold(
-                        { detail -> status.text="$name · 正常 · $detail · ${elapsed}ms"; dot.background=TvStyle.shape(this,dotOk,radius=4) },
-                        { problem -> status.text="$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; dot.background=TvStyle.shape(this,dotFail,radius=4) })
-                    checking=false
+                        { detail -> status.text="$name · 正常 · $detail · ${elapsed}ms"; btn.text=dotLabel(name,dotOk) },
+                        { problem -> status.text="$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; btn.text=dotLabel(name,dotFail) })
+                    busy-=name
                 }
             }
         }
         fun add(name: String,probe: ()->String): TextView {
-            val wrap=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
-            val dot=View(this).apply { background=TvStyle.shape(this@MainActivity,TvStyle.outline,radius=4) }
-            wrap.addView(dot,LinearLayout.LayoutParams(dp(7),dp(7)).apply { rightMargin=dp(6) })
-            val btn=button(name) { check(name,dot,probe) }
-            wrap.addView(btn,LinearLayout.LayoutParams(0,-2,1f))
+            lateinit var btn: TextView
+            btn=button(name) { check(name,btn,probe) }
+            btn.text=dotLabel(name,dotIdle)
             buttons+=btn
-            actions.addView(wrap,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
+            actions.addView(btn,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
             return btn
         }
         add("首页") { val page=repository.home(1,library.contentType); "返回 ${page.items.size} 条" }
