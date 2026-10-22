@@ -34,7 +34,7 @@ class ContentRepositoryTest {
 
     @Test fun entirelyIncompatibleSourceFailsBeforeStartingAudio() {
         val repo=streamRepository(Triple(720,"ByteVC2","https://example.com/unsupported"),Triple(480,"bvc2","https://example.com/unsupported2"))
-        assertThrows(IOException::class.java) { repo.stream("123",720) }
+        assertThrows(UnplayableVideoException::class.java) { repo.stream("123",720) }
     }
 
     @Test fun legacyMissingCodecLabelKeepsQualityLimit() {

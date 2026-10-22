@@ -35,6 +35,8 @@ data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val rankin
 data class Genre(val slug: String, val name: String, val ids: List<String>)
 data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
+/** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。 */
+class UnplayableVideoException(message: String): IOException(message)
 
 open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
@@ -356,7 +358,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
             it.second.str("main_url").isNotEmpty() && it.second.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
         }.map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
-        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
+        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw UnplayableVideoException("本集片源暂不兼容，请播放下一集")
         val item=selected.third; var url=cleanUrl(item.str("main_url")); val seed=info.str("key_seed")
         if(seed.isNotEmpty()) url=MediaCrypto.decryptUrl(url,decode64(seed))
         if(!url.startsWith("https://") && !url.startsWith("http://")) throw IOException("播放地址无效")
