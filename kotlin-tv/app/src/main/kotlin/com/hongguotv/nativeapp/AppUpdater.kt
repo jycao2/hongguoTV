@@ -43,6 +43,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     val showing get() = dialog?.isShowing == true
     private var statusView: TextView? = null
     private var anchor: View? = null
+    private var actionButton: android.widget.Button? = null
     private var status = "当前版本 ${BuildConfig.VERSION_NAME}"
     private var retryAfter = 0L
     private var promptedThisSession = false
@@ -91,7 +92,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     }
     private fun updateStatus(text: String) { status = text; statusView?.text = text }
     private fun renderActions() {
-        dialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+        actionButton?.apply {
             text = when { busy -> "处理中…"; ready -> "立即安装"; available != null -> "下载新版"; else -> "检查更新" }
             // Keep D-pad focus stable while the request runs; action methods reject duplicates.
             isEnabled = true
@@ -106,11 +107,12 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (updatePending) promptedThisSession = true
         val dp = activity.resources.displayMetrics.density
         val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding((24*dp).toInt(), (12*dp).toInt(), (24*dp).toInt(), 0) }
+        body.addView(TvDialog.title(activity,"版本与更新 · ${BuildConfig.VERSION_NAME}"))
         statusView = TextView(activity).apply { text = status; textSize = 17f; setTextColor(TvStyle.text) }
         body.addView(statusView)
         if (!updatePending) {
             body.addView(CheckBox(activity).apply {
-                text = "自动检查并下载更新"; isChecked = auto
+                text = "自动检查并下载更新"; isChecked = auto; setTextColor(TvStyle.text)
                 setOnCheckedChangeListener { _, enabled ->
                     preferences.edit().putBoolean("automatic", enabled).apply()
                     if (!enabled && busy) { interrupt(); updateStatus("自动更新已关闭，可手动检查"); renderActions() }
@@ -122,18 +124,29 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             textSize = 13f; setTextColor(TvStyle.muted)
             setPadding(0, (8*dp).toInt(), 0, (8*dp).toInt())
         })
-        val next = AlertDialog.Builder(activity).setTitle("版本与更新 · ${BuildConfig.VERSION_NAME}").setView(ScrollView(activity).apply { addView(body) })
-            .setNegativeButton("稍后", null).setPositiveButton("检查更新", null).create()
+        val buttons = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.END
+            setPadding(0, (14*dp).toInt(), 0, 0)
+        }
+        val later = TvDialog.capsuleButton(activity,"稍后") { }
+        val action = TvDialog.capsuleButton(activity,"检查更新") { }
+        actionButton = action
+        buttons.addView(later, LinearLayout.LayoutParams(-2,-2).apply { rightMargin=(12*dp).toInt() })
+        buttons.addView(action, LinearLayout.LayoutParams(-2,-2))
+        body.addView(buttons)
+        val next = AlertDialog.Builder(activity).setView(TvDialog.card(activity,body)).create()
+        TvDialog.styleWindow(activity,next)
         dialog = next
         next.setOnDismissListener {
-            if (dialog === next) { dialog = null; statusView = null }
+            if (dialog === next) { dialog = null; statusView = null; actionButton = null }
             if (from?.isAttachedToWindow == true) from.requestFocus()
         }
         next.show()
-        next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { when { ready -> install(); available != null -> download(); else -> check(true) } }
-        next.getButton(AlertDialog.BUTTON_NEGATIVE)?.setOnClickListener { next.dismiss() }
+        later.setOnClickListener { next.dismiss() }
+        action.setOnClickListener { when { ready -> install(); available != null -> download(); else -> check(true) } }
         renderActions()
-        next.getButton(AlertDialog.BUTTON_POSITIVE).post { if (dialog === next) next.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus() }
+        action.post { if (dialog === next) action.requestFocus() }
     }
     private fun <T> work(action: () -> T, done: (T) -> Unit) {
         busy = true; renderActions(); val ticket = ++generation

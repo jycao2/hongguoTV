@@ -1121,11 +1121,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     /** 筛选选项弹窗：第一项为「全部」。 */
     private fun showFilterPicker(title: String, options: List<String?>, current: String?, onPick: (String?) -> Unit) {
-        val labels = options.map { it ?: "全部" }.toTypedArray()
-        AlertDialog.Builder(activity).setTitle(title)
-            .setItems(labels) { dialog, which ->
-                onPick(options[which]); dialog.dismiss()
-            }.show()
+        val labels = options.map { it ?: "全部" }
+        TvDialog.choose(activity, title, labels, { which -> onPick(options[which]) }).show()
     }
 
     /** 分类选择：网格弹窗一屏铺开，避免长分类条逐个横移；当前分类获得焦点并自动滚到可见位置。 */
@@ -1134,7 +1131,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val options = listOf(ThirdCategory("", "全部")) + categories
         val cols = 5
         val buttons = mutableListOf<TextView>()
-        val content = column().apply { setPadding(dp(18), dp(10), dp(18), dp(10)) }
+        val grid = column()
         lateinit var dialog: AlertDialog
         options.chunked(cols).forEach { chunk ->
             val line = row()
@@ -1144,12 +1141,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     gravity = Gravity.CENTER
                     setPadding(dp(10), dp(9), dp(10), dp(9)); minHeight = dp(40)
                     focusStyle(this, selected = id == categoryId)
-                    setOnClickListener { dialog?.dismiss(); pickCategory(id) }
+                    setOnClickListener { dialog.dismiss(); pickCategory(id) }
                 }
                 buttons += chip
                 line.addView(chip, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
             }
-            content.addView(line)
+            grid.addView(line)
         }
         buttons.forEachIndexed { index, button ->
             button.nextFocusLeftId = buttons[if(index % cols == 0) index else index - 1].id
@@ -1157,14 +1154,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             button.nextFocusUpId = if(index < cols) button.id else buttons[index - cols].id
             button.nextFocusDownId = if(index + cols <= buttons.lastIndex) buttons[index + cols].id else button.id
         }
-        val scroll = ScrollView(activity).apply { addView(content) }
-        dialog = AlertDialog.Builder(activity).setTitle("选择分类").setView(scroll)
-            .setNegativeButton("取消", null).create()
-        dialog.setOnShowListener {
-            dialog.window?.setLayout((activity.resources.displayMetrics.widthPixels * 0.68).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-            // 末行按 ↓ 落到「取消」，避免焦点困在网格里
-            val cancel = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
-            buttons.forEach { button -> if(button.nextFocusDownId == button.id) button.nextFocusDownId = cancel.id }
+        val content = column()
+        content.addView(TvDialog.title(activity, "选择分类"))
+        val scroll = ScrollView(activity).apply { addView(grid) }
+        content.addView(scroll, lp(-1, 0).apply { weight = 1f })
+        val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
+        content.addView(row().apply {
+            gravity = Gravity.END; setPadding(0, dp(14), 0, 0)
+            addView(cancel, lp(-2, -2))
+        })
+        dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        // 末行按 ↓ 落到「取消」，避免焦点困在网格里
+        buttons.forEach { button -> if(button.nextFocusDownId == button.id) button.nextFocusDownId = cancel.id }
+        TvDialog.styleWindow(activity, dialog, widthFraction = 0.68f, maxWidthDp = 900) {
             val currentIndex = options.indexOfFirst { it.id.ifEmpty { null } == categoryId }.coerceAtLeast(0)
             scroll.post {
                 buttons.getOrNull(currentIndex)?.let { button ->
@@ -1494,21 +1496,29 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun showAddSourceDialog() {
-        val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
+        val form = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
         val nameEdit = editText("源名称（如：量子资源）")
         val apiEdit = editText("接口地址，如 https://…/api.php/provide/vod")
         val errorText = text("", 13f, TvStyle.accent).apply { setPadding(0, dp(6), 0, 0) }
-        content.addView(text("名称", 13f, muted)); content.addView(nameEdit)
-        content.addView(text("接口地址", 13f, muted).apply { setPadding(0, dp(8), 0, 0) }); content.addView(apiEdit)
-        content.addView(errorText)
-        content.addView(text("可用电视输入法/USB 键盘输入，或点「扫码填写」用手机输入。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
-        val actions = row().apply { setPadding(0, dp(10), 0, 0) }
-        val save = addButton(actions, "保存并探活") { }
-        val scan = addButton(actions, "扫码填写") { }
-        content.addView(actions)
+        form.addView(text("名称", 13f, muted)); form.addView(nameEdit)
+        form.addView(text("接口地址", 13f, muted).apply { setPadding(0, dp(8), 0, 0) }); form.addView(apiEdit)
+        form.addView(errorText)
+        form.addView(text("可用电视输入法/USB 键盘输入，或点「扫码填写」用手机输入。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        val actions = row().apply { setPadding(0, dp(12), 0, 0) }
+        lateinit var dialog: AlertDialog
+        val save = TvDialog.capsuleButton(activity, "保存并探活") { }
+        val scan = TvDialog.capsuleButton(activity, "扫码填写") { }
+        val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
+        actions.addView(save, lp(-2, -2).apply { rightMargin = dp(10) })
+        actions.addView(scan, lp(-2, -2).apply { rightMargin = dp(10) })
+        actions.addView(cancel, lp(-2, -2))
+        form.addView(actions)
+        val content = column()
+        content.addView(TvDialog.title(activity, "添加片源"))
+        content.addView(ScrollView(activity).apply { addView(form) }, lp(-1, 0).apply { weight = 1f })
 
-        val dialog = AlertDialog.Builder(activity).setTitle("添加片源").setView(ScrollView(activity).apply { addView(content) })
-            .setNegativeButton("取消", null).create()
+        dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        TvDialog.styleWindow(activity, dialog)
         save.setOnClickListener {
             val name = nameEdit.text.toString().trim()
             val api = apiEdit.text.toString().trim()
@@ -1566,18 +1576,26 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun showImportDialog() {
-        val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
+        val form = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
         val urlEdit = editText("TVBox 配置链接（明文 JSON）")
         val errorText = text("", 13f, TvStyle.accent).apply { setPadding(0, dp(6), 0, 0) }
-        content.addView(urlEdit); content.addView(errorText)
-        content.addView(text("自动跳过 spider jar（type=0）与加密 app 源（type=3/4）。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
-        val actions = row().apply { setPadding(0, dp(10), 0, 0) }
-        val parse = addButton(actions, "解析") { }
-        val scan = addButton(actions, "扫码填写") { }
-        content.addView(actions)
+        form.addView(urlEdit); form.addView(errorText)
+        form.addView(text("自动跳过 spider jar（type=0）与加密 app 源（type=3/4）。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        val actions = row().apply { setPadding(0, dp(12), 0, 0) }
+        lateinit var dialog: AlertDialog
+        val parse = TvDialog.capsuleButton(activity, "解析") { }
+        val scan = TvDialog.capsuleButton(activity, "扫码填写") { }
+        val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
+        actions.addView(parse, lp(-2, -2).apply { rightMargin = dp(10) })
+        actions.addView(scan, lp(-2, -2).apply { rightMargin = dp(10) })
+        actions.addView(cancel, lp(-2, -2))
+        form.addView(actions)
+        val content = column()
+        content.addView(TvDialog.title(activity, "一键导入 TVBox 配置"))
+        content.addView(ScrollView(activity).apply { addView(form) }, lp(-1, 0).apply { weight = 1f })
 
-        val dialog = AlertDialog.Builder(activity).setTitle("一键导入 TVBox 配置").setView(ScrollView(activity).apply { addView(content) })
-            .setNegativeButton("取消", null).create()
+        dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        TvDialog.styleWindow(activity, dialog)
         fun runParse(rawUrl: String) {
             val url = rawUrl.trim()
             if(!url.startsWith("http")) { errorText.text = "请填写以 http 开头的配置链接"; return }
@@ -1627,7 +1645,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val touched = BooleanArray(candidates.size) { false }
         val checkViews = arrayOfNulls<TextView>(candidates.size)
         val statusViews = arrayOfNulls<TextView>(candidates.size)
-        val content = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
+        lateinit var dialog: AlertDialog
+        val listContent = column().apply { setPadding(dp(8), dp(4), dp(8), dp(8)) }
         fun paintCheck(index: Int) {
             val view = checkViews[index] ?: return
             view.text = if(checked[index]) "✓" else "○"
@@ -1650,27 +1669,41 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 checked[index] = !checked[index]
                 paintCheck(index); refreshAction()
             }
-            content.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
+            listContent.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             statusViews[index] = status
             line
         }
-        content.addView(text("已自动跳过 $skipped 个不支持源 · 仅默认勾选可连接的源，已存在的源不会重复导入", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
-        val dialog = AlertDialog.Builder(activity).setTitle("选择要导入的源（${candidates.size}）")
-            .setView(ScrollView(activity).apply { addView(content) })
-            .setNegativeButton("取消", null)
-            .setPositiveButton("导入所选") { _,_ ->
-                val selected = candidates.filterIndexed { index, _ -> checked[index] }
-                importSources(selected)
-            }.create()
+        listContent.addView(text("已自动跳过 $skipped 个不支持源 · 仅默认勾选可连接的源，已存在的源不会重复导入", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        val content = column()
+        content.addView(TvDialog.title(activity, "选择要导入的源（${candidates.size}）"))
+        val scroll = ScrollView(activity).apply { addView(listContent) }
+        TvDialog.capHeight(activity, scroll)
+        content.addView(scroll, lp(-1, 0).apply { weight = 1f })
+        val actions = row().apply { gravity = Gravity.END; setPadding(0, dp(14), 0, 0) }
+        val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
+        val importButton = TvDialog.capsuleButton(activity, "导入所选") {
+            val selected = candidates.filterIndexed { index, _ -> checked[index] }
+            dialog.dismiss()
+            importSources(selected)
+        }
+        importButton.id = View.generateViewId()
+        actions.addView(cancel, lp(-2, -2).apply { rightMargin = dp(10) })
+        actions.addView(importButton, lp(-2, -2))
+        content.addView(actions)
+        dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        TvDialog.styleWindow(activity, dialog)
+        // 末行按 ↓ 落到「导入所选」，避免焦点困在清单里
+        rows.lastOrNull()?.let { last ->
+            last.nextFocusDownId = importButton.id
+            importButton.nextFocusUpId = last.id
+            cancel.nextFocusUpId = last.id
+        }
         fun refreshActionImpl() {
             val count = checked.count { it }
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.let { button ->
-                button.text = "导入所选（$count）"
-                button.isEnabled = count > 0
-            }
+            importButton.text = "导入所选（$count）"
+            importButton.isEnabled = count > 0
         }
         refreshAction = { refreshActionImpl() }
-        dialog.setOnShowListener { refreshAction() }
         dialog.show()
         refreshAction()
         rows.firstOrNull()?.requestFocus()
@@ -1948,9 +1981,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     private fun showAllHistory(history: List<String>) {
-        AlertDialog.Builder(activity).setTitle("搜索历史（${history.size}）")
-            .setItems(history.toTypedArray()) { dialog, which -> dialog.dismiss(); submitSearch(history[which]) }
-            .setNegativeButton("取消", null).show()
+        TvDialog.choose(activity, "搜索历史（${history.size}）", history, { which -> submitSearch(history[which]) }).show()
     }
 
     private fun sectionTitle(label: String) = text(label, 13f, muted).apply { setPadding(0, dp(6), 0, dp(4)) }

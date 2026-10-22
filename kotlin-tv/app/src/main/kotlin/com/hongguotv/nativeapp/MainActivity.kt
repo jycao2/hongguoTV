@@ -327,19 +327,14 @@ class MainActivity: Activity() {
         }
         if(storage.restoreAllowed) { restoreLocalBackup(done); return }
         library.localPermissionAsked=true
-        AlertDialog.Builder(this).setTitle("本地备份")
-            .setMessage("开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时在设置中关闭。")
-            .setNegativeButton("稍后") { _,_ -> library.localRestoreChecked=true; done() }
-            .setPositiveButton("授权") { _,_ ->
-                localPermissionContinuation={ restoreLocalBackup(done) }
-                if(!storage.request(this)) {
-                    localPermissionContinuation=null; library.localRestoreChecked=true
-                    Toast.makeText(this,"当前设备无法授予存储权限，可在设置中使用手机备份迁移",Toast.LENGTH_LONG).show()
-                    done()
-                }
+        TvDialog.confirm(this,"本地备份","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时在设置中关闭。") {
+            localPermissionContinuation={ restoreLocalBackup(done) }
+            if(!storage.request(this)) {
+                localPermissionContinuation=null; library.localRestoreChecked=true
+                Toast.makeText(this,"当前设备无法授予存储权限，可在设置中使用手机备份迁移",Toast.LENGTH_LONG).show()
+                done()
             }
-            .setOnCancelListener { library.localRestoreChecked=true; done() }
-            .show()
+        }.also { it.setOnDismissListener { library.localRestoreChecked=true; done() }; it.show() }
     }
     private fun restoreLocalBackup(done: () -> Unit) {
         io.execute {
@@ -369,31 +364,26 @@ class MainActivity: Activity() {
     private fun showLocalBackupDialog(anchor: TextView) {
         val storage=library.localBackup()
         if(!storage.supported) {
-            AlertDialog.Builder(this).setTitle("本地备份与恢复")
-                .setMessage("当前设备没有可用的公共存储，无法自动备份；可使用「手机备份与恢复」迁移记录。")
-                .setPositiveButton("知道了",null).show()
+            TvDialog.info(this,"本地备份与恢复","当前设备没有可用的公共存储，无法自动备份；可使用「手机备份与恢复」迁移记录。").show()
             return
         }
         if(!library.localBackupEnabled) {
-            AlertDialog.Builder(this).setTitle("本地备份与恢复")
-                .setMessage("开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。")
-                .setNegativeButton("取消",null)
-                .setPositiveButton("开启") { _,_ ->
-                    library.localBackupEnabled=true; anchor.text=localBackupLabel()
-                    if(storage.needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
-                }.show()
+            TvDialog.confirm(this,"本地备份与恢复","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。") {
+                library.localBackupEnabled=true; anchor.text=localBackupLabel()
+                if(storage.needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
+            }.show()
             return
         }
         val needsPermission=storage.needsPermission
         val actions=if(needsPermission) arrayOf("授权存储权限","关闭本地自动备份") else arrayOf(if(library.isEmptyForRestore() && library.hasLocalBackup()) "立即恢复" else "立即备份","关闭本地自动备份")
-        AlertDialog.Builder(this).setTitle("本地备份与恢复").setItems(actions) { _,which ->
+        TvDialog.choose(this,"本地备份与恢复",actions.toList(), { which ->
             if(which==0) {
                 if(needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
             } else {
                 library.localBackupEnabled=false; anchor.text=localBackupLabel()
                 Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
             }
-        }.show()
+        }).show()
     }
     /** Empty library with an existing backup must restore instead of overwriting it with nothing. */
     private fun localBackupAction(anchor: TextView) {
@@ -1368,19 +1358,18 @@ class MainActivity: Activity() {
         }}"
         lateinit var clearCache: TextView
         clearCache=setting(device,cacheLabel(null)) {
-            AlertDialog.Builder(this).setTitle("清理缓存").setMessage("清除封面图片和已下载的安装包等缓存数据，不影响收藏和观看记录。")
-                .setNegativeButton("取消",null).setPositiveButton("清理") { _,_ ->
-                    io.execute {
-                        listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
-                        // 统计同样放后台，避免删完立刻在主线程遍历目录
-                        val remaining=cacheBytes()
-                        main.post {
-                            if(isDestroyed) return@post
-                            clearCache.text=cacheLabel(remaining)
-                            Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
-                        }
+            TvDialog.confirm(this,"清理缓存","清除封面图片和已下载的安装包等缓存数据，不影响收藏和观看记录。") {
+                io.execute {
+                    listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
+                    // 统计同样放后台，避免删完立刻在主线程遍历目录
+                    val remaining=cacheBytes()
+                    main.post {
+                        if(isDestroyed) return@post
+                        clearCache.text=cacheLabel(remaining)
+                        Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
                     }
-                }.show()
+                }
+            }.show()
         }
         // 大小统计会遍历缓存目录，放到后台算完再回填，避免设置页构建时阻塞主线程
         io.execute {
@@ -1392,7 +1381,7 @@ class MainActivity: Activity() {
         lateinit var checkButton: TextView
         checkButton=setting(device,"接口自检  ·  首页 / 搜索 / 播放") { showInterfaceCheck(checkButton) }
         val license=setting(device,"开源许可") {
-            AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
+            TvDialog.info(this,"开源许可","本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").show()
         }
         // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
         val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    所有数据保存在本机",12f,muted).apply {
@@ -1553,13 +1542,13 @@ class MainActivity: Activity() {
 
     private fun showRandomDialog(items: List<Series>, loading: Boolean=false) {
         randomDialog?.dismiss()
-        val body=column().apply { setPadding(dp(16),dp(12),dp(16),dp(8)) }
-        val title=text(if(loading) "正在随机挑选…" else "随机荐剧",20f).apply { setTypeface(null,Typeface.BOLD); setPadding(0,0,0,dp(10)) }
+        val body=column().apply { setPadding(0,0,0,0) }
+        val title=TvDialog.title(this,if(loading) "正在随机挑选…" else "随机荐剧")
         body.addView(title)
         val content=FrameLayout(this)
         body.addView(content,lp(-1,dp(420)).apply { bottomMargin=dp(10) })
-        val dlg=AlertDialog.Builder(this).setView(ScrollView(this).apply { addView(body) })
-            .setPositiveButton("换一批",null).setNegativeButton("关闭",null).create()
+        val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
+        TvDialog.styleWindow(this,dlg)
         randomDialog=dlg
         dlg.show()
         if(items.isEmpty() && !loading) {
@@ -1598,18 +1587,19 @@ class MainActivity: Activity() {
             content.addView(recycler,lp(-1,-1))
         }
         // 「换一批」按钮
-        dlg.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
-            text="换一批"
-            setOnClickListener {
-                dlg.dismiss()
-                val picks=randomRecommender.pick(12)
-                if(picks.isNotEmpty()) showRandomDialog(picks)
-                else { showRandomDialog(emptyList(), loading = true); replenishRandomPool { val n=randomRecommender.pick(12); if(n.isNotEmpty()) showRandomDialog(n) } }
-            }
+        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
+        val change=TvDialog.capsuleButton(this,"换一批") {
+            dlg.dismiss()
+            val picks=randomRecommender.pick(12)
+            if(picks.isNotEmpty()) showRandomDialog(picks)
+            else { showRandomDialog(emptyList(), loading = true); replenishRandomPool { val n=randomRecommender.pick(12); if(n.isNotEmpty()) showRandomDialog(n) } }
         }
-        if(loading) {
-            // 补充完成后调用方会重新 showRandomDialog(items) 覆盖这个 loading 框
-        }
+        val close=TvDialog.capsuleButton(this,"关闭") { dlg.dismiss() }
+        buttons.addView(change,lp(-2,-2).apply { rightMargin=dp(12) })
+        buttons.addView(close,lp(-2,-2))
+        body.addView(buttons)
+        change.requestFocus()
+        dlg.setOnDismissListener { randomDialog=null }
     }
     // 退出前二次确认：收藏有更新优先展示，否则从随机荐剧池取 3 部；都没有就直接退出
     private fun showExitConfirm() {
@@ -1619,8 +1609,10 @@ class MainActivity: Activity() {
         val fromUpdates=updated.isNotEmpty()
         // 收藏更新优先，其次随机荐剧池，最后退化到首页 7 天缓存随机抽 3 部，全部为本地数据
         val items=if(fromUpdates) updated else randomRecommender.pick(3).ifEmpty { library.cachedHome(library.contentType)?.items?.shuffled()?.take(3) ?: emptyList() }
-        val body=column().apply { setPadding(dp(16),dp(12),dp(16),dp(8)) }
-        body.addView(text(if(fromUpdates) "收藏更新，看完再走？" else if(items.isNotEmpty()) "猜你喜欢，再看一会儿？" else "确定要退出红果TV吗？",20f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER; setPadding(0,0,0,dp(14)) },lp(-1,-2))
+        val body=column().apply { setPadding(0,0,0,0) }
+        val heading=TvDialog.title(this,if(fromUpdates) "收藏更新，看完再走？" else if(items.isNotEmpty()) "猜你喜欢，再看一会儿？" else "确定要退出红果TV吗？")
+        heading.gravity=Gravity.CENTER; heading.setPadding(0,0,0,dp(14))
+        body.addView(heading,lp(-1,-2))
         val cardWidth=dp(120)
         val posterHeight=(cardWidth/TvStyle.POSTER_ASPECT).toInt()
         val cards=row()
@@ -1641,19 +1633,16 @@ class MainActivity: Activity() {
         if(items.isNotEmpty()) body.addView(cards,lp(-2,-2).apply { gravity=Gravity.CENTER_HORIZONTAL })
         else body.addView(ImageView(this).apply { setImageResource(R.drawable.exit_placeholder); importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },
             lp(dp(200),dp(200)).apply { gravity=Gravity.CENTER_HORIZONTAL; bottomMargin=dp(8) })
-        val dlg=AlertDialog.Builder(this).setView(body)
-            .setPositiveButton("再看一会儿",null).setNegativeButton("退出不看了",null).create()
+        val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
+        TvDialog.styleWindow(this,dlg)
+        val buttons=row().apply { gravity=Gravity.CENTER_HORIZONTAL; setPadding(0,dp(14),0,0) }
+        val exitButton=TvDialog.capsuleButton(this,"退出不看了") { killOnDestroy=true; library.flush(); dlg.dismiss(); finish() }
+        val stayButton=TvDialog.capsuleButton(this,"再看一会儿") { dlg.dismiss() }
+        buttons.addView(exitButton,lp(-2,-2).apply { rightMargin=dp(12) })
+        buttons.addView(stayButton,lp(-2,-2))
+        body.addView(buttons,lp(-2,-2).apply { gravity=Gravity.CENTER_HORIZONTAL; topMargin=dp(14); bottomMargin=dp(6) })
         exitDialog=dlg
         dlg.show()
-        // 隐藏系统按钮栏，换居中圆角按钮：左「退出不看了」弱化，右「再看一会儿」高亮并默认聚焦
-        (dlg.getButton(AlertDialog.BUTTON_POSITIVE)?.parent as? View)?.visibility=View.GONE
-        // 先落盘再走正常 onDestroy 排水，最后杀进程，避免丢失未提交的观看记录
-        val exitButton=button("退出不看了") { killOnDestroy=true; library.flush(); dlg.dismiss(); finish() }
-        val stayButton=button("再看一会儿",true) { dlg.dismiss() }
-        val buttons=row().apply {
-            addView(exitButton,lp(-2,-2)); addView(stayButton,lp(-2,-2).apply { leftMargin=dp(24) })
-        }
-        body.addView(buttons,lp(-2,-2).apply { gravity=Gravity.CENTER_HORIZONTAL; topMargin=dp(14); bottomMargin=dp(6) })
         stayButton.requestFocus()
         dlg.setOnDismissListener { exitDialog=null }
     }
@@ -2144,16 +2133,32 @@ class MainActivity: Activity() {
         val current=extras.blockedWords
         val words=(presets+current.filterNot { it in presets }).distinct()
         val checked=BooleanArray(words.size) { words[it] in current }
-        val dialog=AlertDialog.Builder(this).setTitle("弹幕屏蔽词")
-            .setMultiChoiceItems(words.toTypedArray(),checked) { _,index,isChecked -> checked[index]=isChecked }
-            .setNegativeButton("取消",null)
-            .setNeutralButton("清空") { _,_-> extras.blockedWords=emptySet(); applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  0 个" }
-            .setPositiveButton("保存") { _,_->
-                extras.blockedWords=words.filterIndexed { index,_ -> checked[index] }.toSet()
-                applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  ${extras.blockedWords.size} 个"
-                Toast.makeText(this,"屏蔽词已保存，立即生效",Toast.LENGTH_SHORT).show()
-            }.create()
-        dialog.show(); dialog.listView.requestFocus()
+        val content=column()
+        content.addView(TvDialog.title(this,"弹幕屏蔽词"))
+        val list=ListView(this).apply {
+            adapter=TvDialog.choiceAdapter(this@MainActivity,words,multiple=true)
+            choiceMode=ListView.CHOICE_MODE_MULTIPLE
+            words.forEachIndexed { index,word -> setItemChecked(index,checked[index]) }
+            setOnItemClickListener { _,_,index,_ -> checked[index]=!checked[index] }
+        }
+        content.addView(list,lp(-1,0).apply { weight=1f })
+        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
+        val clear=TvDialog.capsuleButton(this,"清空") {
+            extras.blockedWords=emptySet(); applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  0 个"
+            list.clearChoices(); list.requestLayout()
+        }
+        val save=TvDialog.capsuleButton(this,"保存") {
+            extras.blockedWords=words.filterIndexed { index,_ -> list.isItemChecked(index) }.toSet()
+            applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  ${extras.blockedWords.size} 个"
+            Toast.makeText(this@MainActivity,"屏蔽词已保存，立即生效",Toast.LENGTH_SHORT).show()
+        }
+        buttons.addView(clear,lp(-2,-2).apply { rightMargin=dp(12) })
+        buttons.addView(save,lp(-2,-2))
+        content.addView(buttons)
+        val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
+        dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
+        dialog.show(); list.requestFocus()
     }
     private fun applyBlockedWords() = danmakuView?.setBlockedFilter { text -> extras.blocks(text) }
 
@@ -2213,9 +2218,8 @@ class MainActivity: Activity() {
         add("联想") { val words=repository.suggest("修仙"); "联想 ${words.size} 个" }
         content.addView(actions)
         content.addView(text("说明：每项只发一次请求，签名搜索接口被平台停用时「搜索」会走网站兜底。",12f,muted).apply { setPadding(dp(8),dp(10),dp(8),0) })
-        dialog=AlertDialog.Builder(this).setTitle("接口自检")
-            .setView(ScrollView(this).apply { addView(content) })
-            .setNegativeButton("关闭",null).create()
+        dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show(); buttons.first().requestFocus()
     }
@@ -2255,8 +2259,8 @@ class MainActivity: Activity() {
             view.nextFocusDownId=listOf(step,speed,menu).getOrNull(index+1)?.id ?: View.NO_ID
             view.nextFocusUpId=listOf(step,speed,menu).getOrNull(index-1)?.id ?: View.NO_ID
         }
-        val dialog=AlertDialog.Builder(this).setTitle("遥控器按键").setView(ScrollView(this).apply { addView(content) })
-            .setNegativeButton("关闭",null).create()
+        val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show(); step.requestFocus()
     }
@@ -2378,32 +2382,60 @@ class MainActivity: Activity() {
         if(speedDialog!=null) return
         val speeds=PlaybackSpeed.options
         val selected=speeds.indexOf(library.playbackSpeed)
-        val dialog=AlertDialog.Builder(this).setTitle("全局默认倍速")
-            .setSingleChoiceItems(speeds.map(PlaybackSpeed::label).toTypedArray(),selected) { popup,index ->
+        val content=column()
+        content.addView(TvDialog.title(this,"全局默认倍速"))
+        val list=ListView(this).apply {
+            adapter=TvDialog.choiceAdapter(this@MainActivity,speeds.map(PlaybackSpeed::label))
+            choiceMode=ListView.CHOICE_MODE_SINGLE
+            setItemChecked(selected,true)
+            setOnItemClickListener { _,_,index,_ ->
                 library.playbackSpeed=speeds[index]
                 if(inPlayer) player?.setPlaybackSpeed(library.playbackSpeed)
                 if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "倍速 " else "默认倍速  ·  ")+PlaybackSpeed.label(library.playbackSpeed)
                 if(inPlayer) updatePlaybackText()
-                popup.dismiss()
-            }.setNegativeButton("取消",null).create()
+                speedDialog?.dismiss()
+            }
+        }
+        content.addView(list,lp(-1,0).apply { weight=1f })
+        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
+        val cancel=TvDialog.capsuleButton(this,"取消") { speedDialog?.dismiss() }
+        buttons.addView(cancel,lp(-2,-2))
+        content.addView(buttons)
+        val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
         speedDialog=dialog
         dialog.setOnDismissListener {
             speedDialog=null
             if(anchor.isAttachedToWindow) { anchor.requestFocus(); if(inPlayer) showHud() }
         }
-        dialog.show(); dialog.listView.setSelection(selected); dialog.listView.requestFocus()
+        dialog.show(); list.setSelection(selected); list.requestFocus()
     }
     private fun showQualityPicker(anchor: TextView,inPlayer: Boolean) {
         val options=PlaybackQuality.options
-        val dialog=AlertDialog.Builder(this).setTitle("全局默认清晰度")
-            .setSingleChoiceItems(options.map { "${it}P" }.toTypedArray(),options.indexOf(library.maxQuality)) { popup,index ->
+        val selected=options.indexOf(library.maxQuality)
+        val content=column()
+        content.addView(TvDialog.title(this,"全局默认清晰度"))
+        val list=ListView(this).apply {
+            adapter=TvDialog.choiceAdapter(this@MainActivity,options.map { "${it}P" })
+            choiceMode=ListView.CHOICE_MODE_SINGLE
+            setItemChecked(selected,true)
+            setOnItemClickListener { _,_,index,_ ->
                 val target=options[index]; val changed=library.maxQuality!=target
-                library.maxQuality=target; popup.dismiss()
+                library.maxQuality=target
                 if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "清晰度 " else "默认清晰度  ·  ")+"${target}P"
                 if(inPlayer && changed) playEpisode(episodeIndex,currentPosition(),player?.playWhenReady ?: requestedAutoplay)
-            }.setNegativeButton("取消",null).create()
+            }
+        }
+        content.addView(list,lp(-1,0).apply { weight=1f })
+        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
+        val cancel=TvDialog.capsuleButton(this,"取消") { }
+        buttons.addView(cancel,lp(-2,-2))
+        content.addView(buttons)
+        val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
+        cancel.setOnClickListener { dialog.dismiss() }
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
-        dialog.show()
+        dialog.show(); list.setSelection(selected); list.requestFocus()
     }
     private fun showEpisodePanel(anchor: View) {
         val data=detail ?: return
