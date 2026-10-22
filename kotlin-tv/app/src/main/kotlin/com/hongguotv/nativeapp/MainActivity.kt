@@ -1394,7 +1394,7 @@ class MainActivity: Activity() {
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
                 (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())+
                 listOf(blockedWords,keySettings,autoSkipButton)
-            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,statsButton,sourceHiddenButton,clearCache,checkButton,updates,license)
+            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,statsButton,sourceHiddenButton,clearCache,updates,checkButton,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
