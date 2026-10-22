@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
 import android.app.Activity
@@ -772,8 +772,12 @@ class MainActivity: Activity() {
             rankSwitch=addButton(heading,if(rankBoard==RankBoard.COMIC) "看短剧榜" else "看漫剧榜") {
                 rankBoard=if(rankBoard==RankBoard.COMIC) RankBoard.REAL else RankBoard.COMIC
                 page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
+                // 重建期间网格被清空，焦点必须落回按钮，否则会丢到不可见区域
+                rankSwitch?.post { if(rankSwitch?.isAttachedToWindow==true) rankSwitch?.requestFocus() }
             }.apply { nextFocusUpId=nav[tab].id }
-            rankRefresh=addButton(heading,"刷新榜单") { page=1; catalogFocus=""; showCatalog(true) }.apply { nextFocusUpId=nav[tab].id }
+            rankRefresh=addButton(heading,"刷新榜单") { page=1; catalogFocus=""; showCatalog(true)
+                rankRefresh?.post { if(rankRefresh?.isAttachedToWindow==true) rankRefresh?.requestFocus() }
+            }.apply { nextFocusUpId=nav[tab].id }
             container.addView(heading)
             rankSubtitle=text(if(load) "正在读取最新榜单…" else ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜",13f,muted)
                 .apply { setPadding(0,0,0,dp(8)) }
@@ -783,7 +787,11 @@ class MainActivity: Activity() {
             val heading=row().apply { setPadding(0,dp(14),0,dp(6)) }
             heading.addView(text(if(tab==3) "我的收藏" else "接着上次看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(tab==3) {
-                favoriteCheck=addButton(heading,"检查更新") { favoriteMonitor.check(force=true) }.apply { nextFocusUpId=nav[tab].id }
+                favoriteCheck=addButton(heading,"检查更新") {
+                    if(favoriteMonitor.running) Toast.makeText(this,"正在检查收藏更新…",Toast.LENGTH_SHORT).show()
+                    else if(library.favorites().isEmpty()) Toast.makeText(this,"先收藏几部剧，再来检查更新",Toast.LENGTH_SHORT).show()
+                    else { favoriteMonitor.check(force=true); Toast.makeText(this,"开始检查收藏更新…",Toast.LENGTH_SHORT).show() }
+                }.apply { nextFocusUpId=nav[tab].id }
             }
             if(tab==4 && library.history().isNotEmpty()) {
                 historyManage=addButton(heading,"管理记录") {
@@ -1008,10 +1016,8 @@ class MainActivity: Activity() {
             val fallback=if(cols==gridColumns) (resources.displayMetrics.widthPixels*.9f).toInt() else dp(118)*cols
             val gridWidth=parent.width.takeIf { it>0 } ?: fallback
             val natural=((gridWidth/cols-dp(14)-dp(8))/TvStyle.POSTER_ASPECT).toInt()
-            val chrome=dp(13)+dp(7)+title.lineHeight*2+maxOf(dp(19),badge.lineHeight)
-            // Reserve room for the end-of-list footer so a focused footer never pushes the last row's badges off screen.
-            val posterHeight=if(parent.height>0) minOf(natural,(parent.height-chrome-dp(52)-dp(4)).coerceAtLeast(dp(48))) else natural
-            card.addView(artwork,lp(-1,posterHeight))
+            // 海报高度固定为列宽推导值：不要按父容器高度压缩，否则首屏卡片与滚动新建卡片高度不一致
+            card.addView(artwork,lp(-1,natural))
             card.addView(title,lp(-1,-2))
             card.addView(badge,lp(-1,-2))
             card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
@@ -2183,7 +2189,8 @@ class MainActivity: Activity() {
         tvTools.info("观看统计 · 本机",body,anchor)
     }
 
-    /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。 */
+    /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。
+     *  每个按钮左侧带状态圆点：灰=未检测，绿=通，红=不通。 */
     private fun showInterfaceCheck(anchor: TextView) {
         val content=column()
         val status=text("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
@@ -2192,23 +2199,35 @@ class MainActivity: Activity() {
         var checking=false
         val actions=row()
         val buttons=mutableListOf<TextView>()
-        fun check(name: String,probe: ()->String) {
+        val dotOk=Color.rgb(86,196,122)
+        val dotFail=Color.rgb(235,95,95)
+        fun check(name: String,dot: View,probe: ()->String) {
             if(checking) return
             checking=true; status.text="正在检测 $name…"
+            dot.background=TvStyle.shape(this,TvStyle.outline,radius=4)
             val started=android.os.SystemClock.elapsedRealtime()
             io.execute {
                 val result=runCatching(probe)
                 main.post {
                     if(!dialog.isShowing) return@post
                     val elapsed=android.os.SystemClock.elapsedRealtime()-started
-                    status.text=result.fold(
-                        { detail -> "$name · 正常 · $detail · ${elapsed}ms" },
-                        { problem -> "$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}" })
+                    result.fold(
+                        { detail -> status.text="$name · 正常 · $detail · ${elapsed}ms"; dot.background=TvStyle.shape(this,dotOk,radius=4) },
+                        { problem -> status.text="$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; dot.background=TvStyle.shape(this,dotFail,radius=4) })
                     checking=false
                 }
             }
         }
-        fun add(name: String,probe: ()->String): TextView = button(name) { check(name,probe) }.also { buttons+=it; actions.addView(it,lp().apply { width=0; weight=1f; rightMargin=dp(6) }) }
+        fun add(name: String,probe: ()->String): TextView {
+            val wrap=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+            val dot=View(this).apply { background=TvStyle.shape(this@MainActivity,TvStyle.outline,radius=4) }
+            wrap.addView(dot,LinearLayout.LayoutParams(dp(7),dp(7)).apply { rightMargin=dp(6) })
+            val btn=button(name) { check(name,dot,probe) }
+            wrap.addView(btn,LinearLayout.LayoutParams(0,-2,1f))
+            buttons+=btn
+            actions.addView(wrap,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
+            return btn
+        }
         add("首页") { val page=repository.home(1,library.contentType); "返回 ${page.items.size} 条" }
         add("搜索") { val page=repository.search("修仙",1,library.contentType); "返回 ${page.items.size} 条" }
         add("播放") {

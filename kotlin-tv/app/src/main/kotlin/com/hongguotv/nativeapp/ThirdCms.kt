@@ -144,7 +144,12 @@ object ThirdCms {
         val array = json.optJSONArray("list") ?: return emptyList()
         val names = LinkedHashSet<String>()
         for(index in 0 until array.length()) {
-            val name = array.optJSONObject(index)?.optString("vod_name")?.trim().orEmpty()
+            // 部分 CMS 在 vod_name 里嵌入 <em> 高亮标签与 HTML 实体，剥离后再展示与搜索
+            val name = array.optJSONObject(index)?.optString("vod_name").orEmpty()
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&#39;", "'")
+                .trim()
             if(name.isNotEmpty()) names += name
             if(names.size >= SUGGEST_LIMIT) break
         }

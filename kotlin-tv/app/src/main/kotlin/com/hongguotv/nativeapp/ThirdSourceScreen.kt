@@ -280,7 +280,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val back = detailReturnMode
             detailReturnMode = Mode.BROWSE; mode = back; rebuild(); true
         }
-        Mode.SEARCH -> { mode = Mode.BROWSE; rebuild(); true }
+        Mode.SEARCH -> { searchWord = null; mode = Mode.BROWSE; rebuild(); true }
         Mode.SOURCES -> { sourceBatchMode = false; sourceSelected.clear(); mode = Mode.BROWSE; rebuild(); true }
         Mode.HISTORY -> { mode = Mode.BROWSE; rebuild(); true }
         Mode.FAVORITE -> { mode = Mode.BROWSE; rebuild(); true }
@@ -1395,6 +1395,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     refreshBatchUi()
                 } else switchSource(source)
             }
+            line.setOnKeyListener { _, key, event ->
+                if(!sourceBatchMode && key == KeyEvent.KEYCODE_DPAD_LEFT && event.action == KeyEvent.ACTION_UP) {
+                    confirmDeleteSource(source); true
+                } else false
+            }
             list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
             rows += line
         }
@@ -1418,7 +1423,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             body.addView(bar)
             body.addView(text("点击条目勾选 · 「全选」一键勾选全部 · 删除前二次确认", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
         } else {
-            body.addView(text("点击源条目切换使用 · 顶部「批量删除」可多选 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+            body.addView(text("点击源条目切换使用 · 条目上按 ← 删除该源 · 顶部「批量删除」可多选 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         }
         body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(8), 0, dp(2)) })
 
@@ -1464,6 +1469,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             button.isEnabled = count > 0
         }
         batchSelectAllButton?.text = if(sources.isNotEmpty() && count == sources.size) "取消全选" else "全选"
+    }
+
+    /** 单源删除：行上遥控器左键触发；删除当前源则顺延到第一个剩余源。 */
+    private fun confirmDeleteSource(source: ThirdSource) {
+        tvTools.confirm("删除片源", "确定删除「${source.name}」吗？删除后可通过导入配置或扫码导入找回。", null) {
+            val remaining = sources.filterNot { it.id == source.id }
+            store.saveSources(remaining)
+            if(remaining.none { it.id == currentId }) store.setCurrent(remaining.firstOrNull()?.id)
+            probes.remove(source.id)
+            resetBrowseState()
+            Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
+            backupRequest(); rebuild()
+        }
     }
 
     /** 批量删除：选中项二次确认后移除，当前源被删则顺延到第一个剩余源。 */
