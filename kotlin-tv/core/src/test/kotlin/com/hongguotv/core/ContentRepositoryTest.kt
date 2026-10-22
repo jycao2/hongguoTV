@@ -165,7 +165,7 @@ class ContentRepositoryTest {
             requests+=request
             if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","comic-session").put("passback","comic-cursor").put("next_offset",25))).toString()
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"205"}}]}}};</script>"""
+            else """{"searchList":[{"video_data":{"series_id":"333","series_name":"漫画网站结果","genre":"205"}}]}"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         repo.search("修仙",2,ContentType.COMIC)
@@ -184,7 +184,7 @@ class ContentRepositoryTest {
             requests++
             if(request.url.host.endsWith("fqnovel.com")) JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999")
                 .put("search_id","session").put("passback","cursor"))).toString()
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"205"}}]}}};</script>"""
+            else """{"searchList":[{"video_data":{"series_id":"444","series_name":"漫画兜底","genre":"205"}}]}"""
         }
         repo.search("修仙",1,ContentType.COMIC)
         now=300001L
@@ -198,26 +198,26 @@ class ContentRepositoryTest {
     @Test fun comicSearchFallsBackToWebsiteAndKeepsOnlyComicGenreRows() {
         val repo=repository { request ->
             if(request.url.host.endsWith("fqnovel.com")) ""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}}};</script>"""
+            else """{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}"""
         }
         val result=repo.search("修仙",1,ContentType.COMIC)
         assertEquals(listOf("222"),result.items.map { it.id })
-        // 网站搜索的 page 参数被忽略，翻页只会拿到同一批结果，因此不能提示还有更多
+        // 站点没有 hasMore 时不再提示翻页
         assertFalse(result.hasMore)
     }
 
     @Test fun multiSeasonSearchFillsMissingSeasonsFromSuggestions() {
         val repo=repository { request ->
             val url=request.url
-            val path=java.net.URLDecoder.decode(url.encodedPath,"UTF-8")
+            val keyword=url.queryParameter("query").orEmpty()
             when {
-                url.host.endsWith("fqnovel.com") && path.contains("suggest") ->
+                url.host.endsWith("fqnovel.com") && url.encodedPath.contains("suggest") ->
                     JSONObject().put("code",0).put("data",JSONObject().put("query_result",JSONArray().put("测试剧第二季"))).toString()
                 url.host.endsWith("fqnovel.com") -> ""
-                path.contains("第二季") ->
-                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"222","series_name":"测试剧第二季","genre":"205"}}]}}};</script>"""
+                keyword.contains("第二季") ->
+                    """{"searchList":[{"video_data":{"series_id":"222","series_name":"测试剧第二季","genre":"205"}}]}"""
                 else ->
-                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"测试剧第一季","genre":"205"}},{"video_data":{"series_id":"113","series_name":"测试剧第三季","genre":"205"}}]}}};</script>"""
+                    """{"searchList":[{"video_data":{"series_id":"111","series_name":"测试剧第一季","genre":"205"}},{"video_data":{"series_id":"113","series_name":"测试剧第三季","genre":"205"}}]}"""
             }
         }
         val result=repo.search("测试剧",1,ContentType.COMIC)
@@ -227,10 +227,31 @@ class ContentRepositoryTest {
     @Test fun shortSearchFallsBackToWebsiteAndKeepsOnlyShortGenreRows() {
         val repo=repository { request ->
             if(request.url.host.endsWith("fqnovel.com")) ""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}}};</script>"""
+            else """{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}},{"video_data":{"series_id":"222","series_name":"漫画测试","genre":"205"}}]}"""
         }
         val result=repo.search("总裁",1,ContentType.SHORT)
         assertEquals(listOf("111"),result.items.map { it.id })
+    }
+
+    @Test fun websiteSearchPaginatesWithSitePageAndHasMore() {
+        val pages=mutableListOf<String>()
+        val repo=repository { request ->
+            if(request.url.host.endsWith("fqnovel.com")) ""
+            else {
+                assertEquals("/api/search/result/",request.url.encodedPath)
+                assertEquals("修仙",request.url.queryParameter("query"))
+                val page=request.url.queryParameter("page").orEmpty()
+                pages+=page
+                """{"searchList":[{"video_data":{"series_id":"90$page","series_name":"网站结果第${page}页","genre":"205"}}],"totalPages":2,"hasMore":${page=="1"}}"""
+            }
+        }
+        val first=repo.search("修仙",1,ContentType.COMIC)
+        assertEquals(listOf("901"),first.items.map { it.id })
+        assertTrue(first.hasMore)
+        val second=repo.search("修仙",2,ContentType.COMIC)
+        assertEquals(listOf("902"),second.items.map { it.id })
+        assertFalse(second.hasMore)
+        assertEquals(listOf("1","2"),pages)
     }
 
     @Test fun shortHomeStillUsesCategoryAndStopsOnLastPage() {
@@ -273,7 +294,7 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             requests++
             if(request.url.host.endsWith("fqnovel.com")) """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}"""
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}}]}}};</script>"""
+            else """{"searchList":[{"video_data":{"series_id":"111","series_name":"短剧测试","genre":"203"}}]}"""
         }
         assertTrue(repo.search("修仙",1,ContentType.COMIC).items.isEmpty())
         assertEquals(2,requests)
@@ -284,7 +305,7 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             paths+=request.url.encodedPath
             if(paths.size<=2) throw IOException("offline")
-            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"456","series_name":"测试短剧","genre":"203"}]}}}};</script>"""
+            """{"searchList":[{"video_data":{"series_id":"456","series_name":"测试短剧","genre":"203"}}]}"""
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(3,paths.size)
@@ -324,12 +345,12 @@ class ContentRepositoryTest {
         val series=JSONObject().put("series_id","123").put("series_name","测试剧 第二季").put("vid_list",JSONArray().put("900"))
         val repo=repository { request ->
             if(request.url.encodedPath=="/detail") detailHtml(series,JSONArray())
-            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[
+            else """{"searchList":[
                 {"video_data":{"series_id":"222","series_name":"测试剧 第三季","genre":"203"}},
                 {"video_data":{"series_id":"111","series_name":"别人的剧","genre":"203"}},
                 {"video_data":{"series_id":"333","series_name":"测试剧 第一季","genre":"203"}},
                 {"video_data":{"series_id":"444","series_name":"测试剧 第十季","genre":"203"}},
-                {"video_data":{"series_id":"123","series_name":"测试剧 第二季","genre":"203"}}]}}};</script>"""
+                {"video_data":{"series_id":"123","series_name":"测试剧 第二季","genre":"203"}}]}"""
         }
         val detail=repo.detail("123")
         assertEquals(listOf("333","222","444"),detail.sameName.map { it.id })
@@ -343,14 +364,14 @@ class ContentRepositoryTest {
                 request.url.host.endsWith("fqnovel.com") -> JSONObject().put("code",0)
                     .put("data",JSONObject().put("query_result",JSONArray().put("测试剧 第二季").put("测试剧 第三季"))).toString()
                 else -> {
-                    val keyword=java.net.URLDecoder.decode(request.url.pathSegments.last(),"UTF-8")
+                    val keyword=request.url.queryParameter("query").orEmpty()
                     val row=when(keyword) {
                         "测试剧" -> """{"video_data":{"series_id":"123","series_name":"测试剧 第一季","genre":"203"}}"""
                         "测试剧 第二季" -> """{"video_data":{"series_id":"222","series_name":"测试剧 第二季","genre":"203"}}"""
                         "测试剧 第三季" -> """{"video_data":{"series_id":"333","series_name":"测试剧 第三季","genre":"203"}}"""
                         else -> ""
                     }
-                    """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[${row}]}}};</script>"""
+                    if(row.isEmpty()) """{"searchList":[]}""" else """{"searchList":[${row}]}"""
                 }
             }
         }

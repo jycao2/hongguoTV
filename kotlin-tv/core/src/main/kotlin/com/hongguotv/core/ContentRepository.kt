@@ -42,6 +42,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
     private val genreCache=mutableMapOf<ContentType,Pair<Long,List<Genre>>>()
+    private val suggestCache=linkedMapOf<String,Pair<Long,List<String>>>()
+    // 签名搜索接口被平台关停时会稳定返回空体，短期内不再重复尝试，避免每次搜索都白等两次往返
+    @Volatile private var appSearchRetryAt=0L
     private fun categoryPath(type: ContentType)=if(type==ContentType.COMIC) "comic-drama" else "real-drama"
     private fun text(url: String, signed: Signer.Request? = null): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
@@ -118,12 +121,20 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
         return fillSeasons(webSearch(keyword,page,SHORT_WEB_GENRE),page,type,keyword)
     }
+    // 站点搜索页已改为 SPA，数据由 /api/search/result/ 下发（返回 searchList/totalPages/hasMore，10 条一页）。
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
-        val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
-        val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
-        val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
+        val url="$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page"
+        // 该接口偶发 502，重试一次再判定失败，避免搜索页直接报错
+        val body=runCatching { text(url) }.getOrElse { first ->
+            Thread.sleep(300)
+            runCatching { text(url) }.getOrElse { throw first }
+        }
+        val data=runCatching { JSONObject(body) }.getOrElse { throw IOException("搜索数据暂不可用") }
+        val rows=data.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
         val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
-        return CatalogPage(valid(mapped),false)
+        // 站点把漫剧/短剧混在同一结果里，按 genre 过滤后单页条数会减少；分页仍以站点页数为准。
+        val lastPage=data.optInt("totalPages",page)
+        return CatalogPage(valid(mapped),data.optBoolean("hasMore",false) && page<minOf(lastPage,100))
     }
     private data class SeasonFill(val at: Long, val items: List<Series>)
     private val seasonFills=mutableMapOf<String, SeasonFill>()
@@ -138,14 +149,16 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         // 基底整词、基底前 4 字与联想互不依赖，并发取回，避免串行等待
         val queries=hints.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        // 线程数保持与改造前一致，仅把串行的联想查询改为并发，不额外放大站点并发请求
         val pool=Executors.newFixedThreadPool(4)
         try {
             val pages=listOf(base,base.take(4)).distinct().map { query -> pool.submit(Callable { runCatching { webSearch(query,1,genre) }.getOrNull() }) }
-            val suggestions=pool.submit(Callable { queries.map { suggestRaw(it) } })
+            // 联想查询彼此独立，逐个并发提交，避免串行等待多轮往返
+            val suggestions=queries.map { query -> pool.submit(Callable { runCatching { suggestRaw(query) }.getOrDefault(emptyList()) }) }
             pages.forEach { absorb(it.get()) }
             // 多个 query 的联想结果互补，能覆盖更多季（联想每次返回的子集并不稳定）
             val knownTitles=(known.map { it.title }+found.map { it.title }).map { it.trim() }.toSet()
-            val names=suggestions.get().flatten().map { it.trim() }
+            val names=suggestions.flatMap { runCatching { it.get() }.getOrDefault(emptyList()) }.map { it.trim() }
                 .filter { it.isNotBlank() && baseName(it)==base && it !in knownTitles }.distinct()
             // 逐季回查同样互不依赖，3 路并发把最耗时的这段压到原来的三分之一
             val lookups=names.map { name ->
@@ -200,20 +213,29 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         return page.copy(items=output)
     }
-    private fun suggestRaw(query: String): List<String> = runCatching {
-        if(query.isBlank() || query.length>40) return emptyList()
-        VendorConstants.regenerate()
-        val values=VendorConstants.device.toMutableMap()
-        for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
-        values["version_name"]="7.2.2.32"
-        values["query"]=query
-        val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
-        val data=JSONObject(text(signed.url,signed))
-        if(data.optInt("code",-1)!=0) return emptyList()
-        val rows=data.optJSONObject("data")?.optJSONArray("query_result") ?: return emptyList()
-        (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
-    }.getOrElse { emptyList() }
+    private fun suggestRaw(query: String): List<String> {
+        synchronized(suggestCache) { suggestCache[query]?.takeIf { clock()-it.first<300_000 }?.let { return it.second } }
+        val result=runCatching {
+            if(query.isBlank() || query.length>40) return emptyList()
+            VendorConstants.regenerate()
+            val values=VendorConstants.device.toMutableMap()
+            for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
+            values["version_name"]="7.2.2.32"
+            values["query"]=query
+            val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
+            val data=JSONObject(text(signed.url,signed))
+            if(data.optInt("code",-1)!=0) return emptyList()
+            val rows=data.optJSONObject("data")?.optJSONArray("query_result") ?: return emptyList()
+            (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
+        }.getOrElse { emptyList() }
+        if(result.isNotEmpty()) synchronized(suggestCache) {
+            suggestCache[query]=clock() to result
+            while(suggestCache.size>200) suggestCache.remove(suggestCache.keys.first())
+        }
+        return result
+    }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
+        if(clock()<appSearchRetryAt) throw IOException("搜索接口暂不可用")
         VendorConstants.regenerate()
         val values=VendorConstants.device.toMutableMap()
         for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
@@ -237,7 +259,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             val candidate=runCatching { JSONObject(text(signed.url,signed)) }.getOrNull() ?: continue
             if(candidate.optInt("code",-1)==0) { data=candidate; break }
         }
-        if(data==null) throw IOException("搜索接口暂不可用")
+        if(data==null) {
+            appSearchRetryAt=clock()+300_000
+            throw IOException("搜索接口暂不可用")
+        }
         val tabs=data.optJSONArray("search_tabs") ?: data.optJSONObject("data")?.optJSONArray("search_tabs") ?: throw IOException("搜索格式异常")
         val tab=tabs.objects().firstOrNull { it.optInt("tab_type")==type.searchTab } ?: throw IOException("${type.label}搜索暂不可用")
         val list=mutableListOf<Series>()
