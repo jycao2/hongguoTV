@@ -22,8 +22,10 @@ import java.io.File
 /**
  * Android storage adapter for the rotating local backup.
  * API 26-28: legacy external storage after WRITE permission.
- * API 29: MediaStore.Downloads, because scoped storage is enforced for targetSdk 36.
- * API 30+: MANAGE_EXTERNAL_STORAGE and a plain directory.
+ * API 29+: MediaStore.Downloads — no runtime permission needed to write/read the app's own
+ * entries, so it works on Android TV devices that hide the "All files access" screen
+ * (MANAGE_EXTERNAL_STORAGE cannot be granted there). Cross-install restore may still need
+ * full storage access; if unavailable it fails silently and the user falls back to phone backup.
  */
 class LocalBackupStorage(private val context: Context) {
     companion object {
@@ -37,15 +39,15 @@ class LocalBackupStorage(private val context: Context) {
     val backupAllowed: Boolean
         get() = when {
             !supported -> false
-            Build.VERSION.SDK_INT >= 30 -> Environment.isExternalStorageManager()
-            Build.VERSION.SDK_INT == 29 -> true
+            // MediaStore 写入无需权限
+            Build.VERSION.SDK_INT >= 29 -> true
             else -> context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     val restoreAllowed: Boolean
         get() = when {
             !supported -> false
-            Build.VERSION.SDK_INT >= 30 -> Environment.isExternalStorageManager()
-            Build.VERSION.SDK_INT == 29 -> context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            // 读取本应用写入的 MediaStore 条目无需权限；跨安装读取失败时由调用方兜底
+            Build.VERSION.SDK_INT >= 29 -> true
             else -> backupAllowed
         }
     val needsPermission: Boolean get() = !backupAllowed || !restoreAllowed
@@ -69,8 +71,8 @@ class LocalBackupStorage(private val context: Context) {
     fun store(): LocalBackupStore? {
         if (!supported || (!backupAllowed && !restoreAllowed)) return null
         return when {
-            Build.VERSION.SDK_INT >= 29 && Build.VERSION.SDK_INT < 30 -> LocalBackupStore(MediaStoreBackupFiles(context.contentResolver))
-            Build.VERSION.SDK_INT >= 30 || Build.VERSION.SDK_INT <= 28 ->
+            Build.VERSION.SDK_INT >= 29 -> LocalBackupStore(MediaStoreBackupFiles(context.contentResolver))
+            Build.VERSION.SDK_INT <= 28 ->
                 LocalBackupStore(DirectoryBackupFiles(File(Environment.getExternalStorageDirectory(), DIR_NAME)))
             else -> null
         }
@@ -78,7 +80,7 @@ class LocalBackupStorage(private val context: Context) {
     fun load(): BackupData? = store()?.also { it.cleanup() }?.load()
 }
 
-/** MediaStore.Downloads backend for Android 10, where direct /sdcard writes are blocked. */
+/** MediaStore.Downloads backend for Android 10+ (API 29+), where direct /sdcard writes are blocked and MANAGE_EXTERNAL_STORAGE may be unavailable on TV. */
 @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
 private class MediaStoreBackupFiles(private val resolver: ContentResolver) : BackupFiles {
     private val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI

@@ -1433,8 +1433,10 @@ class MainActivity: Activity() {
         val key=(searchInput as? EditText)?.text?.toString()?.trim().orEmpty()
         if(key.isEmpty() || !key.matches(Regex("[a-zA-Z0-9]+"))) {
             suggestTicket++
-            // 搜索词为中文（如点击联想词后）时保留上一次的联想列表，便于继续选择其他词
-            val keep=if(!phoneSearched && lastSuggestWords.isNotEmpty() && (key==query || key==lastSuggestKey)) lastSuggestWords else emptyList()
+            // 已提交搜索后（输入框显示的就是搜索词）隐藏联想栏：否则联想卡片在结果未加载时渲染，
+            // nextFocusRight 指向自身，导致右键回不到搜索结果、左键又跳进联想列形成焦点陷阱。
+            // 用户重新编辑输入框时联想自然恢复
+            val keep=if(!phoneSearched && lastSuggestWords.isNotEmpty() && key==lastSuggestKey && key!=query) lastSuggestWords else emptyList()
             renderSuggest(keep); return
         }
         // 手机输入的精确剧名直接出结果，不展示联想；纯首拼仍提供联想辅助
@@ -1463,11 +1465,11 @@ class MainActivity: Activity() {
         views.forEachIndexed { index,view ->
             if(suggestVertical) container.addView(view,lp(-1,-2).apply { bottomMargin=dp(4) })
             else container.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) })
-            // 竖排联想：左回键盘离开位置、右进结果首卡（结果区空时原地不动，避免焦点跳到导航栏）；横排保持词间左右互连
+            // 竖排联想：左回键盘离开位置、右/下进结果区（结果首卡优先，否则指向结果网格，避免原地自锁）；横排保持词间左右互连
             view.nextFocusLeftId=if(suggestVertical) (keyboardLastLabel?.let { keyboardKeys[it] } ?: azFirst)?.id ?: historyFirst?.id ?: View.NO_ID else views[if(index==0) 0 else index-1].id
-            view.nextFocusRightId=if(suggestVertical) resultFirstCard?.id ?: view.id else views[if(index==views.size-1) index else index+1].id
+            view.nextFocusRightId=if(suggestVertical) resultFirstCard?.id ?: catalogRecycler?.id ?: view.id else views[if(index==views.size-1) index else index+1].id
             view.nextFocusUpId=if(index==0) searchInput?.id ?: View.NO_ID else views[index-1].id
-            view.nextFocusDownId=if(index==views.size-1) resultFirstCard?.id ?: view.id else views[index+1].id
+            view.nextFocusDownId=if(index==views.size-1) resultFirstCard?.id ?: catalogRecycler?.id ?: view.id else views[index+1].id
             // 保留 focusStyle 的焦点绘制，仅追加词条索引记忆
             val paint=view.onFocusChangeListener
             view.setOnFocusChangeListener { v,focused -> paint?.onFocusChange(v,focused); if(focused) suggestFocusIndex=index }
