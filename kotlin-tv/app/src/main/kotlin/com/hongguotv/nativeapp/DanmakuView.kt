@@ -37,6 +37,8 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
     private val baseCrossMs = crossMs
     private var currentCrossMs = crossMs
     private var maxTracks = Int.MAX_VALUE
+    /** 命中屏蔽词的弹幕直接丢弃，不再参与轨道分配。 */
+    private var blocked: (String) -> Boolean = { false }
     private val gapPx = 24 * resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -90,6 +92,13 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
         running = true
         visibility = VISIBLE
         postOnAnimation(frame)
+    }
+
+    fun setBlockedFilter(filter: (String) -> Boolean) {
+        blocked = filter
+        active.removeAll { blocked(it.text) }
+        dirty = true
+        invalidate()
     }
 
     fun unbind() {
@@ -156,6 +165,7 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
 
     private fun emit(comment: Danmaku, position: Long) {
         if (pxPerMs <= 0f) return
+        if (blocked(comment.text)) return
         // Expand emoji codes once here: measure and draw must see the same text.
         val text = DanmakuEmoji.display(comment.text)
         val textWidth = paint.measureText(text)

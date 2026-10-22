@@ -78,6 +78,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var sources = emptyList<ThirdSource>()
     private var currentId: String? = null
     private val probes = HashMap<String, ProbeState>()
+    /** 最近一次测速耗时（毫秒），-1 表示该源不可用；不落盘。 */
+    private val latencyMs = HashMap<String, Long>()
+    private var speedTesting = false
     private val capsuleDots = HashMap<String, View>()
     private var categories: List<ThirdCategory> = emptyList()
     private var categoriesCached = false
@@ -1277,9 +1280,48 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun probeLabel(id: String): Pair<String, Int> {
         val state = probes[id] ?: return "待探活" to muted
         return when(state.dot) {
-            Dot.OK -> "可连接 · ${formatCount(state.total)}" to Color.rgb(76, 175, 80)
+            Dot.OK -> "可连接 · ${formatCount(state.total)}" + (latencyMs[id]?.takeIf { it >= 0 }?.let { " · ${it}ms" }.orEmpty()) to Color.rgb(76, 175, 80)
             Dot.DEAD -> (state.reason ?: "不可用") to muted
             Dot.RUNNING -> "探活中…" to Color.rgb(255, 180, 80)
+        }
+    }
+
+    /** 依次测速（单线程串行，避免并发请求），完成后自动切到最快的可用源。 */
+    private fun speedTest() {
+        if(speedTesting || sources.isEmpty()) return
+        speedTesting = true
+        val gen = generation
+        Toast.makeText(activity, "正在依次测速，请稍候…", Toast.LENGTH_SHORT).show()
+        probeExecutor.execute {
+            var best: ThirdSource? = null
+            var bestMs = Long.MAX_VALUE
+            sources.forEach { source ->
+                val started = android.os.SystemClock.elapsedRealtime()
+                val result = client.probe(source.api)
+                val cost = android.os.SystemClock.elapsedRealtime() - started
+                main.post {
+                    if(gen != generation) return@post
+                    probes[source.id] = if(result.ok) ProbeState(Dot.OK, result.total) else ProbeState(Dot.DEAD, 0, result.reason)
+                    latencyMs[source.id] = if(result.ok) cost else -1L
+                    // 只就地刷新状态文字，避免整页重建导致焦点跳动
+                    sourceStatusViews[source.id]?.let { view ->
+                        val (label, color) = probeLabel(source.id)
+                        view.text = label; view.setTextColor(color)
+                    }
+                }
+                if(result.ok && cost < bestMs) { bestMs = cost; best = source }
+            }
+            main.post {
+                speedTesting = false
+                if(gen != generation) return@post
+                probeSummary?.text = probeSummaryText()
+                val winner = best
+                if(winner == null) Toast.makeText(activity, "测速完成：没有可用片源", Toast.LENGTH_SHORT).show()
+                else {
+                    Toast.makeText(activity, "测速完成：${winner.name} 最快（${bestMs}ms）", Toast.LENGTH_LONG).show()
+                    if(winner.id != currentId) switchSource(winner)
+                }
+            }
         }
     }
 
@@ -1306,6 +1348,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
         val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
         val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
+        val speed = addButton(actions, "测速优选") { speedTest() }
         body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
 
         // 源列表：名称 / 主机 / 探活状态 / 使用中；批量模式下点击勾选
@@ -1399,7 +1442,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         importTvbox.nextFocusLeftId = add.id
         importTvbox.nextFocusRightId = transfer.id
         transfer.nextFocusLeftId = importTvbox.id
-        transfer.nextFocusRightId = View.NO_ID
+        transfer.nextFocusRightId = speed.id
+        speed.nextFocusLeftId = transfer.id
+        speed.nextFocusRightId = View.NO_ID
+        speed.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
         transfer.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
     }
 

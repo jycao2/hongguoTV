@@ -105,6 +105,7 @@ class MainActivity: Activity() {
     private var homeContentLogged=false
     private lateinit var library: Library
     private lateinit var tvTools: TvTools
+    private lateinit var extras: PlaybackExtras
     private lateinit var thirdStore: ThirdStore
     private lateinit var updater: AppUpdater
     private lateinit var mediaSession: TvMediaSession
@@ -127,6 +128,8 @@ class MainActivity: Activity() {
     private val recovery=RecoveryBudget()
     private var retryPending=false
     private var autoRecovery=false
+    /** 本次播放连续跳过的不兼容集数：成功后归零，最多自动跳 5 集。 */
+    private var incompatibleSkips=0
     private var startPosition=0L
     private var outroSkipSeconds=0
     private var outroTriggered=false
@@ -277,7 +280,7 @@ class MainActivity: Activity() {
         TvStyle.apply(getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).getString("theme", null))
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); extras=PlaybackExtras(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
         // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
         thirdStore=ThirdStore(this)
         library.thirdSourcesProvider={ thirdStore.backupSources() }
@@ -1297,6 +1300,15 @@ class MainActivity: Activity() {
             Toast.makeText(this,"弹幕设置已恢复默认",Toast.LENGTH_SHORT).show()
         }
         danmakuPrefRows.addAll(listOf(danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,danmakuReset))
+        lateinit var blockedWords: TextView
+        blockedWords=setting(playback,"弹幕屏蔽词  ·  ${extras.blockedWords.size} 个") { showBlockedWordDialog(blockedWords) }
+        lateinit var autoSkipButton: TextView
+        autoSkipButton=setting(playback,"不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}") {
+            extras.autoSkipUnplayable=!extras.autoSkipUnplayable
+            autoSkipButton.text="不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}"
+        }
+        lateinit var keySettings: TextView
+        keySettings=setting(playback,"遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒") { showKeySettings(keySettings) }
         syncDanmakuRows()
 
         lateinit var themeButton: TextView
@@ -1339,6 +1351,8 @@ class MainActivity: Activity() {
         hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
             library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
         }
+        lateinit var statsButton: TextView
+        statsButton=setting(device,"观看统计  ·  本机累计") { showWatchStats(statsButton) }
         lateinit var sourceHiddenButton: TextView
         sourceHiddenButton=setting(device,"片源隐藏  ·  ${if(library.sourceHidden) "开启" else "关闭"}") {
             // 开关即导航栏「片源」入口的显隐，重建页面后把焦点放回本项
@@ -1375,6 +1389,8 @@ class MainActivity: Activity() {
         }
         lateinit var updates: TextView
         updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
+        lateinit var checkButton: TextView
+        checkButton=setting(device,"接口自检  ·  首页 / 搜索 / 播放") { showInterfaceCheck(checkButton) }
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").setPositiveButton("关闭",null).show()
         }
@@ -1387,8 +1403,9 @@ class MainActivity: Activity() {
         }
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
-                (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())
-            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,sourceHiddenButton,clearCache,updates,license)
+                (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())+
+                listOf(blockedWords,keySettings,autoSkipButton)
+            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,statsButton,sourceHiddenButton,clearCache,checkButton,updates,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
@@ -1685,7 +1702,7 @@ class MainActivity: Activity() {
         val image=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP }; hero.addView(image,lp(dp(123),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
-        info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}",13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })
+        info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}"+library.progress(data.series.id)?.let { "  ·  看到第 ${it.episodeIndex+1} 集" }.orEmpty(),13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })
         val description=data.series.description.ifBlank { "选择剧集开始观看" }
         val synopsis=text(description,15f,muted).apply { maxLines=if(synopsisExpanded) 20 else 2; ellipsize=TextUtils.TruncateAt.END }
         info.addView(synopsis)
@@ -1710,6 +1727,23 @@ class MainActivity: Activity() {
             synopsisButton.post { synopsisButton.requestRectangleOnScreen(android.graphics.Rect(0,0,synopsisButton.width,synopsisButton.height),false) }
         }
         content.addView(hero)
+        // 系列剧季导航：同名条目按季号排序，快速跳季并回显每季已看到的集数
+        val seasons=(listOf(data.series)+data.sameName).distinctBy { it.id }
+            .sortedBy { val number=seasonNumber(it.title); if(number==Int.MAX_VALUE) 0 else number }
+        if(seasons.size>1) {
+            val seasonRow=row(); seasonRow.setPadding(0,dp(3),0,dp(6))
+            seasonRow.addView(text("系列 ${seasons.size} 季",13f,muted),lp(dp(78),dp(42)))
+            val strip=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
+            val line=row(); strip.addView(line)
+            seasons.forEach { season ->
+                val number=seasonNumber(season.title)
+                val seen=library.progress(season.id)?.let { " · 看到${it.episodeIndex+1}集" }.orEmpty()
+                val title=if(number==Int.MAX_VALUE) season.title.take(12) else "第 ${number} 季"
+                addButton(line,title+seen,season.id==data.series.id) { if(season.id!=data.series.id) openDetail(season) }
+            }
+            seasonRow.addView(strip,lp(0,dp(42)).apply { weight=1f })
+            content.addView(seasonRow)
+        }
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
         val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
         val previous=addButton(groupRow,"‹ 上一组") { if(group>0) { group--; showDetail(true) } }.apply { isEnabled=group>0; isFocusable=group>0; alpha=if(group>0) 1f else .4f }
@@ -1820,6 +1854,7 @@ class MainActivity: Activity() {
             playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1))
             val danmakuLayer=DanmakuView(this)
             danmakuView=danmakuLayer
+            danmakuLayer.setBlockedFilter { text -> extras.blocks(text) }
             danmakuLayer.applyPrefs(library.danmakuOpacity,library.danmakuFont,library.danmakuSpeed,library.danmakuRows)
             root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
@@ -1857,7 +1892,7 @@ class MainActivity: Activity() {
                             playerFailure(PlaybackException("资源没有可解码的视频轨道",null,PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
                             return
                         }
-                        playbackReady=true
+                        playbackReady=true; incompatibleSkips=0
                         if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-playbackStarted}"); startDanmaku() }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
@@ -1948,9 +1983,17 @@ class MainActivity: Activity() {
         val actions=row(); controls.addView(actions)
         if(incompatible) {
             val hasNext=episodeIndex<detail?.episodes.orEmpty().lastIndex
-            if(hasNext) addButton(actions,"播放下一集") { playEpisode(episodeIndex+1) }.requestFocus()
-            val back=addButton(actions,"返回选集") { returnToDetail(true) }
-            if(!hasNext) back.requestFocus()
+            if(hasNext && extras.autoSkipUnplayable && incompatibleSkips<5) {
+                // 整批集数可能都是不可解码片源：最多连跳 5 集，避免无限空转
+                incompatibleSkips++
+                playbackText.text="本集片源暂不兼容，自动跳过 · 已跳过 $incompatibleSkips 集"
+                addButton(actions,"返回选集") { returnToDetail(true) }
+                main.postDelayed({ if(foreground && screen=="player" && playError) playEpisode(episodeIndex+1) },1200)
+            } else {
+                if(hasNext) addButton(actions,"播放下一集") { playEpisode(episodeIndex+1) }.requestFocus()
+                val back=addButton(actions,"返回选集") { returnToDetail(true) }
+                if(!hasNext) back.requestFocus()
+            }
         } else {
             addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
             addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
@@ -2095,10 +2138,134 @@ class MainActivity: Activity() {
             }
         })
     }
+    /** 弹幕屏蔽词：常用词多选 + 保留用户已添加的自定义词；确认后立即对正在播放的弹幕生效。 */
+    private fun showBlockedWordDialog(anchor: TextView) {
+        val presets=listOf("加群","微信","公众号","QQ群","QQ","广告","私聊","代看","抖音","快手")
+        val current=extras.blockedWords
+        val words=(presets+current.filterNot { it in presets }).distinct()
+        val checked=BooleanArray(words.size) { words[it] in current }
+        val dialog=AlertDialog.Builder(this).setTitle("弹幕屏蔽词")
+            .setMultiChoiceItems(words.toTypedArray(),checked,null)
+            .setNegativeButton("取消",null)
+            .setNeutralButton("清空") { _,_-> extras.blockedWords=emptySet(); applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  0 个" }
+            .setPositiveButton("保存") { _,_->
+                extras.blockedWords=words.filterIndexed { index,_ -> checked[index] }.toSet()
+                applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  ${extras.blockedWords.size} 个"
+                Toast.makeText(this,"屏蔽词已保存，立即生效",Toast.LENGTH_SHORT).show()
+            }.create()
+        dialog.show(); dialog.listView.requestFocus()
+    }
+    private fun applyBlockedWords() = danmakuView?.setBlockedFilter { text -> extras.blocks(text) }
+
+    /** 本机观看统计：直接按最近观看记录汇总，不额外存储、不产生任何网络请求。 */
+    private fun showWatchStats(anchor: TextView) {
+        val rows=library.history()
+        if(rows.isEmpty()) { tvTools.info("观看统计 · 本机","还没有观看记录，播放几集后再来看。",anchor); return }
+        val totalMs=rows.sumOf { it.position.coerceAtLeast(0) }
+        val minutes=totalMs/60_000
+        val finished=rows.count { it.completed }
+        val tags=rows.flatMap { it.series.tags.split(" · ").map(String::trim).filter(String::isNotEmpty) }
+            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(5)
+        val body=buildString {
+            append("累计观看 ${rows.size} 集，共 ${minutes} 分钟（约 ${minutes/60} 小时 ${minutes%60} 分钟）。\n")
+            append("完整看完 $finished 集，涉及 ${rows.map { it.series.id }.distinct().size} 部剧。\n")
+            if(tags.isNotEmpty()) {
+                append("\n题材分布\n")
+                tags.forEach { (tag,count) -> append("· $tag  $count 集\n") }
+            }
+            append("\n统计来自本机观看记录，不上传、不联网。")
+        }
+        tvTools.info("观看统计 · 本机",body,anchor)
+    }
+
+    /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。 */
+    private fun showInterfaceCheck(anchor: TextView) {
+        val content=column()
+        val status=text("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
+        content.addView(status)
+        lateinit var dialog: AlertDialog
+        var checking=false
+        val actions=row()
+        val buttons=mutableListOf<TextView>()
+        fun check(name: String,probe: ()->String) {
+            if(checking) return
+            checking=true; status.text="正在检测 $name…"
+            buttons.forEach { it.isEnabled=false; it.alpha=.5f }
+            val started=android.os.SystemClock.elapsedRealtime()
+            io.execute {
+                val result=runCatching(probe)
+                main.post {
+                    if(!dialog.isShowing) return@post
+                    val elapsed=android.os.SystemClock.elapsedRealtime()-started
+                    status.text=result.fold(
+                        { detail -> "$name · 正常 · $detail · ${elapsed}ms" },
+                        { problem -> "$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}" })
+                    buttons.forEach { it.isEnabled=true; it.alpha=1f }
+                    checking=false
+                }
+            }
+        }
+        fun add(name: String,probe: ()->String): TextView = button(name) { check(name,probe) }.also { buttons+=it; actions.addView(it,lp().apply { width=0; weight=1f; rightMargin=dp(6) }) }
+        add("首页") { val page=repository.home(1,library.contentType); "返回 ${page.items.size} 条" }
+        add("搜索") { val page=repository.search("修仙",1,library.contentType); "返回 ${page.items.size} 条" }
+        add("播放") {
+            val episode=library.history().firstOrNull()?.episodeId ?: throw IllegalStateException("暂无观看记录，先播放一集")
+            val info=repository.stream(episode,library.maxQuality); "获取成功 · ${info.quality}"
+        }
+        add("联想") { val words=repository.suggest("修仙"); "联想 ${words.size} 个" }
+        content.addView(actions)
+        content.addView(text("说明：每项只发一次请求，签名搜索接口被平台停用时「搜索」会走网站兜底。",12f,muted).apply { setPadding(dp(8),dp(10),dp(8),0) })
+        dialog=AlertDialog.Builder(this).setTitle("接口自检")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("关闭",null).create()
+        dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
+        dialog.show(); buttons.first().requestFocus()
+    }
+
+    /** 遥控器按键：就地循环切换取值，避免多层弹窗来回跳焦点。 */
+    private fun showKeySettings(anchor: TextView) {
+        val content=column()
+        fun sync(anchorText: TextView) { anchorText.text="遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒" }
+        lateinit var step: TextView
+        step=button("快进步长  ·  ${extras.seekStepSeconds} 秒") {
+            val options=PlaybackExtras.SEEK_STEPS
+            extras.seekStepSeconds=options[(options.indexOf(extras.seekStepSeconds)+1)%options.size]
+            step.text="快进步长  ·  ${extras.seekStepSeconds} 秒"; sync(anchor)
+        }
+        lateinit var speed: TextView
+        speed=button("长按快进  ·  ${PlaybackExtras.FAST_SPEEDS.first { it==extras.longPressSpeed }.toInt()}×") {
+            val options=PlaybackExtras.FAST_SPEEDS
+            extras.longPressSpeed=options[(options.indexOf(extras.longPressSpeed)+1)%options.size]
+            speed.text="长按快进  ·  ${extras.longPressSpeed.toInt()}×"
+        }
+        fun menuLabel()=when(extras.menuKeyAction) {
+            PlaybackExtras.MENU_EPISODES -> "选集"
+            PlaybackExtras.MENU_DANMAKU -> "弹幕开关"
+            else -> "播放设置"
+        }
+        lateinit var menu: TextView
+        menu=button("菜单键  ·  ${menuLabel()}") {
+            extras.menuKeyAction=when(extras.menuKeyAction) {
+                PlaybackExtras.MENU_EPISODES -> PlaybackExtras.MENU_DANMAKU
+                PlaybackExtras.MENU_DANMAKU -> PlaybackExtras.MENU_PANEL
+                else -> PlaybackExtras.MENU_EPISODES
+            }
+            menu.text="菜单键  ·  ${menuLabel()}"
+        }
+        listOf(step,speed,menu).forEachIndexed { index,view ->
+            content.addView(view,lp(-1,dp(48)).apply { bottomMargin=dp(8) })
+            view.nextFocusDownId=listOf(step,speed,menu).getOrNull(index+1)?.id ?: View.NO_ID
+            view.nextFocusUpId=listOf(step,speed,menu).getOrNull(index-1)?.id ?: View.NO_ID
+        }
+        val dialog=AlertDialog.Builder(this).setTitle("遥控器按键").setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("关闭",null).create()
+        dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
+        dialog.show(); step.requestFocus()
+    }
     private fun seek(direction: Int,repeat: Int) {
         val p=player ?: return; if(!playbackReady) return
         val duration=p.duration; if(duration<=0) return
-        val step=if(repeat>4) 30000 else 10000
+        val step=if(repeat>4) 30000 else extras.seekStepSeconds*1000
         pendingSeek=((pendingSeek ?: p.currentPosition)+direction*step).coerceIn(0,(duration-500).coerceAtLeast(0))
         main.removeCallbacks(seekRunnable); main.postDelayed(seekRunnable,250); updatePlaybackText(); showHud()
     }
@@ -2106,7 +2273,7 @@ class MainActivity: Activity() {
         val p=player ?: return
         if(ffActive || !playbackReady || p.duration<=0) return
         ffActive=true; ffSpeedBefore=p.playbackParameters.speed
-        p.setPlaybackSpeed(3f); showHud(); updatePlaybackText()
+        p.setPlaybackSpeed(extras.longPressSpeed); showHud(); updatePlaybackText()
     }
     private fun stopFastForward() {
         if(!ffActive) return
@@ -2126,11 +2293,12 @@ class MainActivity: Activity() {
         more=addButton(transport,"播放设置") {
             val seriesId=detail?.series?.id.orEmpty()
             val mark=library.skipMark(seriesId)
+            val danmakuOn=extras.danmakuEnabled(seriesId,library.danmaku)
             fun skipLabel(seconds: Int)=if(seconds>0) "$seconds 秒" else "关闭"
             tvTools.choose("播放设置",buildList {
                 add("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}"); add("清晰度 ${library.maxQuality}P"); add("画面 ${library.frameMode.label}"); add("定时 ${sleepTimer.label()}")
-                add("跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}"); add("跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}"); add("从头播放"); add("弹幕 ${if(library.danmaku) "开启" else "关闭"}")
-                if(library.danmaku) add("弹幕设置")
+                add("跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}"); add("跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}"); add("从头播放"); add("弹幕 ${if(danmakuOn) "开启" else "关闭"}（仅本剧）")
+                if(danmakuOn) add("弹幕设置")
             },more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
@@ -2141,7 +2309,7 @@ class MainActivity: Activity() {
                         4 -> showSkipPicker(more,true)
                         5 -> showSkipPicker(more,false)
                         6 -> { seekTo(0); hidePanel() }
-                        7 -> { library.danmaku=!library.danmaku; if(library.danmaku) startDanmaku() else stopDanmaku() }
+                        7 -> toggleSeriesDanmaku(seriesId)
                         8 -> showDanmakuPrefsDialog(more)
                     }
                 }
@@ -2345,13 +2513,24 @@ class MainActivity: Activity() {
         val layer=danmakuView ?: return
         val data=detail ?: return
         val p=player
-        if(!library.danmaku || p==null || !playbackReady || playError || p.duration<=0) return
+        if(!extras.danmakuEnabled(data.series.id,library.danmaku) || p==null || !playbackReady || playError || p.duration<=0) return
         danmakuLoader=null
         val loader=DanmakuLoader(danmakuRepo,data.series.id,data.episodes[episodeIndex],p.duration)
         danmakuLoader=loader
+        layer.setBlockedFilter { text -> extras.blocks(text) }
         layer.bind(loader,{ currentPosition() })
         val startPosition=currentPosition()
         io.execute { runCatching { loader.loadUpTo(startPosition) } }
+    }
+    /** 播放中切换当前剧的弹幕并记住：全局弹幕关闭时先提示打开总开关，避免出现「开了却看不到」。 */
+    private fun toggleSeriesDanmaku(seriesId: String) {
+        if(!library.danmaku) {
+            Toast.makeText(this,"弹幕总开关已关闭，请先在设置或播放设置中开启",Toast.LENGTH_SHORT).show(); return
+        }
+        val on=!extras.danmakuEnabled(seriesId,true)
+        extras.setDanmakuEnabled(seriesId,on)
+        if(on) startDanmaku() else stopDanmaku()
+        Toast.makeText(this,"已为《${detail?.series?.title.orEmpty()}》${if(on) "开启" else "关闭"}弹幕",Toast.LENGTH_SHORT).show()
     }
     private fun stopDanmaku() {
         danmakuLoader=null
@@ -2410,7 +2589,12 @@ class MainActivity: Activity() {
                         KeyEvent.KEYCODE_DPAD_RIGHT -> if(event.repeatCount==0) seek(1,0) else startFastForward()
                         KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> if(event.repeatCount==0) togglePlayback()
                         KeyEvent.KEYCODE_DPAD_DOWN -> if(event.repeatCount==0) showEpisodePanel(hud)
-                        KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_MENU -> if(event.repeatCount==0) showPanel()
+                        KeyEvent.KEYCODE_MENU -> if(event.repeatCount==0) when(extras.menuKeyAction) {
+                            PlaybackExtras.MENU_EPISODES -> showEpisodePanel(hud)
+                            PlaybackExtras.MENU_DANMAKU -> detail?.series?.id?.let { toggleSeriesDanmaku(it) }
+                            else -> showPanel()
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> if(event.repeatCount==0) showPanel()
                         else -> showHud()
                     }
                     return true
