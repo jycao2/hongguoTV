@@ -47,7 +47,11 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private val suggestCache=linkedMapOf<String,Pair<Long,List<String>>>()
     // 签名搜索接口被平台关停时会稳定返回空体，短期内不再重复尝试，避免每次搜索都白等两次往返
     @Volatile private var appSearchRetryAt=0L
-    private fun categoryPath(type: ContentType)=if(type==ContentType.COMIC) "comic-drama" else "real-drama"
+    private fun categoryPath(type: ContentType)=when(type) {
+        ContentType.COMIC -> "comic-drama"
+        ContentType.SHORT -> "real-drama"
+        ContentType.AI -> "ai-drama"
+    }
     private fun text(url: String, signed: Signer.Request? = null): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
@@ -97,6 +101,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         require(page in 1..100)
         if(genre!=null) return categoryListing("$site/category/${categoryPath(type)}/${genre.slug}"+if(page>1) "?page=$page" else "",page,"题材",genre)
         if(type==ContentType.COMIC) return comicRanking(page)
+        if(type==ContentType.AI) return categoryListing("$site/category/ai-drama"+if(page>1) "?page=$page" else "",page,"AI剧")
         return categoryListing("$site/category?tab=1&sort_type=1"+if(page>1) "&page=$page" else "",page,"首页")
     }
     private fun categoryListing(url: String,page: Int,label: String,genre: Genre? = null): CatalogPage {
@@ -115,6 +120,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     }
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
+        // AI 剧没有独立搜索口径，官网把它归在漫剧搜索结果里
+        if(type==ContentType.AI) return search(keyword,page,ContentType.COMIC)
         if(type==ContentType.COMIC) {
             try { return appSearch(keyword,page,type) }
             catch(e: Exception) { /* App search API rejected the request or the cursor expired; the website paginates independently. */ }
@@ -238,11 +245,12 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
         if(clock()<appSearchRetryAt) throw IOException("搜索接口暂不可用")
+        val tabType=type.searchTab ?: throw IOException("${type.label}暂不支持搜索")
         VendorConstants.regenerate()
         val values=VendorConstants.device.toMutableMap()
         for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
         values["version_name"]="7.2.2.32"
-        values.putAll(linkedMapOf("query" to keyword,"count" to "20","offset" to ((page-1)*20).toString(),"tab_type" to type.searchTab.toString(),"bookshelf_search_plan" to "4","use_correct" to "true","user_is_login" to "0"))
+        values.putAll(linkedMapOf("query" to keyword,"count" to "20","offset" to ((page-1)*20).toString(),"tab_type" to tabType.toString(),"bookshelf_search_plan" to "4","use_correct" to "true","user_is_login" to "0"))
         val cursor=synchronized(searchCursors) {
             val now=clock()
             searchCursors.entries.removeAll { now-it.value.updatedAt>300000 || (page==1 && it.key.first==type && it.key.second==keyword) }

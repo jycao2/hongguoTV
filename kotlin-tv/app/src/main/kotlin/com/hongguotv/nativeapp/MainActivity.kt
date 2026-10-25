@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
 import android.app.Activity
@@ -169,7 +169,7 @@ class MainActivity: Activity() {
     private var catalog=emptyList<Series>()
     private var hasMore=false
     private var catalogFocus=""
-    private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null)
+    private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null,val aiCatalog: Boolean=false,val aiGenre: Genre?=null)
     private var ranking: ComicRanking?=null
     private var rankBoard=RankBoard.COMIC
     // 榜单按枚举顺序循环切换，新增榜单只需在 RankBoard 里加一项
@@ -177,6 +177,12 @@ class MainActivity: Activity() {
     private var rankSwitch: View?=null
     private var rankRefresh: View?=null
     private var rankSubtitle: TextView?=null
+    // AI 剧分类是排行榜页内的子视图，不占用首页内容类型页签，也不参与搜索口径
+    private var aiCatalog=false
+    private var aiGenre: Genre?=null
+    private var aiEntry: View?=null
+    private var aiBack: View?=null
+    private var aiGenreButton: View?=null
     private var genre: Genre?=null
     private var genreButton: View?=null
     private var genreClear: View?=null
@@ -518,7 +524,7 @@ class MainActivity: Activity() {
     }
     private fun switchTab(next: Int) {
         leaveCollection()
-        tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre); tabFocus[tab]=catalogFocus
+        tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre,aiCatalog,aiGenre); tabFocus[tab]=catalogFocus
         // 从其他模块切回搜索页时重置为全新搜索状态，不保留上次的搜索词与结果
         if(next==1) {
             query=""; phoneSearched=false; lastSuggestWords=emptyList<String>(); lastSuggestKey=""; suggestFocusIndex=-1; keyboardLastLabel=null
@@ -526,6 +532,7 @@ class MainActivity: Activity() {
         }
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
         rankBoard=saved?.board ?: rankBoard; genre=saved?.genre ?: genre
+        aiCatalog=saved?.aiCatalog ?: false; aiGenre=saved?.aiGenre
         showCatalog(load=(next<=2 && catalog.isEmpty() && (next!=1 || query.isNotBlank())))
         // 切回搜索页时焦点落输入框，避免页面重建后焦点丢失
         if(next==1) searchInput?.requestFocus()
@@ -612,7 +619,8 @@ class MainActivity: Activity() {
         if(tab<=1) {
             val types=row().apply { setPadding(0,dp(8),0,dp(6)) }
             if(!inlineHomeFilters()) types.addView(text("片库",12f,muted),lp(dp(42),-2))
-            ContentType.entries.forEach { type ->
+            // AI 剧只在排行榜内提供分类入口，不占首页/搜索的内容类型页签
+            listOf(ContentType.COMIC,ContentType.SHORT).forEach { type ->
                 typeButtons[type]=addButton(types,type.label,library.contentType==type) { switchContentType(type) }
                     .apply { isSelected=library.contentType==type; nextFocusUpId=nav[tab].id }
             }
@@ -628,7 +636,7 @@ class MainActivity: Activity() {
                 if(tab==0) types.addView(text("长按确认 · 管理片单",12f,muted).apply { setPadding(dp(14),0,0,0) })
                 container.addView(types)
             }
-            nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
+            nav.forEach { it.nextFocusDownId=(typeButtons[library.contentType] ?: typeButtons.values.firstOrNull())?.id ?: nav[tab].id }
         }
         if(tab==1) {
             // 机型分级：≥900dp 三栏（键盘+历史 / 联想 / 结果），700-900dp 两栏，<700dp 回退纵向堆叠
@@ -770,21 +778,40 @@ class MainActivity: Activity() {
             azLastRow.forEach { it.nextFocusDownId=historyFirst?.id ?: View.NO_ID }
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
-            heading.addView(text("${rankBoard.label}热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
-            rankSwitch=addButton(heading,"看${nextRankBoard().label}榜") {
-                rankBoard=nextRankBoard()
-                page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
-                // 重建期间网格被清空，焦点必须落回按钮，否则会丢到不可见区域
-                rankSwitch?.post { if(rankSwitch?.isAttachedToWindow==true) rankSwitch?.requestFocus() }
-            }.apply { nextFocusUpId=nav[tab].id }
-            rankRefresh=addButton(heading,"刷新榜单") { page=1; catalogFocus=""; showCatalog(true)
-                rankRefresh?.post { if(rankRefresh?.isAttachedToWindow==true) rankRefresh?.requestFocus() }
-            }.apply { nextFocusUpId=nav[tab].id }
+            aiEntry=null; aiBack=null; aiGenreButton=null
+            heading.addView(text(if(aiCatalog) "AI剧 · 全部分类" else "${rankBoard.label}热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            if(aiCatalog) {
+                aiBack=addButton(heading,"‹ 返回AI剧榜") {
+                    aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
+                    aiBack?.post { if(aiBack?.isAttachedToWindow==true) aiBack?.requestFocus() }
+                }.apply { nextFocusUpId=nav[tab].id }
+                aiGenreButton=addButton(heading,aiGenre?.let { "题材 · ${it.name}" } ?: "题材") { showGenrePicker() }
+                    .apply { nextFocusUpId=nav[tab].id }
+            } else {
+                if(rankBoard==RankBoard.AI) {
+                    // 只有 AI 剧榜提供分类浏览入口，其余榜单保持原有切换/刷新两个按钮
+                    aiEntry=addButton(heading,"全部分类") {
+                        aiCatalog=true; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
+                        aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() }
+                    }.apply { nextFocusUpId=nav[tab].id }
+                }
+                rankSwitch=addButton(heading,"看${nextRankBoard().label}榜") {
+                    rankBoard=nextRankBoard()
+                    page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
+                    // 重建期间网格被清空，焦点必须落回按钮，否则会丢到不可见区域
+                    rankSwitch?.post { if(rankSwitch?.isAttachedToWindow==true) rankSwitch?.requestFocus() }
+                }.apply { nextFocusUpId=nav[tab].id }
+                rankRefresh=addButton(heading,"刷新榜单") { page=1; catalogFocus=""; showCatalog(true)
+                    rankRefresh?.post { if(rankRefresh?.isAttachedToWindow==true) rankRefresh?.requestFocus() }
+                }.apply { nextFocusUpId=nav[tab].id }
+            }
             container.addView(heading)
-            rankSubtitle=text(if(load) "正在读取最新榜单…" else ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜",13f,muted)
+            val defaultSource=if(aiCatalog) "来源：红果AI剧分类" else "来源：红果${rankBoard.label}热播榜"
+            val loadingText=if(aiCatalog) "正在读取AI剧分类…" else "正在读取最新榜单…"
+            rankSubtitle=text(if(load) loadingText else ranking?.updatedText?.ifBlank { defaultSource } ?: defaultSource,13f,muted)
                 .apply { setPadding(0,0,0,dp(8)) }
             container.addView(rankSubtitle)
-            nav.forEach { it.nextFocusDownId=rankSwitch!!.id }
+            nav.forEach { it.nextFocusDownId=(if(aiCatalog) aiBack ?: aiGenreButton else aiEntry ?: rankSwitch)?.id ?: View.NO_ID }
         } else if(tab>2) {
             val heading=row().apply { setPadding(0,dp(14),0,dp(6)) }
             heading.addView(text(if(tab==3) "我的收藏" else "接着上次看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -833,8 +860,13 @@ class MainActivity: Activity() {
             else { message(body,"正在加载…"); if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestType=library.contentType
             val requestBoard=rankBoard; val requestGenre=if(requestTab==0) genre else null
+            val requestAi=if(requestTab==2) aiCatalog else false; val requestAiGenre=if(requestAi) aiGenre else null
             work({
-                val result=when(requestTab) { 0 -> repository.home(requestPage,requestType,requestGenre); 2 -> repository.ranking(requestBoard,requestPage); else -> repository.search(requestQuery,requestPage,requestType) }
+                val result=when(requestTab) {
+                    0 -> repository.home(requestPage,requestType,requestGenre)
+                    2 -> if(requestAi) repository.home(requestPage,ContentType.AI,requestAiGenre) else repository.ranking(requestBoard,requestPage)
+                    else -> repository.search(requestQuery,requestPage,requestType)
+                }
                 result
             }, { result ->
                 if(requestTab==0 && requestPage==1 && requestGenre==null) library.cacheHome(requestType,result.items,result.hasMore)
@@ -846,7 +878,7 @@ class MainActivity: Activity() {
                     // 手机输入的精确剧名搜索零结果时自动恢复联想，帮助用户纠正剧名
                     if(requestTab==1 && result.items.isEmpty()) { phoneSearched=false; scheduleSuggest() }
                     val keepNav=nav.any { it.hasFocus() }; val keepType=typeButtons.values.any { it.hasFocus() }
-                    rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜"
+                    if(requestTab==2) rankSubtitle?.text=if(requestAi) "来源：红果AI剧分类" else ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜"
                     body.removeAllViews(); catalogGrid(body,keepNav || focusNav,keepType || focusType)
                     // 搜索完成后焦点落结果首卡；零结果回输入框，避免页面重建后焦点丢失
                     if(requestTab==1 && searchFocusPending) {
@@ -861,7 +893,7 @@ class MainActivity: Activity() {
                     homeScreen?.refresh?.setOnClickListener { showCatalog(true) }
                     return@work
                 }
-                catalog=emptyList(); hasMore=false; ranking=null; rankSubtitle?.text="榜单加载失败"
+                catalog=emptyList(); hasMore=false; ranking=null; rankSubtitle?.text=if(requestAi) "AI剧分类加载失败" else "榜单加载失败"
                 // 搜索失败时焦点回输入框，避免页面重建后焦点丢失
                 if(requestTab==1 && searchFocusPending) { searchFocusPending=false; searchInput?.requestFocus() }
                 if(problem is SearchSessionExpiredException) {
@@ -880,7 +912,7 @@ class MainActivity: Activity() {
     }
     private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false) {
         if(tab==0 && page==1 && collection==null && genre==null) { renderHome(body,focusNav,focusType,loading); return }
-        collectionBack=null
+        collectionBack=null; genreClear=null
         if(collection!=null) {
             val heading=row()
             collectionBack=addButton(heading,"‹ 返回首页") { leaveCollection(); showCatalog() }.apply {
@@ -891,7 +923,8 @@ class MainActivity: Activity() {
             body.addView(heading)
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
-        catalogPageKey="$tab:${collection.orEmpty()}:${genre?.slug.orEmpty()}:$page:$query"
+        val focusGenre=if(tab==2 && aiCatalog) aiGenre else genre
+        catalogPageKey="$tab:${if(aiCatalog) "ai" else ""}:${collection.orEmpty()}:${focusGenre?.slug.orEmpty()}:$page:$query"
         if(tab==0 && genre!=null) {
             val bar=row().apply { setPadding(0,0,0,dp(6)) }
             bar.addView(text("题材 · ${genre?.name}",16f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -900,6 +933,14 @@ class MainActivity: Activity() {
             body.addView(bar)
             typeButtons.values.forEach { it.nextFocusDownId=genreClear!!.id }
             genreButton?.nextFocusDownId=genreClear!!.id
+        }
+        if(tab==2 && aiCatalog && aiGenre!=null) {
+            val bar=row().apply { setPadding(0,0,0,dp(6)) }
+            bar.addView(text("题材 · ${aiGenre?.name}",16f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            genreClear=addButton(bar,"全部题材") { aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true) }
+                .apply { nextFocusUpId=aiGenreButton?.id ?: nav[tab].id }
+            body.addView(bar)
+            aiGenreButton?.nextFocusDownId=genreClear!!.id
         }
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
         val displayed=mutableListOf<Series>()
@@ -940,12 +981,20 @@ class MainActivity: Activity() {
             else -> FOOTER_END
         }
         body.addView(recycler,lp(-1,0).apply { weight=1f })
-        nav.forEach { it.nextFocusDownId=typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteCheck?.id ?: historyManage?.id ?: recycler.id }
+        nav.forEach {
+            it.nextFocusDownId=when {
+                tab==2 -> (if(aiCatalog) aiBack ?: aiGenreButton ?: rankRefresh else aiEntry ?: rankSwitch ?: rankRefresh)?.id ?: recycler.id
+                tab<=1 -> typeButtons[library.contentType]?.id ?: recycler.id
+                else -> favoriteCheck?.id ?: historyManage?.id ?: recycler.id
+            }
+        }
         rankSwitch?.nextFocusDownId=recycler.id; rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id; favoriteCheck?.nextFocusDownId=favoriteFilterFirst?.id ?: recycler.id
+        aiEntry?.nextFocusDownId=recycler.id; aiBack?.nextFocusDownId=recycler.id
         favoriteFilterButtons.forEach { it.nextFocusDownId=recycler.id }
         collectionBack?.nextFocusDownId=recycler.id; genreClear?.nextFocusDownId=recycler.id
         typeButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: recycler.id }
         genreButton?.nextFocusDownId=genreClear?.id ?: recycler.id
+        aiGenreButton?.nextFocusDownId=genreClear?.id ?: recycler.id
         searchInput?.nextFocusDownId=azFirst?.id ?: recycler.id
         searchButton?.nextFocusDownId=azFirst?.id ?: recycler.id
         searchActions.forEach { it.nextFocusDownId=azFirst?.id ?: recycler.id }
@@ -965,15 +1014,20 @@ class MainActivity: Activity() {
         if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
         val requestTab=tab; val requestPage=page+1; val requestQuery=query; val requestType=library.contentType
         val requestBoard=rankBoard; val requestGenre=if(requestTab==0) genre else null
+        val requestAi=if(requestTab==2) aiCatalog else false; val requestAiGenre=if(requestAi) aiGenre else null
         loadingMore=true; adapter.updateFooter(FOOTER_LOADING)
         work({
-            when(requestTab) { 0 -> repository.home(requestPage,requestType,requestGenre); 2 -> repository.ranking(requestBoard,requestPage); else -> repository.search(requestQuery,requestPage,requestType) }
+            when(requestTab) {
+                0 -> repository.home(requestPage,requestType,requestGenre)
+                2 -> if(requestAi) repository.home(requestPage,ContentType.AI,requestAiGenre) else repository.ranking(requestBoard,requestPage)
+                else -> repository.search(requestQuery,requestPage,requestType)
+            }
         }, { result ->
             loadingMore=false
             page=requestPage
             hasMore=result.hasMore
             result.ranking?.let { r -> ranking=ComicRanking((ranking?.positions.orEmpty())+r.positions,r.totalPages,r.updatedText.ifBlank { ranking?.updatedText.orEmpty() }) }
-            rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜"
+            if(requestTab==2 && !requestAi) rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果${rankBoard.label}热播榜" } ?: "来源：红果${rankBoard.label}热播榜"
             val known=catalog.mapTo(HashSet()) { it.id }
             val fresh=result.items.filter { it.id !in known }
             catalog=catalog+result.items
@@ -1046,8 +1100,10 @@ class MainActivity: Activity() {
             val card=holder.card
             card.tag=item.id; card.contentDescription=item.title
             loadCover(holder.image,item.cover)
-            val rankPosition=if(tab==2) ranking?.positions?.get(item.id) else null
-            if(tab==2) {
+            // AI 剧分类复用的是片库卡片，没有名次与热度，按普通片库卡片展示
+            val ranked=tab==2 && ranking!=null
+            val rankPosition=if(ranked) ranking?.positions?.get(item.id) else null
+            if(ranked) {
                 val rank=rankPosition?.rank
                 val rankLabel=if(rank!=null) "第 $rank 名" else "名次暂无"
                 val styled=android.text.SpannableString(rankLabel)
@@ -1064,8 +1120,8 @@ class MainActivity: Activity() {
             } else holder.rank.visibility=View.GONE
             holder.title.text=item.title
             val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
-            holder.badge.text=if(tab==3) library.favoriteLabel(item.id) else if(tab==2) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
-            holder.badge.setTextColor(if(tab==2 || tab==3) accent else muted)
+            holder.badge.text=if(tab==3) library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.setTextColor(if(ranked || tab==3) accent else muted)
             if(tab==3) favoriteBadges[item.id]=holder.badge
             card.setOnClickListener { catalogFocus=item.id; openDetail(item,tab==4 || collection=="resume" || collection=="updates") }
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
@@ -1667,16 +1723,22 @@ class MainActivity: Activity() {
         dlg.setOnDismissListener { exitDialog=null }
     }
     private fun showGenrePicker() {
-        val anchor=genreButton ?: return
-        val type=library.contentType
+        val aiMode=tab==2 && aiCatalog
+        val anchor=if(aiMode) aiGenreButton ?: return else genreButton ?: return
+        val type=if(aiMode) ContentType.AI else library.contentType
+        val current=if(aiMode) aiGenre else genre
         io.execute {
             val result=runCatching { repository.genres(type) }
             main.post {
-                if(isDestroyed || !foreground || screen!="catalog" || tab!=0) return@post
+                if(isDestroyed || !foreground || screen!="catalog") return@post
+                if(aiMode) { if(tab!=2 || !aiCatalog) return@post } else if(tab!=0) return@post
                 result.onSuccess { genres ->
                     tvTools.choose("选择${type.label}题材",listOf("全部题材")+genres.map { it.name },anchor,{ index ->
                         val next=if(index==0) null else genres[index-1]
-                        if(next!=genre) { genre=next; page=1; catalogFocus=""; tabState.remove(0); tabFocus.remove(0); showCatalog(true) }
+                        if(next!=current) {
+                            if(aiMode) aiGenre=next else genre=next
+                            page=1; catalogFocus=""; tabState.remove(tab); tabFocus.remove(tab); showCatalog(true)
+                        }
                     })
                 }.onFailure { tvTools.info("题材暂不可用","题材列表加载失败，请稍后重试。",anchor) }
             }
@@ -2640,7 +2702,7 @@ class MainActivity: Activity() {
         when(screen) {
             "player" -> if(player?.playbackState==Player.STATE_ENDED) returnToDetail() else if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
-            else -> if(tab==6 && third?.onBack()==true) {} else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
+            else -> if(tab==6 && third?.onBack()==true) {} else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
         }
     }
     @Deprecated("TV remote back is handled through the activity")
