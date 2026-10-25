@@ -113,6 +113,12 @@ object TvDialog {
                 }
                 view.text = getItem(position)
                 view.setTextColor(TvStyle.text)
+                // 视图复用时必须显式从 ListView 同步勾选状态，否则焦点移动触发重新绑定后勾选显示会丢失
+                (parent as? android.widget.AbsListView)?.let { listView ->
+                    if (listView.choiceMode != android.widget.AbsListView.CHOICE_MODE_NONE) {
+                        view.isChecked = listView.isItemChecked(position)
+                    }
+                }
                 return view
             }
         }

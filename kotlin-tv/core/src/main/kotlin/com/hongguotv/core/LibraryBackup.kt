@@ -94,15 +94,17 @@ object LibraryBackup {
     }
     private fun series(o: JSONObject): Series = Series(id(o.string("id",30)),o.string("title",200).also { require(it.isNotBlank()) },cleanCover(o.string("cover",2048)),"",o.string("badge",100),o.string("tags",200))
     fun decode(value: String): BackupData {
-        require(value.toByteArray(Charsets.UTF_8).size<=MAX_BYTES) { "备份超过 2 MB 限制" }
+        // 用户可能用记事本/Notepad++ 改过后另存为 UTF-8 with BOM，剥离 BOM 再解析避免误判「备份格式无效」
+        val v=value.trim().removePrefix("\uFEFF")
+        require(v.toByteArray(Charsets.UTF_8).size<=MAX_BYTES) { "备份超过 2 MB 限制" }
         var depth=0; var quoted=false; var escaped=false
-        value.forEach { c ->
+        v.forEach { c ->
             if(escaped) escaped=false
             else if(quoted && c=='\\') escaped=true
             else if(c=='"') quoted=!quoted
             else if(!quoted) { if(c=='{' || c=='[') { depth++; require(depth<=12) { "备份结构过深" } }; if(c=='}' || c==']') depth-- }
         }
-        val o=JSONObject(value)
+        val o=JSONObject(v)
         require(o.getString("format")=="hongguotv.library" && o.number("version",1)==1L) { "不支持的备份格式或版本" }
         val later=if(o.has("later")) o.rows("later",100).map(::series) else emptyList()
         require(later.distinctBy { it.id }.size==later.size) { "稍后看包含重复剧集" }
