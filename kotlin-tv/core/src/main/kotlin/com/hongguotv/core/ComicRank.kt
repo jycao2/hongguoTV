@@ -10,7 +10,8 @@ import java.io.IOException
 /** Website rank boards share one layout and one serialized payload shape. */
 enum class RankBoard(val path: String, val route: String, val rankKey: String, val label: String) {
     COMIC("hot-comic-drama","rank_hot-comic-drama/page","comic","漫剧"),
-    REAL("hot-real-drama","rank_hot-real-drama/page","real","短剧");
+    REAL("hot-real-drama","rank_hot-real-drama/page","real","短剧"),
+    AI("hot-ai-drama","rank_hot-ai-drama/page","ai","AI剧");
 }
 
 /** Read the website's serialized data only; never execute its scripts. */

@@ -172,6 +172,8 @@ class MainActivity: Activity() {
     private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null)
     private var ranking: ComicRanking?=null
     private var rankBoard=RankBoard.COMIC
+    // 榜单按枚举顺序循环切换，新增榜单只需在 RankBoard 里加一项
+    private fun nextRankBoard()=RankBoard.entries[(rankBoard.ordinal+1)%RankBoard.entries.size]
     private var rankSwitch: View?=null
     private var rankRefresh: View?=null
     private var rankSubtitle: TextView?=null
@@ -769,8 +771,8 @@ class MainActivity: Activity() {
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
             heading.addView(text("${rankBoard.label}热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
-            rankSwitch=addButton(heading,if(rankBoard==RankBoard.COMIC) "看短剧榜" else "看漫剧榜") {
-                rankBoard=if(rankBoard==RankBoard.COMIC) RankBoard.REAL else RankBoard.COMIC
+            rankSwitch=addButton(heading,"看${nextRankBoard().label}榜") {
+                rankBoard=nextRankBoard()
                 page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
                 // 重建期间网格被清空，焦点必须落回按钮，否则会丢到不可见区域
                 rankSwitch?.post { if(rankSwitch?.isAttachedToWindow==true) rankSwitch?.requestFocus() }
