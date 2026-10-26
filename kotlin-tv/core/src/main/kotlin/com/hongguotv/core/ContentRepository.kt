@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -19,7 +20,11 @@ data class Series(val id: String, val title: String, val cover: String = "", val
     fun toJson() = JSONObject().put("id",id).put("title",title).put("cover",cover).put("description",description).put("badge",badge).put("tags",tags)
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),o.str("title"),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
 }
-data class Detail(val series: Series, val episodes: List<String>, val related: List<Series> = emptyList(), val sameName: List<Series> = emptyList()) {
+/** 详情页附带的社交数据，缺失时各字段保持默认空值，调用方按需隐藏。 */
+data class SeriesSocial(val rating: Double = 0.0, val ratingCount: String = "", val favoriteText: String = "", val heatText: String = "") {
+    val isEmpty get() = rating<=0.0 && favoriteText.isBlank() && heatText.isBlank()
+}
+data class Detail(val series: Series, val episodes: List<String>, val related: List<Series> = emptyList(), val sameName: List<Series> = emptyList(), val social: SeriesSocial = SeriesSocial()) {
     /** Same-name entries with a finite season number beyond the current one (untitled season counts as 1). */
     val newerSeasons: List<Series> get() {
         val current=seasonNumber(series.title).let { if(it==Int.MAX_VALUE) 1 else it }
@@ -309,7 +314,29 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         val series=card(o).copy(id=id)
         val related=related(html,series)
-        return Detail(series,episodes,related,sameName(series,related))
+        val social=social(loader.optJSONObject("detail_page")?.optJSONObject("seriesSocialInfo"))
+        return Detail(series,episodes,related,sameName(series,related),social)
+    }
+    // 评分与收藏数只在详情页 SSR 里下发，卡片数据源没有这些字段，因此只读取不追加请求。
+    private fun social(o: JSONObject?): SeriesSocial {
+        if(o==null) return SeriesSocial()
+        val favorite=compactCount(o.str("series_favorite_count"))
+        return SeriesSocial(
+            rating=o.optDouble("rating",0.0).takeIf { it>0 } ?: 0.0,
+            ratingCount=compactCount(o.str("rating_count")),
+            favoriteText=if(favorite.isBlank()) "" else "${favorite}收藏",
+            heatText=o.optJSONObject("hot_score_data")?.str("text").orEmpty()
+        )
+    }
+    private fun compactCount(raw: String): String {
+        val value=raw.trim().toLongOrNull() ?: return ""
+        if(value<1) return ""
+        fun trim(number: Double, unit: String)=String.format(Locale.CHINA,"%.1f",number).removeSuffix(".0")+unit
+        return when {
+            value>=100_000_000 -> trim(value/100_000_000.0,"亿")
+            value>=10_000 -> trim(value/10_000.0,"万")
+            else -> value.toString()
+        }
     }
     // The detail page has no dedicated same-name group, so other seasons are collected from its related
     // payload and filled with the same website/suggestion pipeline used by search.

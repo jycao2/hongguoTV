@@ -29,6 +29,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
+import java.util.Locale
 import java.util.concurrent.Executors
 
 private const val TYPE_CARD=0
@@ -1774,6 +1775,14 @@ class MainActivity: Activity() {
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
         info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}"+library.progress(data.series.id)?.let { "  ·  看到第 ${it.episodeIndex+1} 集" }.orEmpty(),13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })
+        // 评分与收藏数来自详情页同一份数据，卡片列表没有这些字段；缺失时整行不显示
+        if(!data.social.isEmpty) {
+            val metrics=mutableListOf<String>()
+            if(data.social.rating>0) metrics+=String.format(Locale.CHINA,"%.1f 分",data.social.rating)+data.social.ratingCount.takeIf { it.isNotBlank() }?.let { "（$it 人评分）" }.orEmpty()
+            if(data.social.favoriteText.isNotBlank()) metrics+=data.social.favoriteText
+            if(data.social.heatText.isNotBlank()) metrics+=data.social.heatText
+            info.addView(text(metrics.joinToString("  ·  "),13f,muted).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(0,0,0,dp(6)) })
+        }
         val description=data.series.description.ifBlank { "选择剧集开始观看" }
         val synopsis=text(description,15f,muted).apply { maxLines=if(synopsisExpanded) 20 else 2; ellipsize=TextUtils.TruncateAt.END }
         info.addView(synopsis)
