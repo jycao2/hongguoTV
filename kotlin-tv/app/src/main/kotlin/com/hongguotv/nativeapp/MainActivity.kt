@@ -20,7 +20,11 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.widget.*
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.common.*
@@ -1778,10 +1782,16 @@ class MainActivity: Activity() {
         // 评分与收藏数来自详情页同一份数据，卡片列表没有这些字段；缺失时整行不显示
         if(!data.social.isEmpty) {
             val metrics=mutableListOf<String>()
-            if(data.social.rating>0) metrics+=String.format(Locale.CHINA,"%.1f 分",data.social.rating)+data.social.ratingCount.takeIf { it.isNotBlank() }?.let { "（$it 人评分）" }.orEmpty()
+            val score=if(data.social.rating>0) String.format(Locale.CHINA,"%.1f 分",data.social.rating) else ""
+            if(score.isNotEmpty()) metrics+=score+data.social.ratingCount.takeIf { it.isNotBlank() }?.let { "（$it 人评分）" }.orEmpty()
             if(data.social.favoriteText.isNotBlank()) metrics+=data.social.favoriteText
             if(data.social.heatText.isNotBlank()) metrics+=data.social.heatText
-            info.addView(text(metrics.joinToString("  ·  "),13f,muted).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(0,0,0,dp(6)) })
+            val line=SpannableString(metrics.joinToString("  ·  "))
+            if(score.isNotEmpty()) {
+                line.setSpan(ForegroundColorSpan(accent),0,score.length,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                line.setSpan(StyleSpan(Typeface.BOLD),0,score.length,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            info.addView(TextView(this).apply { text=line; textSize=13f; setTextColor(muted); includeFontPadding=false; maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(0,0,0,dp(6)) })
         }
         val description=data.series.description.ifBlank { "选择剧集开始观看" }
         val synopsis=text(description,15f,muted).apply { maxLines=if(synopsisExpanded) 20 else 2; ellipsize=TextUtils.TruncateAt.END }
