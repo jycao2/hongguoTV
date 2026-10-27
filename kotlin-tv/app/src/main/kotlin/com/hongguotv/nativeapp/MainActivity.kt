@@ -2034,7 +2034,8 @@ class MainActivity: Activity() {
         if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
-        val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
+        // 记住播放身份的匿名 Cookie 罐必须继承，否则预加载与正式播放不是同一个会话。
+        val http=repository.http.newBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
         val source=ContentRepository(http); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
@@ -2093,7 +2094,7 @@ class MainActivity: Activity() {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
             autoRecovery=true; scheduleRecovery()
         }
-        android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
+        android.util.Log.e("HongguoTV","Playback failure: ${problem.javaClass.simpleName} msg=${problem.message}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""), problem)
     }
     private fun hidePlaybackOverlay() {
         main.removeCallbacks(hideHud)
@@ -2345,8 +2346,8 @@ class MainActivity: Activity() {
         add("首页") { val page=repository.home(1,library.contentType); "返回 ${page.items.size} 条" }
         add("搜索") { val page=repository.search("修仙",1,library.contentType); "返回 ${page.items.size} 条" }
         add("播放") {
-            val episode=library.history().firstOrNull()?.episodeId ?: throw IllegalStateException("暂无观看记录，先播放一集")
-            val info=repository.stream(episode,library.maxQuality); "获取成功 · ${info.quality}"
+            val progress=library.history().firstOrNull() ?: throw IllegalStateException("暂无观看记录，先播放一集")
+            val info=repository.stream(progress.episodeId,library.maxQuality); "获取成功 · ${info.quality}"
         }
         add("联想") { val words=repository.suggest("修仙"); "联想 ${words.size} 个" }
         content.addView(actions)

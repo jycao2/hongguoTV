@@ -42,8 +42,27 @@ data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 /** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。 */
 class UnplayableVideoException(message: String): IOException(message)
+/** 播放信息接口返回了 HTTP 200 空体；已按有界退避重读仍未成功。 */
+class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 
-open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
+/** 站点 CDN 在重定向时下发 ttwid 并拦截无 Cookie 的后续请求，内存 Cookie 罐使其自动流转。 */
+class MemoryCookies : okhttp3.CookieJar {
+    private val store = java.util.concurrent.ConcurrentHashMap<String, MutableList<okhttp3.Cookie>>()
+    // RFC 语义：同名 + 同域 + 同路径的新 Cookie 替换旧值，而不是叠加。
+    private fun List<okhttp3.Cookie>.replacedBy(cookies: List<okhttp3.Cookie>) =
+        filter { kept -> cookies.none { it.name==kept.name && it.domain==kept.domain && it.path==kept.path } }
+            .toMutableList().also { it += cookies }
+    override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
+        if (cookies.isEmpty()) return
+        store.compute(url.host) { _, kept -> kept.orEmpty().replacedBy(cookies) }
+    }
+    override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> {
+        val now = System.currentTimeMillis()
+        return store[url.host].orEmpty().filter { it.expiresAt > now }
+    }
+}
+
+open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).cookieJar(MemoryCookies()).build(), private val clock: () -> Long = System::currentTimeMillis, private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession.shared) {
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
@@ -132,8 +151,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             catch(e: Exception) { /* App search API rejected the request or the cursor expired; the website paginates independently. */ }
             return fillSeasons(webSearch(keyword,page,COMIC_WEB_GENRE),page,type,keyword)
         }
-        try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
-        return fillSeasons(webSearch(keyword,page,SHORT_WEB_GENRE),page,type,keyword)
+        var appError: Exception? = null
+        try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; appError=e }
+        return try { fillSeasons(webSearch(keyword,page,SHORT_WEB_GENRE),page,type,keyword) }
+        catch(e: Exception) { throw IOException("搜索暂不可用（App接口：${appError?.message ?: "无结果"}；网站：${e.message}）",e) }
     }
     // 站点搜索页已改为 SPA，数据由 /api/search/result/ 下发（返回 searchList/totalPages/hasMore，10 条一页）。
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
@@ -227,14 +248,22 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         return page.copy(items=output)
     }
+    /** App 搜索/联想接口和播放接口一样按注册设备放行：未注册的随机身份只会拿到 HTTP 200 空体。 */
+    private fun searchValues(): MutableMap<String,String> {
+        val values=VendorConstants.device.toMutableMap()
+        for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
+        values["version_name"]="7.2.2.32"
+        runCatching { playbackSession.profile(http) }.getOrNull()?.values?.let { identity ->
+            for(k in listOf("device_id","iid","cdid")) identity[k]?.let { values[k]=it }
+        }
+        return values
+    }
     private fun suggestRaw(query: String): List<String> {
         synchronized(suggestCache) { suggestCache[query]?.takeIf { clock()-it.first<300_000 }?.let { return it.second } }
         val result=runCatching {
             if(query.isBlank() || query.length>40) return emptyList()
             VendorConstants.regenerate()
-            val values=VendorConstants.device.toMutableMap()
-            for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
-            values["version_name"]="7.2.2.32"
+            val values=searchValues()
             values["query"]=query
             val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/suggest/v",values)
             val data=JSONObject(text(signed.url,signed))
@@ -252,9 +281,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(clock()<appSearchRetryAt) throw IOException("搜索接口暂不可用")
         val tabType=type.searchTab ?: throw IOException("${type.label}暂不支持搜索")
         VendorConstants.regenerate()
-        val values=VendorConstants.device.toMutableMap()
-        for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
-        values["version_name"]="7.2.2.32"
+        val values=searchValues()
         values.putAll(linkedMapOf("query" to keyword,"count" to "20","offset" to ((page-1)*20).toString(),"tab_type" to tabType.toString(),"bookshelf_search_plan" to "4","use_correct" to "true","user_is_login" to "0"))
         val cursor=synchronized(searchCursors) {
             val now=clock()
@@ -373,13 +400,26 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
     }
     private fun decodeEntities(value: String) = value.replace("&quot;","\"").replace("&lt;","<").replace("&gt;",">").replace("&#39;","'").replace("&amp;","&")
+    /** Fetch a direct MP4 URL for one episode.
+     *  The player API only answers registered anonymous devices: an unregistered `device_id`/`install_id`
+     *  pair gets `HTTP 200` with a zero-byte body. So the identity from [PlaybackDeviceSession] is written
+     *  into the query together with `_rticket`, and the response's `Set-Cookie` values ride along as a
+     *  `Cookie` header. No signature headers are involved in this call. */
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
-        VendorConstants.regenerate()
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/",VendorConstants.device,payload)
-        val data=JSONObject(text(signed.url,signed))
-        if(data.optInt("Code",data.optInt("code",0))!=0) throw IOException("播放接口暂不可用")
+        val identity=playbackSession.profile(http)
+        val query=Signer.encode(identity.values+("_rticket" to clock().toString()))
+        val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
+        val request=Request.Builder()
+            .url(playerUrl)
+            .header("User-Agent",PLAYBACK_UA)
+            .header("Accept","application/json; charset=utf-8,application/x-protobuf")
+            .apply { if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie) }
+            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        val data=JSONObject(playbackText(request.build()))
+        val code=data.optInt("Code",data.optInt("code",0))
+        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
         val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
@@ -401,11 +441,29 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
     }
+    /** 播放信息接口会间歇性返回 HTTP 200 空体；按 0/700/1500 毫秒退避最多读取三次，只换请求时间戳不换设备身份。 */
+    private fun playbackText(request: Request): String {
+        var attempt=0
+        while(true) {
+            val next=request.newBuilder().url(request.url.newBuilder().setQueryParameter("_rticket",clock().toString()).build()).build()
+            val body=RequestScope.execute(http.newCall(next)) { response ->
+                if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+            if(body.isNotBlank()) return body
+            val delay=listOf(700L,1500L).getOrNull(attempt) ?: throw EmptyPlaybackResponseException()
+            if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("播放请求已取消")
+            Thread.sleep(delay)
+            attempt++
+        }
+    }
     companion object {
         // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
         // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
         private const val COMIC_WEB_GENRE="205"
         private const val SHORT_WEB_GENRE="203"
+        // 播放接口认的客户端版本与内容接口不同，沿用抓包样本里 7.1.5.32 + tt-ok 的 UA。
+        private const val PLAYBACK_UA="com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")
