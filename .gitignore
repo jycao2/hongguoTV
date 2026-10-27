@@ -39,3 +39,10 @@ keystore.properties
 
 # 手机版为本地实验模块，不入库
 /kotlin-tv/app-phone/
+
+# Trae 本地会话记忆与临时文档，不入库
+.trae/documents/
+.trae/skills/*/
+!.trae/skills/hongguotv-release/
+!.trae/skills/hongguotv-stats/
+!.trae/skills/*/SKILL.md

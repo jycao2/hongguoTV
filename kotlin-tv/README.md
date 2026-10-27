@@ -9,6 +9,13 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.23.0 修复
+
+- **修复所有剧集播放失败**：补齐匿名设备注册 + 恢复原生签名播放接口，电视上可正常加载所有源的剧集。
+- **修复搜索结果稳定为空**：切换为 App 签名搜索接口并注入注册身份，联想词、搜索结果、跨题材聚合均恢复正常。
+- **新增 AI 剧热播榜**，详情页展示评分/热度/收藏数等数据。
+- **新增播放空响应自动重试**，屏蔽不兼容编码资源（Android MP4 extractor 下无视频轨）。
+
 ## 0.22.1 修复
 
 - **修复当贝等第三方桌面应用横幅显示异常**：替换为 320×180 标准横版品牌横幅。
@@ -291,7 +298,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.22.1-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.23.0-android8.apk
 ```
 
 ## 工程结构
