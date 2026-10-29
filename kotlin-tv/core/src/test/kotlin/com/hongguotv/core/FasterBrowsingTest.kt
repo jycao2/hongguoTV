@@ -49,11 +49,7 @@ class FasterBrowsingTest {
         val invalid=JSONObject(LibraryBackup.encode(extra)).put("hidden",org.json.JSONArray(listOf("bad")))
         assertThrows(IllegalArgumentException::class.java) { LibraryBackup.decode(invalid.toString()) }
     }
-    @Test fun cachedVideoPrefixServesRepeatReadsAndFetchesOnlyMissingTail() {
-        fun box(type: String,body: ByteArray)=be32(body.size+8)+type.toByteArray()+body
-        val head=box("ftyp","isom0000".toByteArray())+box("moov",byteArrayOf())
-        val data=head+ByteArray(2*1024*1024-head.size) { (it%239).toByte() }
-        val ranges=java.util.Collections.synchronizedList(mutableListOf<String>())
+    private fun videoServer(data: ByteArray,ranges: MutableList<String>): HttpServer {
         val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
         server.createContext("/video") { exchange ->
             val range=exchange.requestHeaders.getFirst("Range"); ranges+=range
@@ -62,15 +58,74 @@ class FasterBrowsingTest {
             exchange.responseHeaders.add("Content-Range","bytes $start-$end/${data.size}")
             exchange.sendResponseHeaders(206,bytes.size.toLong()); exchange.responseBody.use { it.write(bytes) }
         }
-        server.start()
+        server.start(); return server
+    }
+    private fun fakeMp4(size: Int): ByteArray {
+        fun box(type: String,body: ByteArray)=be32(body.size+8)+type.toByteArray()+body
+        val head=box("ftyp","isom0000".toByteArray())+box("moov",byteArrayOf())
+        return head+ByteArray(size-head.size) { (it%239).toByte() }
+    }
+    @Test fun cachedChunksServeRepeatReadsAndFetchOnlyMissingChunks() {
+        val data=fakeMp4(3*1024*1024)
+        val ranges=java.util.Collections.synchronizedList(mutableListOf<String>())
+        val server=videoServer(data,ranges)
+        val client=OkHttpClient()
+        try {
+            val remote=RemoteVideo(client,StreamInfo("http://127.0.0.1:${server.address.port}/video",null,"720P"),aheadBytes=0).warm()
+            assertEquals(listOf("bytes=0-2097151"),ranges.toList())
+            assertArrayEquals(data.copyOfRange(11,700011),remote.read(11,700000)); assertEquals(1,ranges.size)
+            assertArrayEquals(data.copyOfRange(2200000,2400000),remote.read(2200000,200000))
+            assertEquals(listOf("bytes=0-2097151","bytes=2097152-3145727"),ranges.toList())
+            assertArrayEquals(data.copyOfRange(2200100,2300100),remote.read(2200100,100000)); assertEquals(2,ranges.size)
+            remote.close(); assertThrows(java.io.IOException::class.java) { remote.read(0,1) }
+        } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
+    }
+    @Test fun readAheadThreadPrefetchesUpcomingChunksInBackground() {
+        val data=fakeMp4(5*1024*1024)
+        val ranges=java.util.Collections.synchronizedList(mutableListOf<String>())
+        val server=videoServer(data,ranges)
         val client=OkHttpClient()
         try {
             val remote=RemoteVideo(client,StreamInfo("http://127.0.0.1:${server.address.port}/video",null,"720P")).warm()
-            assertEquals(listOf("bytes=0-262143","bytes=262144-1048575"),ranges.toList())
-            assertArrayEquals(data.copyOfRange(11,700011),remote.read(11,700000)); assertEquals(2,ranges.size)
-            assertArrayEquals(data.copyOfRange(1000000,1200000),remote.read(1000000,200000))
-            assertEquals("bytes=1048576-1199999",ranges.last())
-            remote.close(); assertThrows(java.io.IOException::class.java) { remote.read(0,1) }
+            val deadline=System.currentTimeMillis()+5000
+            while(ranges.size<3 && System.currentTimeMillis()<deadline) Thread.sleep(20)
+            assertEquals(listOf("bytes=0-2097151","bytes=2097152-4194303","bytes=4194304-5242879"),ranges.toList())
+            assertArrayEquals(data.copyOfRange(3000000,3200000),remote.read(3000000,200000))
+            assertEquals(3,ranges.size)
+            remote.close()
+        } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
+    }
+    @Test fun statsExposeCacheHitsAndReadChunkCounts() {
+        val data=fakeMp4(5*1024*1024)
+        val ranges=java.util.Collections.synchronizedList(mutableListOf<String>())
+        val server=videoServer(data,ranges)
+        val client=OkHttpClient()
+        try {
+            val remote=RemoteVideo(client,StreamInfo("http://127.0.0.1:${server.address.port}/video",null,"720P"),aheadBytes=0).warm()
+            assertEquals(1,remote.stats().readerChunks)
+            assertEquals(0,remote.stats().aheadChunks)
+            assertArrayEquals(data.copyOfRange(100000,200000),remote.read(100000,100000))
+            val hit=remote.stats()
+            assertEquals(0,hit.cacheMisses); assertTrue(hit.cacheHits>=1)
+            assertArrayEquals(data.copyOfRange(2500000,2700000),remote.read(2500000,200000))
+            val miss=remote.stats()
+            assertEquals(1,miss.cacheMisses); assertEquals(2,miss.readerChunks)
+            remote.close()
+        } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
+    }
+    @Test fun evictedChunkIsRefetchedInsteadOfFailingBackwardRead() {
+        val data=fakeMp4(12*1024*1024)
+        val ranges=java.util.Collections.synchronizedList(mutableListOf<String>())
+        val server=videoServer(data,ranges)
+        val client=OkHttpClient()
+        try {
+            val remote=RemoteVideo(client,StreamInfo("http://127.0.0.1:${server.address.port}/video",null,"720P"),aheadBytes=2*1024*1024L).warm()
+            assertArrayEquals(data.copyOfRange(6000000,6200000),remote.read(6000000,200000))
+            val before=ranges.size
+            // 回读已被淘汰的早期区间：必须重新拉块并返回正确字节，而不是抛异常
+            assertArrayEquals(data.copyOfRange(2500000,2700000),remote.read(2500000,200000))
+            assertTrue(ranges.size>before)
+            remote.close()
         } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
     }
 }
