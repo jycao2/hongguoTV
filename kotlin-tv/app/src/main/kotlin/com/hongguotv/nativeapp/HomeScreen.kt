@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.widget.*
+import com.hongguotv.core.FocusGrid
 import com.hongguotv.core.Series
 
 /** Fixed text slots keep D-pad movement from resizing the content below the preview. */
@@ -153,10 +154,13 @@ class HomeScreen(
             val next=label("更多热门  ›",14f,TvStyle.muted).apply { id=View.generateViewId(); tag="home:more"; isFocusable=true; isFocusableInTouchMode=true; gravity=Gravity.CENTER; minHeight=dp(44); setPadding(dp(16),dp(10),dp(16),dp(10)); background=shape(false); setOnFocusChangeListener { _,f -> background=shape(f); setTextColor(if(f) TvStyle.text else TvStyle.muted); if(f) lastFocus=tag.toString() }; setOnClickListener { more() } }
             contents.addView(next,LayoutParams(-1,-2).apply { topMargin=dp(8) }); footer+=next; moreButton=next
         }
+        // 行列目标统一由 FocusGrid 计算，避界规则不再散落在各处；越出首/末行交给顶部导航与页脚。
+        val grid=FocusGrid(rows.map { it.cards.size })
         rows.forEachIndexed { i,row -> row.cards.forEachIndexed { j,card ->
-            card.view.nextFocusLeftId=row.cards[(j-1).coerceAtLeast(0)].view.id; card.view.nextFocusRightId=row.cards[(j+1).coerceAtMost(row.cards.lastIndex)].view.id
-            card.view.nextFocusUpId=if(i==0) top.id else rows[i-1].cards[j.coerceAtMost(rows[i-1].cards.lastIndex)].view.id
-            card.view.nextFocusDownId=if(i==rows.lastIndex) refresh.id else rows[i+1].cards[j.coerceAtMost(rows[i+1].cards.lastIndex)].view.id
+            card.view.nextFocusLeftId=row.cards[grid.left(i,j).col].view.id
+            card.view.nextFocusRightId=row.cards[grid.right(i,j).col].view.id
+            card.view.nextFocusUpId=grid.up(i,j)?.let { rows[it.row].cards[it.col].view.id } ?: top.id
+            card.view.nextFocusDownId=grid.down(i,j)?.let { rows[it.row].cards[it.col].view.id } ?: refresh.id
         } }
         footer.forEachIndexed { i,v -> v.nextFocusUpId=if(i==0) rows.lastOrNull()?.cards?.firstOrNull()?.view?.id ?: top.id else footer[i-1].id; v.nextFocusDownId=footer.getOrNull(i+1)?.id ?: v.id }
         top.nextFocusDownId=firstId()
