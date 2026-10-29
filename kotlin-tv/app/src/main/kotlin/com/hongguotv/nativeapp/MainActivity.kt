@@ -1089,10 +1089,13 @@ class MainActivity: Activity() {
             artwork.addView(image,FrameLayout.LayoutParams(-1,-1))
             val rank=TextView(this@MainActivity).apply { textSize=11f; setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(4),dp(8),dp(4)) }
             artwork.addView(rank,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
-            val title=text("",14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
+            // 部分机型单行/两行标题实测行高不一致，minLines 保底失效；用换行探针实测两行高度并固定，热度/集数标签才能对齐
+            val title=text("测\n测",14f).apply { gravity=Gravity.TOP; includeFontPadding=true; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
+            title.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+            val titleHeight=title.measuredHeight
             val badge=text("",12f).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
             card.addView(artwork,lp(-1,-2))
-            card.addView(title,lp(-1,-2))
+            card.addView(title,lp(-1,titleHeight))
             card.addView(badge,lp(-1,-2))
             card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
             return CardHolder(card,artwork,image,rank,title,badge)
