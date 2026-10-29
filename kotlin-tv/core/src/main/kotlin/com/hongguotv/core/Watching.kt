@@ -8,6 +8,22 @@ object PlaybackQuality {
     fun normalize(value: Int)=value.takeIf { it in options } ?: 1080
 }
 
+/** 播放失败后的自动降档：以「实际播到的档位」为基准，只往更低的档退。 */
+object QualityDowngrade {
+    /** 从播放信息文本解析实际档位，如 "1080P"、"720P（兼容资源）"；"自动" 或空文本返回 0。 */
+    fun parse(text: String): Int = Regex("(\\d{3,4})P").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+    /**
+     * 返回严格低于当前实际档位的最高可选档，已到最低档返回 null。
+     * [actual] 为 0（无法判定）时以用户配置为基准，避免降档后又拿回同一档反复失败。
+     */
+    fun next(actual: Int,configured: Int): Int? {
+        val configuredQuality=PlaybackQuality.normalize(configured)
+        val ceiling=if(actual>0) minOf(actual,configuredQuality) else configuredQuality
+        return PlaybackQuality.options.filter { it<ceiling }.maxOrNull()
+    }
+}
+
 /** One automatic recovery budget per episode; only an explicit user retry resets it. */
 class RecoveryBudget {
     var attempts=0; private set

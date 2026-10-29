@@ -243,6 +243,10 @@ class MainActivity: Activity() {
     private var playError=false
     private var lastSaved=0L
     private var quality=""
+    /** 本次播放会话内的临时降档，不改用户全局设置；重进播放页或手动改清晰度时清除。 */
+    private var sessionQuality: Int?=null
+    private var downgradeEpisode=""
+    private var downgradeCount=0
     private val tick=object: Runnable {
         override fun run() {
             if(!foreground || isDestroyed) return
@@ -1911,10 +1915,12 @@ class MainActivity: Activity() {
         updater.interrupt()
         val data=detail ?: return
         val playbackStarted=android.os.SystemClock.elapsedRealtime()
+        // 从详情页重新进播放器时丢弃上一轮的临时降档；自动连播保持在同一条降档链上。
+        if(screen!="player") { sessionQuality=null; downgradeEpisode=""; downgradeCount=0 }
         val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
         library.setWatched(data.series.id,false)
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
-        val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
+        val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${effectiveQuality()}") else null
         val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews(); stopDanmaku()
         if(reuse) {
@@ -1964,7 +1970,9 @@ class MainActivity: Activity() {
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
-        val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
+        val requestedId=data.episodes[episodeIndex]; val maxQuality=effectiveQuality(); val ticket=generation
+        // 每集最多自动降两档，换集后重新计数，避免一集失败就把整部剧拖到最低画质。
+        if(requestedId!=downgradeEpisode) { downgradeEpisode=requestedId; downgradeCount=0 }
         work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality)).prepare() }, { remote ->
             video=remote; quality=remote.info.quality
             val p=player ?: run {
@@ -2033,7 +2041,7 @@ class MainActivity: Activity() {
         val p=player ?: return; val data=detail ?: return
         if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped || episodeIndex>=data.episodes.lastIndex) return
         if(!PrefetchPolicy.nearEnd(p.currentPosition,p.duration,p.playbackParameters.speed)) return
-        val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
+        val id=data.episodes[episodeIndex+1]; val quality=effectiveQuality(); val key="$id:$quality"
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
         if(readySince==0L || now-readySince<3000 || p.bufferedPosition-p.currentPosition<5000) return
@@ -2065,6 +2073,20 @@ class MainActivity: Activity() {
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
     }
+    /** 播放取流用的档位：本会话降过档就用降档值，否则用用户设置值。 */
+    private fun effectiveQuality(): Int = sessionQuality ?: library.maxQuality
+    /** 临时降档只影响本次播放，不写回用户设置，避免一集片源坏了就把全局画质永久拉低。 */
+    private fun applySessionDowngrade(target: Int) {
+        sessionQuality=target; downgradeCount++
+        android.util.Log.w("HongguoTV","Auto downgrade to ${target}P episode=${episodeIndex+1} attempt=$downgradeCount actual=$quality")
+        playEpisode(episodeIndex,retryPosition,retryAutoplay)
+    }
+    /** 每集最多自动降两档：解码失败立即降，其余错误等同档重试预算用尽再降。 */
+    private fun autoDowngradeTarget(decoding: Boolean,retryable: Boolean): Int? {
+        if(downgradeCount>=2) return null
+        if(!decoding && !(retryable && !recovery.remaining)) return null
+        return QualityDowngrade.next(QualityDowngrade.parse(quality),effectiveQuality())
+    }
     private fun playerFailure(problem: Throwable) {
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
@@ -2093,10 +2115,19 @@ class MainActivity: Activity() {
             }
         } else {
             addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
-            addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+            // 手动入口的档位按当前实际播放档位推算，不再写死 720P。
+            QualityDowngrade.next(QualityDowngrade.parse(quality),effectiveQuality())?.let { lower ->
+                addButton(actions,"切换到 ${lower}P") { sessionQuality=null; downgradeCount=0; library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+            }
             addButton(actions,"返回选集") { returnToDetail(true) }
         }
-        if(retryable && !sleepStopped) {
+        // 解码失败同档重试没有意义，同档重试预算又已用尽时也不该再空转：两种情况都自动退一档。
+        val lower=if(incompatible || sleepStopped) null else autoDowngradeTarget(decoding,retryable)
+        if(lower!=null) {
+            playbackText.text="当前清晰度无法播放，正在自动切换到 ${lower}P"
+            autoRecovery=false
+            main.postDelayed({ if(foreground && screen=="player" && playError) applySessionDowngrade(lower) },600)
+        } else if(retryable && !sleepStopped) {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
             autoRecovery=true; scheduleRecovery()
         }
@@ -2562,6 +2593,8 @@ class MainActivity: Activity() {
             setOnItemClickListener { _,_,index,_ ->
                 val target=options[index]; val changed=library.maxQuality!=target
                 library.maxQuality=target
+                // 用户手动选定档位即视为放弃本轮自动降档，后续失败重新从选定档位起算。
+                sessionQuality=null; downgradeEpisode=""; downgradeCount=0
                 if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "清晰度 " else "默认清晰度  ·  ")+"${target}P"
                 if(inPlayer && changed) playEpisode(episodeIndex,currentPosition(),player?.playWhenReady ?: requestedAutoplay)
             }
