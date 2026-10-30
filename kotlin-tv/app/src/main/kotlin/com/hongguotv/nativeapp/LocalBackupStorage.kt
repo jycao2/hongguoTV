@@ -123,8 +123,24 @@ private class MediaStoreBackupFiles(private val resolver: ContentResolver) : Bac
         delete(to)
         resolver.update(source, ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, to) }, null, null) == 1
     }.getOrDefault(false)
+    /** 删除同名条目及其被 MediaStore 重名后追加 " (N)" 后缀的副本，避免旧版本遗留的孤儿行一直占位。 */
     override fun delete(name: String): Boolean = runCatching {
-        val target = uri(name) ?: return true
-        resolver.delete(target, null, null) >= 1
+        matchingIds(name).all { id ->
+            resolver.delete(Uri.withAppendedPath(collection, id.toString()), null, null) >= 0
+        }
     }.getOrDefault(false)
+    private fun matchingIds(name: String): List<Long> = runCatching {
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot >= 0) name.substring(0, dot) else name
+        val ext = if (dot >= 0) name.substring(dot) else ""
+        resolver.query(collection, arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME),
+            "${MediaStore.Downloads.RELATIVE_PATH}=?", arrayOf(relativePath), null)?.use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val display = cursor.getString(1) ?: continue
+                    if (display == name || (display.startsWith("$stem (") && display.endsWith(ext))) add(cursor.getLong(0))
+                }
+            }
+        } ?: emptyList()
+    }.getOrDefault(emptyList())
 }

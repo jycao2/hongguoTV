@@ -47,6 +47,12 @@ class LocalBackupStoreTest {
         assertFalse(File(dir, LocalBackupStore.TMP).exists())
     }
 
+    @Test fun cleanupRemovesLegacyTemporaryName() {
+        File(dir, LocalBackupStore.LEGACY_TMP).writeText(LibraryBackup.encode(data("半截")))
+        store.cleanup()
+        assertFalse(File(dir, LocalBackupStore.LEGACY_TMP).exists())
+    }
+
     @Test fun oversizedFileIsIgnored() {
         assertTrue(store.save(data("第一版")))
         File(dir, LocalBackupStore.MAIN).writeText("x".repeat(LocalBackupStore.MAX_FILE_BYTES + 1))

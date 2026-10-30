@@ -295,6 +295,8 @@ class Library(context: Context) {
     fun maybeBackupOnStartup() {
         if (!localBackupEnabled || index == null || isEmptyForRestore()) return
         val store = localBackupStorage.store() ?: return
+        // 升级后清理旧版临时名残留（每次保存都会新插一行的孤儿条目），避免它们继续占用目录
+        store.cleanup()
         if (store.hasBackup()) return
         val data = runCatching { snapshot() }.getOrNull() ?: return
         backupWorker.execute { if (store.save(data)) lastBackupAt = System.currentTimeMillis() }

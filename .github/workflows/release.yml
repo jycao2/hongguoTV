@@ -41,6 +41,7 @@ jobs:
             echo "- 播放失败按实际播放档位自动降级重试"
             echo "- 搜索结果中同系列多季自动聚合补齐，详情缓存 24 小时"
             echo "- 首页卡片标题固定两行，修复集数与热门标签对齐；优化遥控焦点移动"
+            echo "- 修复 Android 10+ 本地自动备份写入失败（临时文件名被系统补后缀，导致重复条目堆积）"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK

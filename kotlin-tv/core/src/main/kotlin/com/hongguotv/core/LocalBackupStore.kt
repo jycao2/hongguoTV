@@ -42,10 +42,14 @@ class LocalBackupStore(private val files: BackupFiles) {
     companion object {
         const val MAIN = "hongguotv-backup.json"
         const val PREV = "hongguotv-backup.prev.json"
-        const val TMP = "hongguotv-backup.json.tmp"
+        /** 临时文件必须以 .json 结尾：MediaStore 会按 MIME 给非 .json 后缀的显示名补上 .json，
+         *  那样按显示名查询永远找不到这一行，每次保存都会新插一条，最终堆满重复条目并写入失败。 */
+        const val TMP = "hongguotv-backup.tmp.json"
+        /** 旧版本临时名（补后缀后落成 hongguotv-backup.json.tmp.json 及其 (N) 变体），升级后清掉这些孤儿行。 */
+        const val LEGACY_TMP = "hongguotv-backup.json.tmp.json"
         const val MAX_FILE_BYTES = LibraryBackup.MAX_BYTES + 64 * 1024
     }
-    fun cleanup() { files.delete(TMP) }
+    fun cleanup() { files.delete(TMP); files.delete(LEGACY_TMP) }
     fun hasBackup() = files.exists(MAIN) || files.exists(PREV)
     /** Returns true when the new snapshot became the main file. */
     fun save(data: BackupData): Boolean {

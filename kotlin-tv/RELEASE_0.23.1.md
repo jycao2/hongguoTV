@@ -7,6 +7,7 @@
 - 播放失败改为按实际播放档位自动降级重试，手动重试入口显示当前档位
 - 搜索结果中同系列多季按详情自动聚合补齐，分组详情缓存 24 小时
 - 首页卡片标题固定两行高度，修复集数与「热门」标签的对齐偏差；货架焦点规则抽成 FocusGrid，遥控焦点移动更稳定
+- 修复 Android 10+ 本地自动备份写入失败：临时文件名与 MIME 扩展名不符，被系统补后缀后每次备份都新插一条重复条目，最终报 `Failed to build unique file` 且主备份文件从未更新
 
 ## 详细说明
 
@@ -24,6 +25,16 @@
 - 最坏情况约 10 秒后才报错，覆盖平台短时抖动与长时间播放后身份失效两种情况。
 
 涉及文件：`ContentRepository.kt`、`PlaybackDeviceSession.kt`。
+
+**Android 10+ 本地自动备份写入失败**
+
+现象：播放期间 MediaProvider 每约 5 秒报一次 `Failed to build unique file: /storage/emulated/0/Download/hongguotv/hongguotv-backup.json.tmp.json`，电视上累积了 62 条 `hongguotv-backup.json.tmp (N).json` 孤儿条目，而主备份 `hongguotv-backup.json` 从未生成，本地自动备份实际一直失效。
+
+定位：临时文件名为 `hongguotv-backup.json.tmp`，MediaStore 按 MIME（`application/json`）判断扩展名不符，插入时自动补成 `.json`；此后按 `DISPLAY_NAME` 查回原名的记录永远查不到，于是每次备份都新插一行，重名时被 uniquify 成 `... (N).json`，条目耗尽后写入直接抛异常。
+
+处置：临时文件名改为 `hongguotv-backup.tmp.json`，与 MIME 一致，保存时按名复用同一条记录；`delete()` 改为按精确名与 `名字 (N).ext` 变体批量删除，启动时清理旧版残留条目（设备重装过的旧条目 MediaProvider 已置空归属，系统侧不允许删除，仅留在公共下载目录中）。
+
+涉及文件：`LocalBackupStore.kt`、`LocalBackupStorage.kt`、`Library.kt`。
 
 ### 优化
 
@@ -45,6 +56,7 @@
 - core JVM 单测全绿（含预读命中、分块缓存、档位降级、焦点规则用例）。
 - 电视实测：`Playback ready 2018ms`、首帧 2001ms，画面与弹幕正常。
 - 抖动窗口内连续 3 次自动重试失败的场景已被新逻辑覆盖（实测同环境下恢复正常播放）。
+- 电视实测本地备份：启动后 `hongguotv-backup.json` 正常生成（可解析，含 11 条观看记录）；手动「立即备份」后主文件更新时间刷新并生成 `hongguotv-backup.prev.json`，日志中不再出现 `Failed to build unique file`，目录也不再新增重复的 `.tmp` 条目。
 
 ## 发版注意
 
