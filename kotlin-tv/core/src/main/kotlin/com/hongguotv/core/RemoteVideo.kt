@@ -175,7 +175,6 @@ class RemoteVideo(
             System.arraycopy(chunk,from,raw,written,count); written+=count; pos+=count
         }
         return MediaCrypto.decrypt(raw,start,info.key,prepared)
-        return MediaCrypto.decrypt(raw,start,info.key,prepared)
     }
     override fun close() {
         synchronized(lock) { closed=true; lock.notifyAll() }

@@ -31,15 +31,16 @@ jobs:
           umask 077
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_CODE=$((10100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.23.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.23.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_CODE=$((10200 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.23.1+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.23.1-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 修复所有剧集播放失败"
-            echo "- 修复搜索结果稳定为空"
-            echo "- 新增 AI 剧热播榜，详情页展示评分/热度等数据"
-            echo "- 新增播放空响应自动重试，屏蔽不兼容编码资源"
+            echo "- 修复部分时段整站无法播放：播放地址接口空响应时延长重试，并重新注册设备身份再试"
+            echo "- 播放拉流分块提升到 2MB，启用 8MB 后台预读，减少起播与中途缓冲等待"
+            echo "- 播放失败按实际播放档位自动降级重试"
+            echo "- 搜索结果中同系列多季自动聚合补齐，详情缓存 24 小时"
+            echo "- 首页卡片标题固定两行，修复集数与热门标签对齐；优化遥控焦点移动"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK
