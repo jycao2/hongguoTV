@@ -25,9 +25,13 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -54,6 +58,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         const val AGGREGATE_LIMIT = 6
         /** 探活缓存有效期：30 分钟内的结果直接复用，冷启动不再全量请求。 */
         const val PROBE_TTL_MS = 30 * 60_000L
+        /** 连续缓冲多少秒视为线路卡死：自动换线路，线路用尽再尝试其它片源。
+         *  注意要大于 bufferForPlaybackAfterRebufferMs（25s），否则正常卡后补缓冲会被误判为卡死。 */
+        const val STALL_SWITCH_SECONDS = 45
     }
 
     private class ProbeState(val dot: Dot, val total: Int, val reason: String? = null)
@@ -168,6 +175,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var scrubbing = false
     /** ExoPlayer 最近一次带宽估计（bps）：缓冲提示用它显示实时网速。 */
     private var lastBandwidthBps = 0L
+    /** 卡死看门狗：连续缓冲秒数、是否已在后台寻找其它片源、是否已提示过用户。 */
+    private var stallSeconds = 0
+    private var sourceSwitchInFlight = false
+    private var stallAdviceShown = false
+    /** 本次播放已尝试过的线路/片源，避免在卡死时反复切换同一目标。 */
+    private val autoFallbackSources = mutableSetOf<String>()
     private var scrubDirection = 0
     private var scrubPositionMs = 0L
     private var scrubStartAt = 0L
@@ -196,6 +209,21 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             main.postDelayed(this, 180L)
         }
     }
+    /** 缓冲看门狗：慢线路长时间没有画面进展时自动换线路，线路用尽再尝试其它片源。 */
+    private val stallTick = object : Runnable {
+        override fun run() {
+            val instance = player
+            if(mode != Mode.PLAY || instance == null || scrubbing) stallSeconds = 0
+            // 仅在「用户要它播」时计数：暂停状态下的缓冲不算卡死
+            else if(instance.playWhenReady && instance.playbackState == Player.STATE_BUFFERING) stallSeconds++
+            else stallSeconds = 0
+            if(stallSeconds >= STALL_SWITCH_SECONDS) {
+                stallSeconds = 0
+                recoverFromStall(instance?.currentPosition?.coerceAtLeast(0L) ?: 0L)
+            }
+            main.postDelayed(this, 1_000L)
+        }
+    }
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             // 缓冲中给出「正在缓冲 + 实时网速」提示，避免慢网卡顿时画面静止却没有任何反馈
@@ -205,6 +233,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         override fun onIsPlayingChanged(isPlaying: Boolean) { keepScreenOn(isPlaying) }
         override fun onPlayerError(error: PlaybackException) {
+            android.util.Log.w("HongguoTV", "third playback error: ${error.errorCodeName} ${error.message}")
+            stallSeconds = 0
             // 线路失效时先自动换下一条线路，全部试过才提示手动换集
             val data = detail
             val next = data?.groups?.indices?.firstOrNull { index ->
@@ -2024,6 +2054,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         detailGroup = progress?.group?.takeIf { data.groups.getOrNull(it) != null } ?: ThirdCms.defaultGroupIndex(data.groups)
         playGroup = detailGroup; playEpisode = progress?.episode ?: 0
         autoFallbackGroups.clear()
+        autoFallbackSources.clear()
+        stallAdviceShown = false; sourceSwitchInFlight = false
         mode = Mode.DETAIL
         rebuild()
     }
@@ -2095,15 +2127,16 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         content.addView(infoRow, lp(-1, -2).apply { bottomMargin = dp(10) })
 
         // 主按钮：有进度默认继续播放并持焦点；收藏与换源同排
+        // 一律使用当前选中的线路（playGroup），避免「切了线路却仍从旧线路播放」
         val progress = store.progress(detailSource?.id.orEmpty(), data.video.id)
         val mainActions = row().apply { setPadding(0, 0, 0, dp(10)) }
         var mainFocus: TextView? = null
-        if(progress != null && data.groups.getOrNull(progress.group)?.second?.getOrNull(progress.episode) != null) {
+        if(progress != null && data.groups.getOrNull(playGroup)?.second?.getOrNull(progress.episode) != null) {
             mainFocus = addButton(mainActions, "继续播放 第${progress.episode + 1}集") {
-                playEpisode(progress.group, progress.episode, progress.positionMs)
+                playEpisode(playGroup, progress.episode, progress.positionMs)
             }
         }
-        val start = addButton(mainActions, if(progress != null) "从头再看" else "从第01集开始") { playEpisode(detailGroup, 0) }
+        val start = addButton(mainActions, if(progress != null) "从头再看" else "从第01集开始") { playEpisode(playGroup, 0) }
         if(mainFocus == null) mainFocus = start
         val favorited = detailSource?.let { store.isFavorite(it.api, data.video.id) } == true
         val favoriteButton = addButton(mainActions, if(favorited) "已收藏" else "收藏") { toggleDetailFavorite(data) }
@@ -2112,18 +2145,20 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         favoriteButton.nextFocusLeftId = start.id
         content.addView(mainActions)
 
-        // 播放组 tabs
+        // 播放组 tabs：左右互连，向下进入分集网格；主按钮向下先落到第一个线路标签
+        val tabButtons = mutableListOf<TextView>()
         if(data.groups.size > 1) {
             val tabRow = row().apply { setPadding(0, 0, 0, dp(6)) }
-            var firstTab: TextView? = null
             data.groups.forEachIndexed { index, (name, _) ->
                 val tab = addButton(tabRow, name, index == playGroup) {
                     playGroup = index; playEpisode = 0; renderDetailRefresh()
                 }
-                if(firstTab == null) firstTab = tab
+                val prior = tabButtons.lastOrNull()
+                if(prior != null) { prior.nextFocusRightId = tab.id; tab.nextFocusLeftId = prior.id }
+                tabButtons += tab
             }
             content.addView(tabRow)
-            firstTab?.let { tab ->
+            tabButtons.firstOrNull()?.let { tab ->
                 mainFocus?.nextFocusDownId = tab.id
                 tab.nextFocusUpId = mainFocus?.id ?: View.NO_ID
             }
@@ -2146,7 +2181,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 } }
             }
             content.addView(recycler, lp(-1, -2))
-            mainFocus?.nextFocusDownId = recycler.id
+            // 有线路标签时向下从标签进网格，否则直接从主按钮进网格
+            if(tabButtons.isEmpty()) mainFocus?.nextFocusDownId = recycler.id
+            else tabButtons.forEach { it.nextFocusDownId = recycler.id }
         }
 
         body.addView(scroll, lp(-1, 0).apply { weight = 1f })
@@ -2242,9 +2279,84 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(detail?.groups?.getOrNull(group)?.second?.getOrNull(episode) == null) return
         saveProgressNow()
         autoFallbackGroups.clear()
+        autoFallbackSources.clear()
+        stallAdviceShown = false; sourceSwitchInFlight = false
         mode = Mode.PLAY; playGroup = group; playEpisode = episode
         pendingStartMs = startMs; pendingAutoplay = true; hasPendingPlay = true
         rebuild()
+    }
+
+    /** 缓冲卡死自愈：先换下一条没试过的线路；线路都卡则转去其它片源找同一部影片。 */
+    private fun recoverFromStall(positionMs: Long) {
+        if(mode != Mode.PLAY) return
+        val data = detail ?: return
+        val next = data.groups.indices.firstOrNull { index ->
+            index != playGroup && index !in autoFallbackGroups && data.groups[index].second.isNotEmpty()
+        }
+        if(next != null) {
+            autoFallbackGroups += playGroup
+            playGroup = next
+            playEpisode = playEpisode.coerceAtMost((data.groups[next].second.size - 1).coerceAtLeast(0))
+            pendingStartMs = positionMs
+            pendingAutoplay = true
+            hasPendingPlay = true
+            Toast.makeText(activity, "当前线路太慢，已切换线路「${data.groups[next].first}」", Toast.LENGTH_SHORT).show()
+            // 先让本轮回调结束，再释放旧播放器，避免在播放器回调栈里 release
+            main.post { if(mode == Mode.PLAY) rebuild() }
+        } else {
+            tryAnotherSource(positionMs)
+        }
+    }
+
+    /** 当前片源所有线路都不行：后台逐个搜索其它存活源，命中同一部影片后换源并沿用集号与进度。 */
+    private fun tryAnotherSource(positionMs: Long) {
+        if(sourceSwitchInFlight) return
+        val data = detail ?: return
+        val from = detailSource ?: return
+        autoFallbackSources += from.api
+        val targets = sources.filter { it.api != from.api && it.api !in autoFallbackSources && probes[it.id]?.dot != Dot.DEAD }
+            .take(3)
+        if(targets.isEmpty()) { showSlowHint(); return }
+        autoFallbackSources += targets.map { it.api }
+        sourceSwitchInFlight = true
+        val gen = generation
+        val episode = playEpisode
+        val group = playGroup
+        val key = ThirdCms.searchKey(data.video.name, data.year)
+        Toast.makeText(activity, "当前片源太慢，正在尝试其它片源…", Toast.LENGTH_SHORT).show()
+        executor.execute {
+            var found: ThirdSearchHit? = null
+            for(target in targets) {
+                val details = client.searchPage(target.api, data.video.name, 1).page?.details.orEmpty()
+                val matched = details.firstOrNull { ThirdCms.searchKey(it.video.name, it.year) == key }
+                    ?: details.firstOrNull()
+                if(matched != null && matched.groups.any { it.second.isNotEmpty() }) { found = ThirdSearchHit(target, matched); break }
+            }
+            val hit = found
+            main.post {
+                sourceSwitchInFlight = false
+                if(gen != generation || mode != Mode.PLAY) return@post
+                if(hit == null) { showSlowHint(); return@post }
+                val matched = hit.detail
+                detail = matched; detailSource = hit.source
+                playGroup = group.takeIf { matched.groups.getOrNull(it)?.second?.isNotEmpty() == true }
+                    ?: ThirdCms.defaultGroupIndex(matched.groups)
+                playEpisode = episode.coerceAtMost((matched.groups.getOrNull(playGroup)?.second?.size ?: 1) - 1)
+                autoFallbackGroups.clear()
+                pendingStartMs = positionMs
+                pendingAutoplay = true
+                hasPendingPlay = true
+                Toast.makeText(activity, "已自动切换到片源「${hit.source.name}」", Toast.LENGTH_SHORT).show()
+                rebuild()
+            }
+        }
+    }
+
+    /** 自动恢复无解时提示一次，避免每秒反复弹 Toast。 */
+    private fun showSlowHint() {
+        if(stallAdviceShown) return
+        stallAdviceShown = true
+        Toast.makeText(activity, "当前片源网速太慢，已尝试全部线路；建议返回详情手动切换片源", Toast.LENGTH_LONG).show()
     }
 
     private fun attachPlayer(startMs: Long, autoplay: Boolean) {
@@ -2269,7 +2381,27 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         host.addView(center, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         playLoading = loading; playErrorText = errorView
 
-        val instance = ExoPlayer.Builder(activity).build()
+        // 三方源多为小站 CDN，默认 UA 与超时容易连不上：统一用浏览器 UA 并放宽超时
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10; TV) AppleWebKit/537.36")
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true)
+        // 慢/抖动链路策略：尽量多缓冲，且卡过后要攒够 25 秒再续播，
+        // 避免带宽在码率边缘波动时频繁出现「缓冲→播几秒→再缓冲」
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                60_000,   // minBufferMs
+                180_000,  // maxBufferMs
+                3_000,    // bufferForPlaybackMs（起播阈值）
+                25_000    // bufferForPlaybackAfterRebufferMs（卡后续播阈值）
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        val instance = ExoPlayer.Builder(activity)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(activity, httpFactory)))
+            .setLoadControl(loadControl)
+            .build()
         instance.setAudioAttributes(AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         view.player = instance
@@ -2299,6 +2431,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         buildOverlay(host, data, group.first)
         (activity.findViewById(android.R.id.content) as FrameLayout).addView(host, FrameLayout.LayoutParams(-1, -1))
         scheduleSave()
+        // 缓冲看门狗：打开任何一集都启动，长时间卡在缓冲时自动换线路/换源
+        stallSeconds = 0
+        main.removeCallbacks(stallTick)
+        main.postDelayed(stallTick, 1_000L)
     }
 
     private fun buildOverlay(host: FrameLayout, data: ThirdDetail, groupName: String) {
@@ -2621,6 +2757,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun releasePlayback() {
         main.removeCallbacks(saveRun); main.removeCallbacks(hideOverlayRun); main.removeCallbacks(uiTick); main.removeCallbacks(outroTick)
+        main.removeCallbacks(stallTick)
+        stallSeconds = 0; sourceSwitchInFlight = false
         scrubbing = false; main.removeCallbacks(scrubTick)
         outroTriggered = false
         overlayVisible = false; overlayButtons.clear()

@@ -10,9 +10,10 @@ data class BackupProgress(val series: Series,val episodeId: String,val episodeIn
 }
 data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val autoSeason: Boolean=true,val danmaku: Boolean=true,
     val danmakuOpacity: Int=DanmakuPrefs.OPACITY_DEFAULT,val danmakuFont: Int=DanmakuPrefs.FONT_DEFAULT,val danmakuSpeed: Int=DanmakuPrefs.SPEED_DEFAULT,val danmakuRows: Int=DanmakuPrefs.ROWS_DEFAULT,
-    val showClock: Boolean=false,val sourceHidden: Boolean=false) {
+    val showClock: Boolean=false,val sourceHidden: Boolean=false,val navHidden: Set<String> = emptySet()) {
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock).put("sourceHidden",sourceHidden)
+        .put("navHidden",JSONArray(navHidden.filter { it in LibraryBackup.NAV_KEYS }.sorted()))
 }
 data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap(),val thirdSources: List<BackupThirdSource> = emptyList(),val thirdHistory: List<BackupThirdHistory> = emptyList(),val thirdFavorites: List<BackupThirdFavorite> = emptyList())
 
@@ -42,6 +43,8 @@ data class BackupThirdHistory(
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
+    /** 首页与设置始终显示，只有这四个导航模块支持单独隐藏。 */
+    val NAV_KEYS=setOf("search","rank","favorite","history")
     const val MAX_THIRD_HISTORY=100
     const val MAX_THIRD_FAVORITES=100
     private val idPattern=Regex("[0-9]{1,30}")
@@ -145,6 +148,12 @@ object LibraryBackup {
         val showClock=settings.optBoolean("showClock",false)
         // 旧备份没有该字段时按默认「显示」处理
         val sourceHidden=settings.optBoolean("sourceHidden",false)
+        // 导航模块显隐：只认已知模块键，未知值忽略
+        val navHidden=runCatching {
+            settings.optJSONArray("navHidden")?.let { rows ->
+                (0 until rows.length()).mapNotNull { rows.optString(it).takeIf { key -> key in NAV_KEYS } }.toSet()
+            } ?: emptySet()
+        }.getOrDefault(emptySet())
         // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复
         val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
             val api=runCatching { row.string("api",500) }.getOrNull() ?: return@mapNotNull null
@@ -186,7 +195,7 @@ object LibraryBackup {
                 }.getOrNull()
             }
         }.getOrDefault(emptyList()) else emptyList()
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden,navHidden),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {

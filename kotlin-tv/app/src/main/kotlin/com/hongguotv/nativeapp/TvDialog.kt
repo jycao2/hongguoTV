@@ -124,6 +124,30 @@ object TvDialog {
         }
     }
 
+    /** 单选项适配器：勾选状态由适配器自己维护，不依赖 ListView 的 CHOICE_MODE，
+     *  避免视图复用时多行同时显示为选中。 */
+    class RadioAdapter(activity: Activity, labels: List<String>) : android.widget.ArrayAdapter<String>(activity, 0, labels) {
+        private val host = activity
+        var selected: Int = -1
+            set(value) { field = value; notifyDataSetChanged() }
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = (convertView as? android.widget.CheckedTextView) ?: android.widget.CheckedTextView(host).apply {
+                textSize = 16f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(host, 16), dp(host, 12), dp(host, 16), dp(host, 12))
+                val styled = host.obtainStyledAttributes(intArrayOf(android.R.attr.listChoiceIndicatorSingle))
+                checkMarkDrawable = styled.getDrawable(0)
+                styled.recycle()
+                checkMarkTintList = android.content.res.ColorStateList.valueOf(TvStyle.accent)
+            }
+            view.text = getItem(position)
+            view.setTextColor(TvStyle.text)
+            view.isChecked = position == selected
+            return view
+        }
+    }
+
     /** 列表选择弹窗：统一卡片 + 列表 + 底部按钮。 */
     fun choose(
         activity: Activity,

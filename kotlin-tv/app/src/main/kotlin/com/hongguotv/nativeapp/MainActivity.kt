@@ -174,6 +174,23 @@ class MainActivity: Activity() {
     private var catalog=emptyList<Series>()
     private var hasMore=false
     private var catalogFocus=""
+    // 高级搜索：与关键词搜索共用结果网格，但条件、分页游标和筛选面板单独维护
+    private var advancedSearch=false
+    private var discoverySelection=DiscoverySelection()
+    private var discoveryGroups=emptyList<DiscoveryGroup>()
+    private var discoveryCursor: DiscoveryCursor?=null
+    private var filterToggle: TextView?=null
+    private var filterSummary: TextView?=null
+    private var filterExpanded=true
+    private var filterPanel: LinearLayout?=null
+    private var filterGroupsScroll: View?=null
+    private var filterChips=linkedMapOf<Pair<String,String>,TextView>()
+    private var filterRows=mutableListOf<List<TextView>>()
+    private var filterCollapse: TextView?=null
+    private var filterReset: TextView?=null
+    private var filterRefresh: TextView?=null
+    // 条件变更后重建页面时，把焦点送回刚刚操作的那个条件
+    private var pendingFilterFocus: Pair<String,String>?=null
     private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null,val aiCatalog: Boolean=false,val aiGenre: Genre?=null)
     private var ranking: ComicRanking?=null
     private var rankBoard=RankBoard.COMIC
@@ -223,6 +240,10 @@ class MainActivity: Activity() {
     private var historyManage: View?=null
     /** 设置页重建后要恢复焦点的设置项标签前缀。 */
     private var settingsFocusKey: String?=null
+    /** 手机快传来的 APK：等用户在系统设置里完成授权后自动续装，不必重新扫码。 */
+    private var pendingQuickApk: java.io.File?=null
+    /** 设置页「自定义背景」文案刷新：快传图片一键设为背景后同步显示。 */
+    private var refreshBackdropSetting: (()->Unit)?=null
     private var detail: Detail?=null
     private var episodeIndex=0
     private var group=0
@@ -503,6 +524,8 @@ class MainActivity: Activity() {
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
         historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; favoriteFilterFirst=null; favoriteFilterButtons=emptyList(); homeUpdates=null; resumeCards.clear()
+        filterToggle=null; filterSummary=null; filterPanel=null; filterGroupsScroll=null; filterChips=linkedMapOf(); filterRows=mutableListOf()
+        filterCollapse=null; filterReset=null; filterRefresh=null
     }
     private fun <T> work(action: ()->T,done: (T)->Unit,failed: (Throwable)->Unit) {
         cancelWork()
@@ -531,12 +554,23 @@ class MainActivity: Activity() {
         val detail=if(problem is java.net.UnknownHostException) "无法连接内容网站" else if(problem is java.net.SocketTimeoutException) "连接超时" else problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
         parent.addView(text(detail,13f,muted)); addButton(parent,"重试",onClick=retry).requestFocus()
     }
+    /** 导航栏模块是否被用户隐藏：首页(0) 与设置(5) 始终显示。 */
+    private fun navHiddenAt(index: Int): Boolean = when(index) {
+        1 -> library.navHidden("search")
+        2 -> library.navHidden("rank")
+        3 -> library.navHidden("favorite")
+        4 -> library.navHidden("history")
+        6 -> library.sourceHidden
+        else -> false
+    }
     private fun switchTab(next: Int) {
+        if(navHiddenAt(next)) return
         leaveCollection()
         tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre,aiCatalog,aiGenre); tabFocus[tab]=catalogFocus
         // 从其他模块切回搜索页时重置为全新搜索状态，不保留上次的搜索词与结果
         if(next==1) {
             query=""; phoneSearched=false; lastSuggestWords=emptyList<String>(); lastSuggestKey=""; suggestFocusIndex=-1; keyboardLastLabel=null
+            advancedSearch=false; discoverySelection=DiscoverySelection(); discoveryGroups=emptyList(); discoveryCursor=null; filterExpanded=true
             tabState.remove(1); tabFocus.remove(1)
         }
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
@@ -579,8 +613,8 @@ class MainActivity: Activity() {
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false) {
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
-        // 片源入口隐藏时导航栏没有第 7 项，避免 nav[6] 越界
-        if(tab==6 && library.sourceHidden) tab=0
+        // 当前模块被隐藏时回到首页，避免停留在不可见的页签
+        if(navHiddenAt(tab)) tab=0
         // Never cache a new page number with the previous page's results while a request is pending.
         if(load) {
             val cached=if(tab==0 && page==1 && genre==null) library.cachedHome(library.contentType) else null
@@ -595,9 +629,10 @@ class MainActivity: Activity() {
         brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
         top.addView(brand,lp(dp(172),dp(44)))
         listOf("首页","搜索","排行榜","收藏","最近观看","设置","片源").forEachIndexed { index,label ->
-            // 片源入口默认隐藏，可在「设置 → 片源隐藏」中开启
-            if(index==6 && library.sourceHidden) return@forEachIndexed
+            // 首页与设置固定显示，其余模块可单独隐藏（设置 → 导航模块）
+            val hidden=navHiddenAt(index)
             val item=addButton(top,label,index==tab) { switchTab(index) }
+            item.visibility=if(hidden) View.GONE else View.VISIBLE
             fun paint(focused: Boolean) {
                 item.setTextColor(if(focused) bg else if(index==tab) accent else muted)
                 item.background=rounded(if(focused) white else if(index==tab) TvStyle.selectedSurface else Color.TRANSPARENT)
@@ -627,6 +662,15 @@ class MainActivity: Activity() {
         }
         if(tab<=1) {
             val types=row().apply { setPadding(0,dp(8),0,dp(6)) }
+            if(tab==1 && advancedSearch) {
+                // 高级搜索模式不建内容类型页签，类型统一由筛选面板的服务端选项决定
+                types.addView(text("高级搜索",14f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(2),0,0,0) },lp(-2,-2))
+                types.addView(Space(this),lp(0,1).apply { weight=1f })
+                filterToggle=chip("‹ 返回关键词搜索",false) { switchAdvanced(false) }.apply { nextFocusUpId=nav[tab].id }
+                types.addView(filterToggle,lp(-2,-2))
+                container.addView(types)
+                nav.forEach { it.nextFocusDownId=filterToggle?.id ?: nav[tab].id }
+            } else {
             if(!inlineHomeFilters()) types.addView(text("片库",12f,muted),lp(dp(42),-2))
             // AI 剧只在排行榜内提供分类入口，不占首页/搜索的内容类型页签
             listOf(ContentType.COMIC,ContentType.SHORT).forEach { type ->
@@ -637,6 +681,11 @@ class MainActivity: Activity() {
                 genreButton=addButton(types,genre?.let { "题材 · ${it.name}" } ?: "题材") { showGenrePicker() }.apply { nextFocusUpId=nav[tab].id }
                 addButton(types,"随机") { showRandomPicks() }.apply { nextFocusUpId=nav[tab].id }
             }
+            if(tab==1) {
+                types.addView(Space(this),lp(0,1).apply { weight=1f })
+                filterToggle=chip("高级搜索",false) { switchAdvanced(true) }.apply { nextFocusUpId=nav[tab].id }
+                types.addView(filterToggle,lp(-2,-2))
+            }
             if(inlineHomeFilters()) {
                 top.addView(Space(this),lp(0,1).apply { weight=1f })
                 typeButtons.values.forEach { view -> (view as TextView).apply { textSize=12f; minHeight=dp(34); setPadding(dp(12),dp(7),dp(12),dp(7)) } }
@@ -645,7 +694,8 @@ class MainActivity: Activity() {
                 if(tab==0) types.addView(text("长按确认 · 管理片单",12f,muted).apply { setPadding(dp(14),0,0,0) })
                 container.addView(types)
             }
-            nav.forEach { it.nextFocusDownId=(typeButtons[library.contentType] ?: typeButtons.values.firstOrNull())?.id ?: nav[tab].id }
+            nav.forEach { it.nextFocusDownId=(if(tab==1) filterToggle else typeButtons[library.contentType] ?: typeButtons.values.firstOrNull())?.id ?: nav[tab].id }
+            }
         }
         if(tab==1) {
             // 机型分级：≥900dp 三栏（键盘+历史 / 联想 / 结果），700-900dp 两栏，<700dp 回退纵向堆叠
@@ -662,14 +712,16 @@ class MainActivity: Activity() {
             val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入${library.contentType.label}名称，或用字母键拼首拼"; setText(query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
-            searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons.getValue(library.contentType).id; searchButton?.nextFocusUpId=input.nextFocusUpId
+            searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons[library.contentType]?.id ?: nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
             if(mode==0) {
                 lateinit var recent: TextView
                 recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
                 searchActions.addAll(listOf(recent))
             }
             typeButtons.values.forEach { it.nextFocusDownId=input.id }
-            input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
+            input.setOnEditorActionListener { _,_,_-> search(); true }
+            // 高级搜索改用筛选面板，不再占一行关键词输入，把高度留给筛选和结果网格
+            if(!advancedSearch) container.addView(searchRow)
             input.addTextChangedListener(object: android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int) {}
                 override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) {}
@@ -679,6 +731,10 @@ class MainActivity: Activity() {
                     scheduleSuggest()
                 }
             })
+            if(advancedSearch) {
+                // 高级搜索不占键盘/联想/历史三栏，筛选面板与结果网格各占整行
+                buildFilterPanel(container)
+            } else {
             val keyHeight=if(tall) dp(36) else dp(30)
             fun azKey(label: String): TextView {
                 val view=button(label) { onAzKey(label) }
@@ -785,6 +841,7 @@ class MainActivity: Activity() {
             searchBody=catalogBody
             // 键盘末行先指向历史（结果区建立后由 wireSearchPanel 补全联想与网格指向）
             azLastRow.forEach { it.nextFocusDownId=historyFirst?.id ?: View.NO_ID }
+            }
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
             aiEntry=null; aiBack=null; aiGenreButton=null
@@ -864,7 +921,9 @@ class MainActivity: Activity() {
         if(localCatalog()) {
             catalog=localItems(); ranking=null; page=1; hasMore=false
         }
-        if(load) {
+        if(load && tab==1 && advancedSearch) {
+            loadDiscovery(body)
+        } else if(load) {
             if(tab==0) catalogGrid(body,focusNav,focusType,loading=true)
             else { message(body,"正在加载…"); if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestType=library.contentType
@@ -917,7 +976,7 @@ class MainActivity: Activity() {
             })
         } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter)
         // 页面重建后初始化联想区：回显点击联想词前的列表，或无词时收起中栏
-        if(tab==1) fetchSuggest()
+        if(tab==1 && !advancedSearch) fetchSuggest()
     }
     private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false) {
         if(tab==0 && page==1 && collection==null && genre==null) { renderHome(body,focusNav,focusType,loading); return }
@@ -933,7 +992,7 @@ class MainActivity: Activity() {
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
         val focusGenre=if(tab==2 && aiCatalog) aiGenre else genre
-        catalogPageKey="$tab:${if(aiCatalog) "ai" else ""}:${collection.orEmpty()}:${focusGenre?.slug.orEmpty()}:$page:$query"
+        catalogPageKey="$tab:${if(aiCatalog) "ai" else ""}:${collection.orEmpty()}:${focusGenre?.slug.orEmpty()}:$page:$query${if(tab==1 && advancedSearch) ":discovery:${discoverySelection.values}" else ""}"
         if(tab==0 && genre!=null) {
             val bar=row().apply { setPadding(0,0,0,dp(6)) }
             bar.addView(text("题材 · ${genre?.name}",16f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -955,12 +1014,12 @@ class MainActivity: Activity() {
         val displayed=mutableListOf<Series>()
         displayed+=if(localCatalog()) catalog else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog
         if(displayed.isEmpty()) {
-            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
+            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(advancedSearch) "当前条件下没有内容，可以换个条件或点「重置」" else if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
             wireSearchPanel(null)
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
         }
-        val cols=if(tab==1) searchColumns else gridColumns
+        val cols=if(tab==1 && !advancedSearch) searchColumns else gridColumns
         val adapter=CatalogAdapter(displayed,cols)
         val grid=GridLayoutManager(this,cols)
         grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position)) cols else 1 }
@@ -993,7 +1052,7 @@ class MainActivity: Activity() {
         nav.forEach {
             it.nextFocusDownId=when {
                 tab==2 -> (if(aiCatalog) aiBack ?: aiGenreButton ?: rankRefresh else aiEntry ?: rankSwitch ?: rankRefresh)?.id ?: recycler.id
-                tab<=1 -> typeButtons[library.contentType]?.id ?: recycler.id
+                tab<=1 -> (if(tab==1) filterToggle else typeButtons[library.contentType])?.id ?: recycler.id
                 else -> favoriteCheck?.id ?: historyManage?.id ?: recycler.id
             }
         }
@@ -1008,6 +1067,7 @@ class MainActivity: Activity() {
         searchButton?.nextFocusDownId=azFirst?.id ?: recycler.id
         searchActions.forEach { it.nextFocusDownId=azFirst?.id ?: recycler.id }
         wireSearchPanel(recycler)
+        wireFilterPanelToGrid(recycler)
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus()
         else {
@@ -1020,6 +1080,7 @@ class MainActivity: Activity() {
     private fun maybeLoadMore() {
         val adapter=catalogAdapter ?: return
         if(randomDialog?.isShowing==true || loadingMore || !hasMore || localCatalog() || screen!="catalog") return
+        if(tab==1 && advancedSearch) { loadMoreDiscovery(adapter); return }
         if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
         val requestTab=tab; val requestPage=page+1; val requestQuery=query; val requestType=library.contentType
         val requestBoard=rankBoard; val requestGenre=if(requestTab==0) genre else null
@@ -1139,7 +1200,8 @@ class MainActivity: Activity() {
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
-            card.nextFocusUpId=if(position<cols) suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            // 高级搜索下 searchInput 未挂载但非空，会让 Elvis 链提前命中导致 ↑ 回不到筛选面板，故面板分支必须放最前
+            card.nextFocusUpId=if(position<cols) (if(tab==1 && advancedSearch) filterRows.lastOrNull()?.firstOrNull()?.id else null) ?: suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
             if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
@@ -1397,7 +1459,7 @@ class MainActivity: Activity() {
         backdropButton=setting(device,backdropLabel()) {
             tvTools.choose("自定义背景",listOf("手机上传图片","恢复默认背景"),backdropButton,{ choice ->
                 when(choice) {
-                    0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext); backdropButton.post { backdropButton.text=backdropLabel() } }
+                    0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext) { refreshBackdropSetting?.invoke() } }
                     1 -> tvTools.choose("恢复默认背景",listOf("强制欣赏","默认风格"),backdropButton,{ style ->
                         resetBackdrop(if(style==0) "forced" else "plain")
                         backdropButton.text=backdropLabel()
@@ -1405,6 +1467,7 @@ class MainActivity: Activity() {
                 }
             })
         }
+        refreshBackdropSetting={ backdropButton.text=backdropLabel() }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var backup: TextView
@@ -1418,20 +1481,33 @@ class MainActivity: Activity() {
                 }
             }.onFailure { tvTools.info("无法生成备份","本机记录暂时无法导出，请重试。",backup) }
         }
+        fun quickFilesLabel(count: Int,bytes: Long)="快传文件  ·  ${if(count<=0) "暂无" else "$count 个 · ${TransferRules.humanBytes(bytes)}"}"
+        fun quickFilesDirs()=TransferKind.entries.map { java.io.File(filesDir,TransferRules.directoryName(it)) }.distinct()
+        lateinit var quickFiles: TextView
+        fun refreshQuickFiles() {
+            io.execute {
+                val list=runCatching { TransferFiles.list(quickFilesDirs()) }.getOrDefault(emptyList())
+                main.post { if(!isDestroyed) quickFiles.text=quickFilesLabel(list.size,list.sumOf { it.file.length() }) }
+            }
+        }
+        lateinit var quickSend: TextView
+        quickSend=setting(device,"手机快传  ·  传 APK / 视频") {
+            tvTools.quickTransfer(quickSend,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() })
+        }
+        quickFiles=setting(device,quickFilesLabel(0,0)) {
+            tvTools.quickFiles(quickFiles,{ file,kind -> handleQuickTransfer(file,kind,true,quickFiles) },{
+                tvTools.quickTransfer(quickFiles,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() })
+            },{ refreshQuickFiles() })
+        }
+        refreshQuickFiles()
         lateinit var hidden: TextView
         hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
             library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
         }
         lateinit var statsButton: TextView
         statsButton=setting(device,"观看统计  ·  本机累计") { showWatchStats(statsButton) }
-        lateinit var sourceHiddenButton: TextView
-        sourceHiddenButton=setting(device,"片源隐藏  ·  ${if(library.sourceHidden) "开启" else "关闭"}") {
-            // 开关即导航栏「片源」入口的显隐，重建页面后把焦点放回本项
-            library.sourceHidden=!library.sourceHidden
-            if(library.sourceHidden && tab==6) tab=0
-            settingsFocusKey="片源隐藏"
-            showCatalog()
-        }
+        lateinit var navModulesButton: TextView
+        navModulesButton=setting(device,navModulesLabel()) { showNavModules(navModulesButton) }
         fun cacheBytes()=listOfNotNull(cacheDir,externalCacheDir).sumOf { dir -> dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }
         fun cacheLabel(bytes: Long?)="清理缓存  ·  ${when {
             bytes==null -> "计算中…"
@@ -1475,7 +1551,7 @@ class MainActivity: Activity() {
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
                 (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())+
                 listOf(blockedWords,keySettings,autoSkipButton)
-            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,hidden,statsButton,sourceHiddenButton,clearCache,updates,checkButton,license)
+            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,quickSend,quickFiles,hidden,statsButton,navModulesButton,clearCache,updates,checkButton,license)
             listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
@@ -1496,6 +1572,8 @@ class MainActivity: Activity() {
     private fun runSearch(value: String,type: ContentType=library.contentType,fromPhone: Boolean=false) {
         val clean=value.trim(); if(clean.isEmpty() || clean.length>80) return
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
+        // 提交关键词即切回关键词搜索，高级筛选条件不继承（下次进入高级搜索仍保留）
+        advancedSearch=false
         if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
         // 手机输入的精确剧名默认不再联想，纯首拼或编辑输入后恢复
         phoneSearched=fromPhone
@@ -1602,6 +1680,221 @@ class MainActivity: Activity() {
         tvTools.choose("搜索历史",history.map { "${it.type.label} · ${it.query}" },anchor,{ index -> runSearch(history[index].query,history[index].type) },"清空历史") {
             tvTools.confirm("清空搜索历史","清除本机保存的搜索词？",anchor) { library.clearSearches() }
         }
+    }
+    // ---- 高级搜索：服务端条件筛选与关键词搜索双态切换 ----
+    private fun chip(label: String,selected: Boolean,onClick: ()->Unit): TextView = text(label,12f).apply {
+        gravity=Gravity.CENTER; setPadding(dp(10),dp(6),dp(10),dp(6)); minHeight=dp(30)
+        focusStyle(this,selected); setOnClickListener { onClick() }
+    }
+    private fun switchAdvanced(value: Boolean) {
+        if(advancedSearch==value) return
+        advancedSearch=value
+        query=""; (searchInput as? EditText)?.setText("")
+        page=1; catalog=emptyList(); hasMore=false; catalogFocus=""; discoveryCursor=null; pendingFilterFocus=null
+        // 每次进入高级搜索都展开筛选，收起状态只在本次会话内保持
+        if(value) filterExpanded=true
+        tabState.remove(1); tabFocus.remove(1); searchFocusPending=false
+        showCatalog(load=value)
+        main.post { if(advancedSearch==value) (if(value) filterToggle ?: filterPanel else searchInput)?.requestFocus() }
+    }
+    private fun reloadDiscovery() {
+        page=1; catalog=emptyList(); hasMore=false; catalogFocus=""; discoveryCursor=null
+        tabState.remove(1); tabFocus.remove(1)
+        showCatalog(load=true)
+    }
+    private fun chooseFilter(type: String,id: String) {
+        val next=discoverySelection.choose(type,id)
+        if(next==discoverySelection) return
+        discoverySelection=next
+        // 选项改变后旧游标作废，必须重取第 1 页；焦点回到刚操作的条件
+        pendingFilterFocus=type to id
+        reloadDiscovery()
+    }
+    private fun resetFilters() {
+        if(discoverySelection.values.isEmpty()) return
+        discoverySelection=DiscoverySelection(); pendingFilterFocus=null
+        reloadDiscovery()
+    }
+    private fun buildFilterPanel(container: LinearLayout) {
+        val host=column().apply { setPadding(0,0,0,dp(6)) }
+        filterPanel=host; container.addView(host)
+        renderFilterPanel()
+    }
+    private fun filterSummaryText(): String {
+        val lookup=discoveryGroups.associate { group -> group.type to group.options.associate { it.id to it.label } }
+        val genre=discoverySelection.values["genre"].orEmpty()
+        val genreText=if(genre.isEmpty()) "全部类型" else lookup["genre"]?.get(genre) ?: genre
+        val others=DiscoverySelection.LABELS.keys.filter { it!="genre" }.mapNotNull { type ->
+            discoverySelection.values[type]?.takeIf { it.isNotEmpty() }?.let { lookup[type]?.get(it) ?: it }
+        }
+        return if(others.isEmpty()) "$genreText · 全部条件" else "$genreText · ${others.joinToString(" · ")}"
+    }
+    private fun renderFilterPanel() {
+        val host=filterPanel ?: return
+        host.removeAllViews(); filterChips=linkedMapOf()
+        val typeGroup=discoveryGroups.firstOrNull { it.type=="genre" }
+            ?: DiscoveryGroup("genre","类型",listOf(DiscoveryFilter("short_play","真人剧"),DiscoveryFilter("comic_series","漫剧"),DiscoveryFilter("ai_series","AI剧")))
+        val others=discoveryGroups.filter { it.type!="genre" }
+        fun optionRow(group: DiscoveryGroup): List<TextView> {
+            val views=mutableListOf<TextView>()
+            views+=chip(if(group.type=="genre") "全部类型" else "全部",discoverySelection.values[group.type].isNullOrEmpty()) { chooseFilter(group.type,"") }
+            group.options.forEach { option ->
+                views+=chip(option.label,discoverySelection.values[group.type]==option.id) { chooseFilter(group.type,option.id) }
+            }
+            views.forEachIndexed { index,view ->
+                filterChips[group.type to (if(index==0) "" else group.options[index-1].id)]=view
+            }
+            return views
+        }
+        fun lineOf(views: List<TextView>,label: String?): View {
+            val line=row()
+            if(label!=null) line.addView(text(label,12f,muted),lp(dp(40),-2))
+            val scroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFocusable=false }
+            val chips=row()
+            views.forEach { chips.addView(it,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(6) }) }
+            scroll.addView(chips)
+            line.addView(scroll,lp(0,-2).apply { weight=1f })
+            return line
+        }
+        // 类型行在页头，其余 7 组条件两列排布：单列会把结果网格挤出屏幕
+        val typeChips=optionRow(typeGroup)
+        val header=row()
+        header.addView(lineOf(typeChips,null),lp(0,-2).apply { weight=1f })
+        lateinit var collapse: TextView
+        collapse=chip(if(filterExpanded) "收起筛选" else "展开筛选",false) {
+            filterExpanded=!filterExpanded
+            renderFilterPanel()
+            // 收起/展开改变了上下焦点链，需重新把面板与结果网格串起来，否则会跳到已隐藏的选项
+            catalogRecycler?.let { wireFilterPanelToGrid(it) }
+            filterCollapse?.requestFocus()
+        }
+        filterCollapse=collapse
+        val reset=chip("重置",false) { resetFilters() }
+        val refresh=chip("刷新",false) { reloadDiscovery() }
+        filterReset=reset; filterRefresh=refresh
+        listOf(collapse,reset,refresh).forEach { view -> header.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; leftMargin=dp(8) }) }
+        host.addView(header)
+        host.addView(text(filterSummaryText(),12f,muted).apply { setPadding(dp(2),dp(2),0,dp(4)) }.also { filterSummary=it })
+        val groupsHost=column()
+        // 视觉行：每行左右两组条件（右组可为空），焦点必须按视觉行而非按组上下移动
+        val linePairs=mutableListOf<Pair<List<TextView>,List<TextView>>>()
+        if(others.isEmpty()) {
+            groupsHost.addView(text(if(discoveryGroups.isEmpty()) "正在读取筛选条件…" else "该类型没有更多筛选条件",12f,muted).apply { setPadding(dp(2),dp(4),0,dp(4)) })
+        } else {
+            others.chunked(2).forEach { pair ->
+                val line=row()
+                val pairRows=mutableListOf<List<TextView>>()
+                pair.forEach { group ->
+                    val chips=optionRow(group)
+                    line.addView(lineOf(chips,group.label),lp(0,-2).apply { weight=1f; rightMargin=dp(10) })
+                    pairRows+=chips
+                }
+                if(pair.size==1) line.addView(Space(this),lp(0,1).apply { weight=1f })
+                linePairs+=pairRows[0] to pairRows.getOrElse(1) { emptyList() }
+                groupsHost.addView(line,lp(-1,-2).apply { bottomMargin=dp(4) })
+            }
+        }
+        val visualLines=(others.size+1)/2
+        val groupsScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false; visibility=if(filterExpanded) View.VISIBLE else View.GONE }
+        groupsScroll.addView(groupsHost)
+        host.addView(groupsScroll,lp(-1,if(others.isEmpty()) -2 else dp(minOf(visualLines,4)*34)))
+        filterGroupsScroll=groupsScroll
+        // 焦点严格按视觉行走线：首行是类型选项+操作按钮，其余每行左右两组条件。
+        // ←/→ 跨组相连，↑/↓ 在同一半区内按位置落到上/下一行，告别按↓却平移到同行另一组的跳动感
+        val headerButtons=listOf(collapse,reset,refresh)
+        val visualRows=(listOf(typeChips to headerButtons)+linePairs)
+        filterRows=visualRows.map { it.first+it.second }.toMutableList()
+        fun linkRow(chips: List<TextView>) {
+            chips.forEachIndexed { index,view ->
+                view.nextFocusLeftId=chips[if(index==0) 0 else index-1].id
+                view.nextFocusRightId=chips[if(index==chips.lastIndex) chips.lastIndex else index+1].id
+            }
+        }
+        visualRows.forEach { (left,right) ->
+            linkRow(left); linkRow(right)
+            if(left.isNotEmpty() && right.isNotEmpty()) {
+                left.last().nextFocusRightId=right.first().id
+                right.first().nextFocusLeftId=left.last().id
+            }
+        }
+        fun aim(row: Pair<List<TextView>,List<TextView>>?,rightHalf: Boolean,pos: Int): Int {
+            if(row==null) return View.NO_ID
+            val chips=(if(rightHalf) row.second else row.first).ifEmpty { row.first }
+            return chips.getOrNull(minOf(pos,chips.lastIndex))?.id ?: View.NO_ID
+        }
+        visualRows.forEachIndexed { rowIndex,(left,right) ->
+            val up=visualRows.getOrNull(rowIndex-1)
+            val down=visualRows.getOrNull(rowIndex+1)
+            left.forEachIndexed { index,view ->
+                view.nextFocusUpId=if(up!=null) aim(up,false,index) else filterToggle?.id ?: View.NO_ID
+                view.nextFocusDownId=aim(down,false,index)
+            }
+            right.forEachIndexed { index,view ->
+                view.nextFocusUpId=if(up!=null) aim(up,true,index) else filterToggle?.id ?: View.NO_ID
+                view.nextFocusDownId=aim(down,true,index)
+            }
+        }
+    }
+    private fun wireFilterPanelToGrid(recycler: RecyclerView) {
+        if(tab!=1 || !advancedSearch) return
+        val first=filterRows.firstOrNull().orEmpty()
+        val last=filterRows.lastOrNull().orEmpty()
+        val target=first.firstOrNull()?.id ?: recycler.id
+        filterToggle?.nextFocusDownId=target
+        searchInput?.nextFocusDownId=target
+        searchButton?.nextFocusDownId=target
+        // 展开时末行（左右两组）↓ 都进结果网格；收起时条件组隐藏，页头 ↓ 直接进网格
+        if(filterExpanded && filterRows.size>1) last.forEach { it.nextFocusDownId=recycler.id }
+        else first.forEach { it.nextFocusDownId=recycler.id }
+    }
+    private fun focusFilterChip(key: Pair<String,String>): Boolean {
+        val view=filterChips[key] ?: return false
+        if(!view.isAttachedToWindow) return false
+        view.requestFocus()
+        return true
+    }
+    private fun loadDiscovery(body: LinearLayout) {
+        message(body,"正在读取筛选条件…")
+        val selection=discoverySelection
+        work({ repository.filteredDiscovery(selection,null) }, { result ->
+            catalog=result.items; hasMore=result.next!=null; discoveryGroups=result.groups; discoveryCursor=result.next; page=1
+            val keepNav=nav.any { it.hasFocus() }
+            renderFilterPanel()
+            body.removeAllViews(); catalogGrid(body,keepNav,false)
+            main.post {
+                val key=pendingFilterFocus.also { pendingFilterFocus=null }
+                if(key!=null && focusFilterChip(key)) return@post
+                if(result.items.isEmpty()) { filterToggle?.requestFocus(); return@post }
+                if(keepNav) nav[tab].requestFocus() else (resultFirstCard ?: filterToggle)?.requestFocus()
+            }
+        }, { problem ->
+            catalog=emptyList(); hasMore=false
+            body.removeAllViews(); error(body,problem) { showCatalog(true) }
+        })
+    }
+    private fun loadMoreDiscovery(adapter: CatalogAdapter) {
+        val cursor=discoveryCursor ?: return
+        if(page>=waterfallMaxPages) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
+        val selection=discoverySelection
+        loadingMore=true; adapter.updateFooter(FOOTER_LOADING)
+        work({ repository.filteredDiscovery(selection,cursor) }, { result ->
+            loadingMore=false; page+=1
+            hasMore=result.next!=null; discoveryCursor=result.next
+            val known=catalog.mapTo(HashSet()) { it.id }
+            val fresh=result.items.filter { it.id !in known }
+            catalog=catalog+fresh
+            val current=catalogAdapter
+            if(current!=null) {
+                val insertAt=current.displayed.size
+                current.displayed.addAll(fresh)
+                if(fresh.isNotEmpty()) current.notifyItemRangeInserted(insertAt,fresh.size)
+                current.updateFooter(if(hasMore && page<waterfallMaxPages) FOOTER_NONE else FOOTER_END)
+            }
+        }, { _ ->
+            loadingMore=false
+            Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
+            catalogAdapter?.updateFooter(FOOTER_ERROR)
+        })
     }
     private fun showRandomPicks() {
         if(randomDialog?.isShowing==true) return
@@ -2555,11 +2848,12 @@ class MainActivity: Activity() {
         val selected=speeds.indexOf(library.playbackSpeed)
         val content=column()
         content.addView(TvDialog.title(this,"全局默认倍速"))
+        val adapter=TvDialog.RadioAdapter(this,speeds.map(PlaybackSpeed::label)).apply { this.selected=selected }
         val list=ListView(this).apply {
-            adapter=TvDialog.choiceAdapter(this@MainActivity,speeds.map(PlaybackSpeed::label))
-            choiceMode=ListView.CHOICE_MODE_SINGLE
-            setItemChecked(selected,true)
+            this.adapter=adapter
+            choiceMode=ListView.CHOICE_MODE_NONE
             setOnItemClickListener { _,_,index,_ ->
+                adapter.selected=index
                 library.playbackSpeed=speeds[index]
                 if(inPlayer) player?.setPlaybackSpeed(library.playbackSpeed)
                 if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "倍速 " else "默认倍速  ·  ")+PlaybackSpeed.label(library.playbackSpeed)
@@ -2586,11 +2880,12 @@ class MainActivity: Activity() {
         val selected=options.indexOf(library.maxQuality)
         val content=column()
         content.addView(TvDialog.title(this,"全局默认清晰度"))
+        val adapter=TvDialog.RadioAdapter(this,options.map { "${it}P" }).apply { this.selected=selected }
         val list=ListView(this).apply {
-            adapter=TvDialog.choiceAdapter(this@MainActivity,options.map { "${it}P" })
-            choiceMode=ListView.CHOICE_MODE_SINGLE
-            setItemChecked(selected,true)
+            this.adapter=adapter
+            choiceMode=ListView.CHOICE_MODE_NONE
             setOnItemClickListener { _,_,index,_ ->
+                adapter.selected=index
                 val target=options[index]; val changed=library.maxQuality!=target
                 library.maxQuality=target
                 // 用户手动选定档位即视为放弃本轮自动降档，后续失败重新从选定档位起算。
@@ -2609,6 +2904,45 @@ class MainActivity: Activity() {
         cancel.setOnClickListener { dialog.dismiss() }
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show(); list.setSelection(selected); list.requestFocus()
+    }
+    private fun navModuleNames()=listOf("search" to "搜索","rank" to "排行榜","favorite" to "收藏","history" to "最近观看","source" to "片源")
+    private fun navModuleHidden(key: String)=if(key=="source") library.sourceHidden else library.navHidden(key)
+    private fun navModulesLabel(): String {
+        val names=navModuleNames()
+        return "导航模块  ·  ${names.count { !navModuleHidden(it.first) }}/${names.size} 显示"
+    }
+    /** 导航栏模块显隐：逐项开关，关闭后立即生效；首页与设置始终显示，不在此列。 */
+    private fun showNavModules(anchor: TextView) {
+        val content=column()
+        content.addView(TvDialog.title(this,"导航模块"))
+        content.addView(text("首页与设置始终显示；关闭的模块会从顶部导航栏移除，收藏与记录不会删除。",13f,muted)
+            .apply { setPadding(0,0,0,dp(10)) })
+        lateinit var dialog: AlertDialog
+        navModuleNames().forEach { (key,label) ->
+            fun rowText()="$label  ·  ${if(navModuleHidden(key)) "已隐藏" else "显示中"}"
+            val row=TvDialog.capsuleButton(this,rowText()) { }
+            row.gravity=Gravity.CENTER_VERTICAL
+            row.setPadding(dp(16),0,dp(16),0)
+            row.setOnClickListener {
+                val next=!navModuleHidden(key)
+                if(key=="source") library.sourceHidden=next else library.setNavHidden(key,next)
+                row.text=rowText(); anchor.text=navModulesLabel()
+            }
+            content.addView(row,lp(-1,dp(46)).apply { bottomMargin=dp(8) })
+        }
+        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(6),0,0) }
+        val done=TvDialog.capsuleButton(this,"完成") { dialog.dismiss() }
+        buttons.addView(done,lp(-2,-2))
+        content.addView(buttons)
+        dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
+        dialog.setOnDismissListener {
+            // 关闭后重建页面，让顶部导航立刻反映新的显隐，并把焦点送回本项
+            settingsFocusKey="导航模块"
+            showCatalog()
+        }
+        dialog.show()
+        content.getChildAt(2)?.requestFocus()
     }
     private fun showEpisodePanel(anchor: View) {
         val data=detail ?: return
@@ -2681,7 +3015,7 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun saveBackdrop(bytes: ByteArray,extension: String) {
+    private fun saveBackdrop(bytes: ByteArray,extension: String,onDone: ()->Unit={}) {
         io.execute {
             val bitmap=runCatching {
                 filesDir.listFiles()?.filter { it.name.startsWith("backdrop.") }?.forEach { it.delete() }
@@ -2697,6 +3031,7 @@ class MainActivity: Activity() {
                     it.setImageBitmap(bitmap)
                 }
                 Toast.makeText(this@MainActivity,"背景已更新",Toast.LENGTH_SHORT).show()
+                onDone()
             }
         }
     }
@@ -2706,6 +3041,36 @@ class MainActivity: Activity() {
         getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).edit().putString("backdropStyle",style).apply()
         loadBackdrop()
         Toast.makeText(this,if(style=="forced") "已恢复为强制欣赏" else "已恢复默认背景",Toast.LENGTH_SHORT).show()
+    }
+    /** 快传落盘后的分流：APK 引导安装，图片可预览并设为背景，视频可直接播放。
+     *  [direct] 用于「快传文件」列表：用户已明确选中该行，直接进入预览/播放。 */
+    private fun handleQuickTransfer(file: java.io.File,kind: TransferKind,direct: Boolean=false,anchor: View?=null) {
+        when(kind) {
+            TransferKind.APK -> {
+                pendingQuickApk=file
+                TvDialog.confirm(this,"安装手机传来的应用","已收到 ${file.name}。\n确认后打开电视的系统安装界面，按提示完成安装。") { installQuickApk(file) }.show()
+            }
+            TransferKind.IMAGE -> if(direct) tvTools.previewImage(anchor,file) { setQuickBackdrop(file) }
+                else TvDialog.confirm(this,"设为电视背景","已收到图片 ${file.name}，是否用作电视背景？") { setQuickBackdrop(file) }.show()
+            TransferKind.VIDEO -> if(direct) tvTools.playVideo(anchor,file)
+                else Toast.makeText(this,"视频已保存到电视：${file.name}",Toast.LENGTH_LONG).show()
+            TransferKind.OTHER -> Toast.makeText(this,"文件已保存到电视：${file.name}",Toast.LENGTH_LONG).show()
+        }
+    }
+    /** 图片直接生效（可逆：设置页可恢复默认背景），后台读图，完成后刷新设置页文案。 */
+    private fun setQuickBackdrop(file: java.io.File) {
+        io.execute {
+            val bytes=runCatching { file.readBytes() }.getOrNull()
+            if(bytes==null) main.post { Toast.makeText(this,"图片无法读取，请换一张试试",Toast.LENGTH_SHORT).show() }
+            else saveBackdrop(bytes,TransferRules.extensionOf(file.name) ?: "jpg") { refreshBackdropSetting?.invoke() }
+        }
+    }
+    private fun installQuickApk(apk: java.io.File) {
+        when(ApkInstaller.install(this,apk)) {
+            ApkInstaller.Result.LAUNCHED -> { pendingQuickApk=null; Toast.makeText(this,"已打开安装界面",Toast.LENGTH_SHORT).show() }
+            ApkInstaller.Result.NEEDS_PERMISSION -> Toast.makeText(this,"请允许本应用安装应用，返回后会自动继续安装",Toast.LENGTH_LONG).show()
+            ApkInstaller.Result.FAILED -> { pendingQuickApk=null; tvTools.info("无法安装","电视没有可用的安装入口，请用系统文件管理器安装。",null) }
+        }
     }
     private fun saveProgress(completed: Boolean=false) {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
@@ -2762,7 +3127,7 @@ class MainActivity: Activity() {
         when(screen) {
             "player" -> if(player?.playbackState==Player.STATE_ENDED) returnToDetail() else if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
-            else -> if(tab==6 && third?.onBack()==true) {} else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
+            else -> if(tab==1 && advancedSearch) { switchAdvanced(false); filterToggle?.post { filterToggle?.requestFocus() } } else if(tab==6 && third?.onBack()==true) {} else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
         }
     }
     @Deprecated("TV remote back is handled through the activity")
@@ -2819,6 +3184,8 @@ class MainActivity: Activity() {
     override fun onResume() {
         super.onResume(); foreground=true; main.removeCallbacks(tick); main.post(tick)
         updater.resume()
+        // 从「安装未知应用」授权页返回：同一个包继续安装，不用重新扫码
+        pendingQuickApk?.let { apk -> if(packageManager.canRequestPackageInstalls()) { pendingQuickApk=null; installQuickApk(apk) } }
         if(library.isLoaded) {
             if(initialCatalogPending) showCatalog(load=true)
             else if(restoreStoppedPage) {

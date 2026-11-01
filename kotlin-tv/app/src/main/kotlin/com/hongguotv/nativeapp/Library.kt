@@ -213,10 +213,18 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
-    /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置中开启；随备份一起恢复。 */
+    /** 导航栏「片源」入口是否隐藏：默认显示，用户可在设置里单独隐藏；随备份一起恢复。 */
     var sourceHidden: Boolean
         get() = state().settings.sourceHidden
         set(value) { if (value != sourceHidden) { state().settings = state().settings.copy(sourceHidden = value); put("sourceHidden", value) } }
+    /** 导航栏其余模块（搜索/排行榜/收藏/最近观看）的显隐：首页与设置始终显示，默认全部显示；随备份一起恢复。 */
+    fun navHidden(key: String): Boolean = key in state().settings.navHidden
+    fun setNavHidden(key: String, hidden: Boolean) {
+        if (key !in LibraryBackup.NAV_KEYS || hidden == navHidden(key)) return
+        val next = if(hidden) state().settings.navHidden + key else state().settings.navHidden - key
+        state().settings = state().settings.copy(navHidden = next)
+        put("navHidden.$key", hidden)
+    }
     // Per-series intro/outro skips stay on this device, outside the backup, like the theme.
     private var marksCache: LinkedHashMap<String, SkipMark>? = null
     private fun marks(): LinkedHashMap<String, SkipMark> =
@@ -257,7 +265,11 @@ class Library(context: Context) {
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
             "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
             "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }, "showClock" to { merged.settings.showClock },
-            "sourceHidden" to { merged.settings.sourceHidden }))
+            "sourceHidden" to { merged.settings.sourceHidden },
+            "navHidden.search" to { "search" in merged.settings.navHidden },
+            "navHidden.rank" to { "rank" in merged.settings.navHidden },
+            "navHidden.favorite" to { "favorite" in merged.settings.navHidden },
+            "navHidden.history" to { "history" in merged.settings.navHidden }))
         scheduleLocalBackup()
         flush()
     }

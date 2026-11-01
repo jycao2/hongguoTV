@@ -71,6 +71,14 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private val suggestCache=linkedMapOf<String,Pair<Long,List<String>>>()
     // 签名搜索接口被平台关停时会稳定返回空体，短期内不再重复尝试，避免每次搜索都白等两次往返
     @Volatile private var appSearchRetryAt=0L
+    // 分类筛选接口只在较新客户端版本开放；版本号沿用参考实现验证过的取值，平台升级时集中改这里
+    private val discoveryVersion=mapOf(
+        "version_code" to "73532",
+        "manifest_version_code" to "73532",
+        "update_version_code" to "73532",
+        "pv_player" to "73532",
+        "version_name" to "7.3.5.32",
+    )
     private fun categoryPath(type: ContentType)=when(type) {
         ContentType.COMIC -> "comic-drama"
         ContentType.SHORT -> "real-drama"
@@ -155,6 +163,18 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return fillSeasonsFromDetail(result,page) } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; appError=e }
         return try { fillSeasons(webSearch(keyword,page,SHORT_WEB_GENRE),page,type,keyword) }
         catch(e: Exception) { throw IOException("搜索暂不可用（App接口：${appError?.message ?: "无结果"}；网站：${e.message}）",e) }
+    }
+    /** 高级搜索：按服务端下发的条件筛选剧集；条件变化后必须重取第 1 页才能拿到新的选项面板。 */
+    fun filteredDiscovery(selection: DiscoverySelection, cursor: DiscoveryCursor? = null): FilteredDiscoveryPage {
+        val values=VendorConstants.device.toMutableMap().apply { putAll(discoveryVersion) }
+        val body=selection.request(cursor)
+        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/reading/distribution/category/landpage/v/",values,body.toByteArray(Charsets.UTF_8))
+        // 该接口与搜索接口同源，偶发空体或 5xx 时重试一次再判定失败
+        val raw=runCatching { text(signed.url,signed) }.getOrElse { first ->
+            Thread.sleep(300)
+            runCatching { text(signed.url,signed) }.getOrElse { throw first }
+        }
+        return DiscoveryParser.parse(raw,cursor==null)
     }
     // 站点搜索页已改为 SPA，数据由 /api/search/result/ 下发（返回 searchList/totalPages/hasMore，10 条一页）。
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {

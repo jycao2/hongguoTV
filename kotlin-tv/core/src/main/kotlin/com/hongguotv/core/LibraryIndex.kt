@@ -122,6 +122,8 @@ object LibraryDisk {
         }
         val rawUpdates = runCatching { JSONObject(values["favoriteUpdates"] as? String ?: "{}") }.getOrDefault(JSONObject())
         val updates = rawUpdates.keys().asSequence().mapNotNull { id -> FavoriteUpdate.decode(rawUpdates.optJSONObject(id))?.let { id to it } }.toMap()
+        // 导航模块显隐单独存放在 navHidden.<key>，随备份一起迁移
+        val navHidden = LibraryBackup.NAV_KEYS.filter { values["navHidden.$it"] as? Boolean == true }.toSet()
         val settings = BackupSettings(PlaybackQuality.normalize((values["quality"] as? Number)?.toInt() ?: 1080),
             PlaybackSpeed.normalize((values["playbackSpeed"] as? Number)?.toFloat() ?: 1f), values["autoNext"] as? Boolean ?: true,
             ContentType.fromStored(values["contentType"] as? String), VideoFrameMode.fromStored(values["frameMode"] as? String), values["autoSeason"] as? Boolean ?: true,
@@ -131,7 +133,7 @@ object LibraryDisk {
             DanmakuPrefs.speed((values["danmakuSpeed"] as? Number)?.toInt() ?: DanmakuPrefs.SPEED_DEFAULT),
             DanmakuPrefs.rows((values["danmakuRows"] as? Number)?.toInt() ?: DanmakuPrefs.ROWS_DEFAULT),
             values["showClock"] as? Boolean ?: false,
-            values["sourceHidden"] as? Boolean ?: false)
+            values["sourceHidden"] as? Boolean ?: false, navHidden)
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }
         return LibraryIndex(BackupData(series("favorites"), history, ids("watched"),

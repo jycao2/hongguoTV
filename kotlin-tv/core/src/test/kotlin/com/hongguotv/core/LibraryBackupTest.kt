@@ -55,6 +55,18 @@ class LibraryBackupTest {
         assertFalse(LibraryBackup.decode(legacy.toString()).settings.sourceHidden)
         assertTrue(LibraryBackup.merge(data(),hidden,true).settings.sourceHidden)
     }
+    @Test fun `nav module visibility round trips and legacy backups show all modules`() {
+        assertTrue(BackupSettings().navHidden.isEmpty())
+        val hidden=data().copy(settings=BackupSettings().copy(navHidden=setOf("search","history")))
+        assertEquals(hidden,LibraryBackup.decode(LibraryBackup.encode(hidden)))
+        val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("navHidden")
+        assertTrue(LibraryBackup.decode(legacy.toString()).settings.navHidden.isEmpty())
+        assertEquals(setOf("search","history"),LibraryBackup.merge(data(),hidden,true).settings.navHidden)
+        // 未知模块键一律忽略，避免旧版本以外的值破坏导航
+        val unknown=JSONObject(LibraryBackup.encode(data()))
+        unknown.getJSONObject("settings").put("navHidden",JSONArray().put("search").put("home").put("settings").put(1))
+        assertEquals(setOf("search"),LibraryBackup.decode(unknown.toString()).settings.navHidden)
+    }
     @Test fun `third history round trips and legacy backups default to empty`() {
         val hit=BackupThirdHistory("https://a.com/api.php/provide/vod","示例源","42","测试影片","https://a.com/1.jpg",
             2,"第3集",12000,60000,1792448000000,false)
