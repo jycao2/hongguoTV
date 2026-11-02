@@ -275,88 +275,116 @@ class TvTools(private val activity: Activity) {
         }
     }
     /** 手机快传：扫码直传文件。APK 收到后交给调用方引导安装，其余文件落私有目录。 */
-    fun quickTransfer(anchor: View?,onReceived: (File,TransferKind)->Unit,onClose: ()->Unit={}) {
+    fun quickTransfer(anchor: View?,onReceived: (File,TransferKind)->Unit,onClose: ()->Unit={},onShowFiles: ()->Unit={}) {
         val address=lanAddress()
         if(address==null) { info("手机快传","请让电视和手机连接同一局域网（Wi-Fi 或有线网络）后重试。",anchor); return }
         val content=column(); content.addView(TvDialog.title(activity,"手机快传"))
-        val status=label("正在生成二维码…"); content.addView(status)
+        val status=label("正在生成二维码…").apply { isFocusable=true }; content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
         TvDialog.styleWindow(activity,dialog)
-        open(dialog,anchor,onClose)
         var views: QuickViews?=null
         var receivedFiles=0
+        var session: QuickTransferServer?=null
+        var countdown: TextView?=null
+        val sessionStart=java.util.concurrent.atomic.AtomicLong(0)
+        val TTL_MS=600_000L
         val spaceLabel={ "电视可用 ${TransferRules.humanBytes(freeBytes())}  ·  单个文件不超过 ${TransferRules.humanBytes(TransferRules.MAX_BYTES)}" }
-        worker.execute {
-            try {
-                val session=QuickTransferServer(address,{ kind -> quickDirectory(kind) },{ freeBytes() },
-                    { name,received,total,index,count -> main.post {
-                        if(this@TvTools.dialog!==dialog) return@post
-                        val current=views ?: return@post
-                        current.name.text="$name  ·  第 $index/$count 个"
-                        current.bar.progress=((received*100)/total.coerceAtLeast(1)).toInt()
-                        current.detail.text="${TransferRules.humanBytes(received)} / ${TransferRules.humanBytes(total)}"
-                    } },
-                    { file,kind -> main.post {
-                        if(this@TvTools.dialog===dialog) {
-                            receivedFiles++
-                            views?.let { current->
-                                current.received.text="本次已接收 $receivedFiles 个文件"
-                                current.name.text="${file.name} 已保存到电视"
-                                current.bar.progress=100
-                                current.space.text=spaceLabel()
-                            }
-                        }
-                        onReceived(file,kind)
-                    } },
-                    { main.post { if(this@TvTools.dialog===dialog) { content.removeAllViews(); content.addView(label("二维码已过期，请关闭后重新打开。")) } } })
-                main.post {
-                    if(this@TvTools.dialog!==dialog) { session.close(); return@post }
-                    phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                    val instructions=column()
-                    instructions.addView(label("手机扫码后用浏览器打开，选择文件发送到电视。\nAPK 会提示安装，视频和图片存入电视；失败的文件不留痕迹。\n关闭窗口即失效，最长 5 分钟。",16f))
-                    instructions.addView(label(session.url,12f).apply { setTextColor(TvStyle.muted) })
-                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
-                    val space=label(spaceLabel(),13f).apply { setTextColor(TvStyle.muted) }; content.addView(space)
-                    val name=label("等待手机发送…",15f); content.addView(name)
-                    val bar=ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal).apply {
-                        max=100; progress=0
-                        progressTintList=android.content.res.ColorStateList.valueOf(TvStyle.accent)
-                        progressBackgroundTintList=android.content.res.ColorStateList.valueOf(TvStyle.outline)
-                    }
-                    content.addView(bar,LinearLayout.LayoutParams(-1,dp(6)))
-                    val detail=label("",13f).apply { setTextColor(TvStyle.muted) }; content.addView(detail)
-                    val received=label("本次已接收 0 个文件",13f).apply { setTextColor(TvStyle.muted) }; content.addView(received)
-                    val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(12),0,0) }
-                    val clear=TvDialog.capsuleButton(activity,"清空快传文件") {
-                        TvDialog.confirm(activity,"清空快传文件","删除通过手机快传收到的全部文件，不影响收藏、观看记录和已安装的应用。") {
-                            worker.execute {
-                                // 进行中的 .part 保留，避免把手机端正在传的文件打断
-                                listOf(TransferKind.APK,TransferKind.OTHER).map { quickDirectory(it) }.distinct().forEach { dir ->
-                                    dir.listFiles()?.filter { !it.name.endsWith(TransferRules.PART_SUFFIX) }?.forEach { it.deleteRecursively() }
-                                }
-                                main.post {
-                                    if(this@TvTools.dialog!==dialog) return@post
-                                    receivedFiles=0
-                                    received.text="本次已接收 0 个文件"
-                                    space.text=spaceLabel()
-                                    name.text="等待手机发送…"; bar.progress=0; detail.text=""
-                                }
-                            }
-                        }.show()
-                    }
-                    val close=TvDialog.capsuleButton(activity,"完成") { dialog.dismiss() }
-                    clear.id=View.generateViewId(); close.id=View.generateViewId()
-                    clear.nextFocusRightId=close.id; close.nextFocusLeftId=clear.id
-                    actions.addView(clear,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(12) })
-                    actions.addView(close,LinearLayout.LayoutParams(-2,-2))
-                    content.addView(actions)
-                    views=QuickViews(name,bar,detail,received,space)
-                    close.post { if(close.isAttachedToWindow) close.requestFocus() }
-                }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机快传，请检查网络后重试。" } }
+        val countdownTick=object: Runnable {
+            override fun run() {
+                val cd=countdown ?: return
+                if(this@TvTools.dialog!==dialog) return
+                val elapsed=(System.nanoTime()-sessionStart.get())/1_000_000L
+                val remain=(TTL_MS-elapsed).coerceAtLeast(0)
+                val mm=remain/60_000; val ss=(remain%60_000)/1000
+                cd.text=if(remain>0) "二维码有效期 · 剩余 %02d:%02d".format(mm,ss) else "二维码已过期，请刷新"
+                cd.setTextColor(if(remain>0) TvStyle.accent else TvStyle.muted)
+                if(remain>0) main.postDelayed(this,1000L)
+            }
         }
+        open(dialog,anchor) { main.removeCallbacks(countdownTick); onClose() }
+        dialog.window?.decorView?.post { status.requestFocus() }
+        fun startSession() {
+            status.text="正在生成二维码…"
+            worker.execute {
+                try {
+                    val s=QuickTransferServer(address,{ kind -> quickDirectory(kind) },{ freeBytes() },
+                        { name,received,total,index,count -> main.post {
+                            if(this@TvTools.dialog!==dialog) return@post
+                            val current=views ?: return@post
+                            current.name.text="$name  ·  第 $index/$count 个"
+                            current.bar.progress=((received*100)/total.coerceAtLeast(1)).toInt()
+                            current.detail.text="${TransferRules.humanBytes(received)} / ${TransferRules.humanBytes(total)}"
+                        } },
+                        { file,kind -> main.post {
+                            if(this@TvTools.dialog===dialog) {
+                                receivedFiles++
+                                views?.let { current->
+                                    current.received.text="本次已接收 $receivedFiles 个文件"
+                                    current.name.text="${file.name} 已保存到电视"
+                                    current.bar.progress=100
+                                    current.space.text=spaceLabel()
+                                }
+                            }
+                            onReceived(file,kind)
+                        } },
+                        { main.post { if(this@TvTools.dialog===dialog) { countdown?.text="二维码已过期，请刷新"; countdown?.setTextColor(TvStyle.muted) } } })
+                    main.post {
+                        if(this@TvTools.dialog!==dialog) { s.close(); return@post }
+                        session?.close(); session=s; phone=s; sessionStart.set(System.nanoTime())
+                        content.removeAllViews()
+                        val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                        row.addView(qr(s.url),LinearLayout.LayoutParams(dp(185),dp(185)))
+                        val instructions=column()
+                        instructions.addView(label("手机扫码后用浏览器打开，选择文件发送到电视。\nAPK 会提示安装，视频和图片存入电视；失败的文件不留痕迹。",16f))
+                        instructions.addView(label(s.url,12f).apply { setTextColor(TvStyle.muted) })
+                        row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                        countdown=label("二维码有效期 · 剩余 10:00",13f).apply { setTextColor(TvStyle.accent); setPadding(0,dp(6),0,dp(2)) }; content.addView(countdown)
+                        val space=label(spaceLabel(),13f).apply { setTextColor(TvStyle.muted) }; content.addView(space)
+                        val name=label("等待手机发送…",15f); content.addView(name)
+                        val bar=ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal).apply {
+                            max=100; progress=0
+                            progressTintList=android.content.res.ColorStateList.valueOf(TvStyle.accent)
+                            progressBackgroundTintList=android.content.res.ColorStateList.valueOf(TvStyle.outline)
+                        }
+                        content.addView(bar,LinearLayout.LayoutParams(-1,dp(6)))
+                        val detail=label("",13f).apply { setTextColor(TvStyle.muted) }; content.addView(detail)
+                        val received=label("本次已接收 0 个文件",13f).apply { setTextColor(TvStyle.muted) }; content.addView(received)
+                        val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(12),0,0) }
+                        val filesBtn=TvDialog.capsuleButton(activity,"快传文件") { onShowFiles() }
+                        val refresh=TvDialog.capsuleButton(activity,"刷新二维码") { startSession() }
+                        val clear=TvDialog.capsuleButton(activity,"清空快传文件") {
+                            TvDialog.confirm(activity,"清空快传文件","删除通过手机快传收到的全部文件，不影响收藏、观看记录和已安装的应用。") {
+                                worker.execute {
+                                    listOf(TransferKind.APK,TransferKind.OTHER).map { quickDirectory(it) }.distinct().forEach { dir ->
+                                        dir.listFiles()?.filter { !it.name.endsWith(TransferRules.PART_SUFFIX) }?.forEach { it.deleteRecursively() }
+                                    }
+                                    main.post {
+                                        if(this@TvTools.dialog!==dialog) return@post
+                                        receivedFiles=0
+                                        received.text="本次已接收 0 个文件"
+                                        space.text=spaceLabel()
+                                        name.text="等待手机发送…"; bar.progress=0; detail.text=""
+                                    }
+                                }
+                            }.show()
+                        }
+                        val close=TvDialog.capsuleButton(activity,"完成") { dialog.dismiss() }
+                        filesBtn.id=View.generateViewId(); refresh.id=View.generateViewId(); clear.id=View.generateViewId(); close.id=View.generateViewId()
+                        filesBtn.nextFocusRightId=refresh.id; refresh.nextFocusLeftId=filesBtn.id; refresh.nextFocusRightId=clear.id
+                        clear.nextFocusLeftId=refresh.id; clear.nextFocusRightId=close.id; close.nextFocusLeftId=clear.id
+                        actions.addView(filesBtn,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(10) })
+                        actions.addView(refresh,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(10) })
+                        actions.addView(clear,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(12) })
+                        actions.addView(close,LinearLayout.LayoutParams(-2,-2))
+                        content.addView(actions)
+                        views=QuickViews(name,bar,detail,received,space)
+                        main.removeCallbacks(countdownTick); main.post(countdownTick)
+                        dialog.window?.decorView?.post { close.requestFocus() }
+                    }
+                } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机快传，请检查网络后重试。" } }
+            }
+        }
+        startSession()
     }
     /** 快传图片预览：后台解码大图，弹窗内显示实际保存路径，并可直接设为电视背景。 */
     fun previewImage(anchor: View?,file: File,onSetBackdrop: ()->Unit) {

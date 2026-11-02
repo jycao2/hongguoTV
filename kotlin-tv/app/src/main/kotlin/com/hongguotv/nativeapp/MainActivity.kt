@@ -269,6 +269,7 @@ class MainActivity: Activity() {
     private var episodeIndex=0
     private var group=0
     private var synopsisExpanded=false
+    private var detailEpisodePage=0
     private var player: ExoPlayer?=null
     private var video: RemoteVideo?=null
     private var playbackReady=false
@@ -323,6 +324,22 @@ class MainActivity: Activity() {
     private fun lp(w: Int=LinearLayout.LayoutParams.MATCH_PARENT,h: Int=LinearLayout.LayoutParams.WRAP_CONTENT)=LinearLayout.LayoutParams(w,h)
     private fun rounded(color: Int,border: Int=Color.TRANSPARENT)=TvStyle.shape(this,color,border)
     private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
+    /** 顶栏纯文字 tab：无按钮背景，选中/聚焦用强调色 */
+    private fun tabLabel(label: String,selected: Boolean,onClick: ()->Unit): TextView = TextView(this).apply {
+        text=label; textSize=15f; isFocusable=true; isClickable=true
+        setTextColor(if(selected) accent else muted); includeFontPadding=false
+        setPadding(dp(14),dp(8),dp(14),dp(8))
+        setOnClickListener { onClick() }
+        setOnFocusChangeListener { _,f -> setTextColor(if(f||selected) accent else muted) }
+    }
+    /** 顶栏图标按钮：emoji 图标，无背景，聚焦变强调色 */
+    private fun iconLabel(icon: String,desc: String,onClick: ()->Unit): TextView = TextView(this).apply {
+        text=icon; textSize=19f; isFocusable=true; isClickable=true
+        contentDescription=desc; setTextColor(muted); includeFontPadding=false
+        setPadding(dp(10),dp(6),dp(10),dp(6))
+        setOnClickListener { onClick() }
+        setOnFocusChangeListener { _,f -> setTextColor(if(f) accent else muted) }
+    }
     private fun column()=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
     private fun row()=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
     private fun focusStyle(view: View,selected: Boolean=false) {
@@ -625,7 +642,6 @@ class MainActivity: Activity() {
         collectionReturn=CatalogState(page,catalog,hasMore,ranking); collectionFocus=catalogFocus
         collection=kind; page=1; catalogFocus=""; showCatalog()
     }
-    private fun inlineHomeFilters()=tab==0 && resources.configuration.fontScale<=1.2f && widthDp()>=900
     private fun localCatalog()=tab==3 || tab==4 || collection!=null
     private fun localItems(): List<Series> = when(collection) {
         "hot" -> collectionReturn?.items.orEmpty().filterNot { it.id in library.hidden() }
@@ -675,7 +691,8 @@ class MainActivity: Activity() {
         }
         lateinit var quickTool: TextView
         quickTool=button("手机快传",false) {
-            tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{})
+            tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{},
+                { tvTools.quickFiles(quickTool,{ f,k -> handleQuickTransfer(f,k) },{ tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{}) },{}) })
         }.apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
         val settingsTool=button("设置",tab==5) { switchTab(5) }
             .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
@@ -717,6 +734,10 @@ class MainActivity: Activity() {
             return
         }
         if(tab==5) {
+            // 右上工具固定在行末：留白推开后接手机快传与设置（设置页也需要顶栏工具，否则 nav[5] 不在视图树中）
+            top.addView(Space(this),lp(0,1).apply { weight=1f })
+            top.addView(quickTool,lp(-2,-2).apply { rightMargin=dp(8) })
+            top.addView(settingsTool,lp(-2,-2))
             // 设置页：左右分栏（左分类/常用，右列表滚动），页脚固定在屏幕底部居中
             container.setPadding(container.paddingLeft,container.paddingTop,container.paddingRight,0)
             val body=column()
@@ -736,29 +757,27 @@ class MainActivity: Activity() {
                 container.addView(types)
                 nav.forEach { it.nextFocusDownId=filterToggle?.id ?: nav[tab].id }
             } else {
-            if(!inlineHomeFilters()) types.addView(text("片库",12f,muted),lp(dp(42),-2))
-            // AI 剧只在排行榜内提供分类入口，不占首页/搜索的内容类型页签
+            // 内容类型 tab：漫剧 / 短剧（互斥切换），chip 样式强调 tab 属性
             listOf(ContentType.COMIC,ContentType.SHORT).forEach { type ->
-                typeButtons[type]=addButton(types,type.label,library.contentType==type) { switchContentType(type) }
-                    .apply { isSelected=library.contentType==type; nextFocusUpId=nav[tab].id }
+                typeButtons[type]=chip(type.label,library.contentType==type) { switchContentType(type) }
+                    .apply { isSelected=library.contentType==type; nextFocusUpId=nav[tab].id; textSize=14f; minHeight=dp(38); setPadding(dp(16),dp(8),dp(16),dp(8)) }
+                types.addView(typeButtons[type],lp(-2,-2).apply { rightMargin=dp(8) })
             }
+            if(tab==0) types.addView(text("长按确认 · 管理片单",12f,muted).apply { setPadding(dp(8),0,0,0) })
             if(tab==0) {
+                // 题材筛选、随机荐剧推到最右，与左侧漫剧/短剧 tab 用弹性间距分隔
+                types.addView(Space(this),lp(0,1).apply { weight=1f })
                 genreButton=addButton(types,genre?.let { "题材 · ${it.name}" } ?: "题材") { showGenrePicker() }.apply { nextFocusUpId=nav[tab].id }
-                addButton(types,"随机") { showRandomPicks() }.apply { nextFocusUpId=nav[tab].id }
+                addButton(types,"随机荐剧") { showRandomPicks() }.apply { nextFocusUpId=nav[tab].id }
             }
             if(tab==1) {
                 types.addView(Space(this),lp(0,1).apply { weight=1f })
                 filterToggle=chip("高级搜索",false) { switchAdvanced(true) }.apply { nextFocusUpId=nav[tab].id }
                 types.addView(filterToggle,lp(-2,-2))
             }
-            if(inlineHomeFilters()) {
-                top.addView(Space(this),lp(dp(10),1))
-                typeButtons.values.forEach { view -> (view as TextView).apply { textSize=12f; minHeight=dp(34); setPadding(dp(12),dp(7),dp(12),dp(7)) } }
-                types.setPadding(0,0,0,0); top.addView(types)
-            } else {
-                if(tab==0) types.addView(text("长按确认 · 管理片单",12f,muted).apply { setPadding(dp(14),0,0,0) })
-                container.addView(types)
-            }
+            // 内容类型（漫剧/短剧/题材/随机）统一放在内容区首行，不挤进顶栏
+            typeButtons.values.forEach { view -> (view as TextView).apply { textSize=13f; minHeight=dp(36); setPadding(dp(14),dp(7),dp(14),dp(7)) } }
+            container.addView(types)
             nav.forEach { it.nextFocusDownId=(if(tab==1) filterToggle else typeButtons[library.contentType] ?: typeButtons.values.firstOrNull())?.id ?: nav[tab].id }
             }
         }
@@ -1374,7 +1393,7 @@ class MainActivity: Activity() {
     }
     private fun renderHome(body: LinearLayout,focusNav: Boolean,focusType: Boolean,loading: Boolean) {
         homeUpdateCount=library.updatedFavorites()
-        val top=if(inlineHomeFilters()) nav[0] else typeButtons.getValue(library.contentType)
+        val top=typeButtons.getValue(library.contentType)
         // 首页改由 Hero 展示当前焦点剧集（图、剧名、进度），不再额外占用一行文字预览
         val home=HomeScreen(this,top,::loadCover,{ _, _-> },
             { item,resume -> openDetail(item,resume) },::quickActions,{ catalogFocus=it })
@@ -1385,7 +1404,6 @@ class MainActivity: Activity() {
         home.refresh.text=if(loading) if(homeFromCache) "已显示上次内容 · 正在更新热门…" else "正在更新热门…" else "刷新热门"
         home.refresh.setOnClickListener { showCatalog(true) }
         typeButtons.values.forEach { it.nextFocusDownId=home.firstId() }
-        if(inlineHomeFilters()) nav.forEach { it.nextFocusDownId=home.firstId() }
         if(focusNav) nav[0].requestFocus() else if(focusType) typeButtons.getValue(library.contentType).requestFocus()
         if(hot.isNotEmpty() && !homeContentLogged) {
             homeContentLogged=true
@@ -1559,12 +1577,13 @@ class MainActivity: Activity() {
             }
         }
         railButtons.forEachIndexed { i,item -> rail.addView(item,lp(-1,-2).apply { bottomMargin=dp(4) }) }
+        nav[5].nextFocusDownId=railButtons.first().id
         var showCategory: (Int,Boolean)->Unit = { _,_-> }
         var rechainSettings: ()->Unit = {}
         fun paintRail(index: Int,focused: Boolean) {
             val item=railButtons[index]
-            item.setTextColor(if(focused) bg else if(index==active) accent else muted)
-            item.background=rounded(if(focused) white else if(index==active) TvStyle.selectedSurface else Color.TRANSPARENT,if(index==active) accent else Color.TRANSPARENT)
+            item.setTextColor(if(focused) white else if(index==active) accent else muted)
+            item.background=rounded(if(focused) TvStyle.raised else if(index==active) TvStyle.selectedSurface else Color.TRANSPARENT,if(focused||index==active) accent else Color.TRANSPARENT)
             item.setTypeface(null,if(focused || index==active) Typeface.BOLD else Typeface.NORMAL)
         }
 
@@ -1686,7 +1705,8 @@ class MainActivity: Activity() {
         }
         lateinit var quickSend: TextView
         quickSend=railAction("手机快传  ·  传 APK / 视频") {
-            tvTools.quickTransfer(quickSend,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() })
+            tvTools.quickTransfer(quickSend,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() },
+                { tvTools.quickFiles(quickSend,{ f,k -> handleQuickTransfer(f,k,true,quickFiles) },{ tvTools.quickTransfer(quickSend,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() }) },{ refreshQuickFiles() }) })
         }
         quickFiles=setting(device,quickFilesLabel(0,0)) {
             tvTools.quickFiles(quickFiles,{ file,kind -> handleQuickTransfer(file,kind,true,quickFiles) },{
@@ -2293,7 +2313,7 @@ class MainActivity: Activity() {
     }
     private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true) {
         pendingDetail=series; detailAutoplay=autoplay
-        invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false
+        invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false; detailEpisodePage=-1
         val body=base(series.title); message(body,"正在加载剧集…")
         work({ repository.detail(series.id) }, { result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
@@ -2358,7 +2378,7 @@ class MainActivity: Activity() {
         val seasonButtons=mutableListOf<TextView>()
         if(seasons.size>1) {
             val seasonRow=row(); seasonRow.setPadding(0,dp(10),0,dp(2))
-            seasonRow.addView(text("系列 ${seasons.size} 季",13f,muted),lp(dp(78),dp(42)))
+            seasonRow.addView(text("系列 ${seasons.size} 季",13f,accent).apply { gravity=Gravity.CENTER },lp(dp(78),dp(42)))
             val strip=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
             val line=row(); strip.addView(line)
             seasons.forEach { season ->
@@ -2370,10 +2390,28 @@ class MainActivity: Activity() {
             seasonRow.addView(strip,lp(0,dp(42)).apply { weight=1f })
             info.addView(seasonRow)
         }
-        // 集数 8 列直排全部显示，已看降透明度、当前集保持高亮；不再按 20 集分组翻页
+        // 集数分页：每页 4 行 × 8 列 = 32 集，避免长剧一次性渲染上百按钮；已看降透明度、当前集高亮
         val episodeCols=8
+        val pageSize=episodeCols*4
+        val totalPages=((data.episodes.size+pageSize-1)/pageSize).coerceAtLeast(1)
+        detailEpisodePage=if(detailEpisodePage<0) (episodeIndex/pageSize).coerceIn(0,totalPages-1) else detailEpisodePage.coerceIn(0,totalPages-1)
+        // 翻页控件：集数区上方紧凑单行（左：集数 右：‹ 页码 ›），不占额外高度
+        var prevPager: TextView?=null; var nextPager: TextView?=null
+        if(totalPages>1) {
+            val pager=row().apply { setPadding(0,dp(8),0,dp(4)); gravity=Gravity.CENTER_VERTICAL }
+            pager.addView(text("集数",13f,muted))
+            pager.addView(Space(this),lp(0,1).apply { weight=1f })
+            prevPager=button("‹",detailEpisodePage>0) { if(detailEpisodePage>0){detailEpisodePage--;showDetail(true)} }
+            pager.addView(prevPager)
+            pager.addView(text("${detailEpisodePage+1}/${totalPages}",12f,muted).apply { setPadding(dp(8),0,dp(8),0) })
+            nextPager=button("›",detailEpisodePage<totalPages-1) { if(detailEpisodePage<totalPages-1){detailEpisodePage++;showDetail(true)} }
+            pager.addView(nextPager)
+            info.addView(pager)
+        }
+        val pageStart=detailEpisodePage*pageSize
+        val pageEnd=minOf(pageStart+pageSize,data.episodes.size)
         val episodes=mutableListOf<View>()
-        data.episodes.indices.toList().chunked(episodeCols).forEach { numbers ->
+        (pageStart until pageEnd).chunked(episodeCols).forEach { numbers ->
             val line=row()
             numbers.forEach { index ->
                 val seen=watched || index<episodeIndex
@@ -2419,10 +2457,18 @@ class MainActivity: Activity() {
         recommendationRow("相关推荐",data.related)
         val lastRowStart=((episodes.size-1)/episodeCols)*episodeCols
         val firstRow=extraRows.firstOrNull()
-        val aboveEpisodes: View=seasonButtons.lastOrNull() ?: jump
+        val pagerRow: View?=prevPager ?: nextPager
+        val aboveEpisodes: View=pagerRow ?: seasonButtons.lastOrNull() ?: jump
         episodes.forEachIndexed { i,v ->
-            v.nextFocusLeftId=if(i%episodeCols==0) v.id else episodes[i-1].id
-            v.nextFocusRightId=if(i%episodeCols==episodeCols-1 || i==episodes.lastIndex) v.id else episodes[i+1].id
+            v.nextFocusLeftId=when {
+                i%episodeCols==0 -> prevPager?.id ?: v.id
+                else -> episodes[i-1].id
+            }
+            v.nextFocusRightId=when {
+                i==episodes.lastIndex -> nextPager?.id ?: v.id
+                i%episodeCols==episodeCols-1 -> v.id
+                else -> episodes[i+1].id
+            }
             v.nextFocusUpId=if(i>=episodeCols) episodes[i-episodeCols].id else aboveEpisodes.id
             v.nextFocusDownId=when {
                 i+episodeCols<episodes.size -> episodes[i+episodeCols].id
@@ -2430,25 +2476,29 @@ class MainActivity: Activity() {
                 else -> v.id
             }
         }
-        // 季条 ↑ 回操作行、↓ 进集数网格；操作行 ↓ 优先进季条，否则直达第一集
+        // 翻页按钮（集数上方）：↑ 回季条/操作行，↓ 进集数第一行；左右互连
+        val abovePager: View=seasonButtons.lastOrNull() ?: jump
+        prevPager?.let { it.nextFocusUpId=abovePager.id; it.nextFocusDownId=episodes.firstOrNull()?.id ?: it.id; it.nextFocusRightId=nextPager?.id ?: it.id }
+        nextPager?.let { it.nextFocusUpId=abovePager.id; it.nextFocusDownId=episodes.firstOrNull()?.id ?: it.id; it.nextFocusLeftId=prevPager?.id ?: it.id }
+        // 季条 ↑ 回操作行、↓ 进翻页/集数；操作行 ↓ 优先进季条，否则直达翻页或第一集
         seasonButtons.forEachIndexed { index,view ->
             view.nextFocusUpId=jump.id
-            view.nextFocusDownId=episodes.getOrNull(index.coerceAtMost(episodes.lastIndex))?.id ?: View.NO_ID
+            view.nextFocusDownId=pagerRow?.id ?: episodes.getOrNull(index.coerceAtMost(episodes.lastIndex))?.id ?: View.NO_ID
         }
         episodes.firstOrNull()?.let { first ->
-            val down=seasonButtons.firstOrNull()?.id ?: first.id
+            val down=seasonButtons.firstOrNull()?.id ?: pagerRow?.id ?: first.id
             listOf(play,favorite,synopsisButton,jump).forEach { it.nextFocusDownId=down }
         }
         extraRows.forEachIndexed { rowIndex,cards ->
             cards.forEachIndexed { i,v ->
                 v.nextFocusLeftId=cards[(i-1).coerceAtLeast(0)].id
                 v.nextFocusRightId=cards[(i+1).coerceAtMost(cards.lastIndex)].id
-                v.nextFocusUpId=if(rowIndex>0) extraRows[rowIndex-1].getOrNull(i.coerceAtMost(extraRows[rowIndex-1].lastIndex))?.id ?: play.id
-                    else episodes.getOrNull((lastRowStart+i).coerceAtMost(episodes.lastIndex))?.id ?: play.id
+                v.nextFocusUpId=if(rowIndex>0) extraRows[rowIndex-1].getOrNull(i.coerceAtMost(extraRows[rowIndex-1].lastIndex))?.id ?: (pagerRow?.id ?: play.id)
+                    else episodes.getOrNull((lastRowStart+i).coerceAtMost(episodes.lastIndex))?.id ?: (pagerRow?.id ?: play.id)
                 v.nextFocusDownId=if(rowIndex<extraRows.lastIndex) extraRows[rowIndex+1].getOrNull(i.coerceAtMost(extraRows[rowIndex+1].lastIndex))?.id ?: v.id else v.id
             }
         }
-        if(focusEpisode) episodes.getOrNull(episodeIndex.coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
+        if(focusEpisode) episodes.getOrNull((episodeIndex-pageStart).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         updater.interrupt()
