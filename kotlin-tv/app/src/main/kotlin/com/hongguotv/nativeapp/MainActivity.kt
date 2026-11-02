@@ -48,6 +48,7 @@ private const val FOOTER_MORE_HOT=4
 class MainActivity: Activity() {
     private val bg by lazy { TvStyle.background }; private val surface by lazy { TvStyle.surface }
     private val accent by lazy { TvStyle.accent }; private val white by lazy { TvStyle.text }; private val muted by lazy { TvStyle.muted }
+    private val gold by lazy { TvStyle.gold }
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository()
@@ -261,6 +262,7 @@ class MainActivity: Activity() {
     private var pausedForLifecycle=false
     private lateinit var hud: LinearLayout
     private lateinit var playbackText: TextView
+    private lateinit var playbackStatus: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var controls: LinearLayout
     private var panel=false
@@ -658,13 +660,12 @@ class MainActivity: Activity() {
             return
         }
         if(tab==5) {
-            // 设置页：内容可滚动，页脚固定在屏幕底部居中，始终可见；去掉容器下内边距让页脚真正贴底
+            // 设置页：左右分栏（左分类/常用，右列表滚动），页脚固定在屏幕底部居中
             container.setPadding(container.paddingLeft,container.paddingTop,container.paddingRight,0)
-            val page=column()
-            val scroll=ScrollView(this); val body=column(); scroll.addView(body); page.addView(scroll,lp(-1,0).apply { weight=1f })
+            val body=column()
             val footerHost=column().apply { gravity=Gravity.CENTER_HORIZONTAL; setPadding(0,dp(12),0,0) }
-            page.addView(footerHost,lp(-1,-2))
-            container.addView(page,lp(-1,0).apply { weight=1f })
+            container.addView(body,lp(-1,0).apply { weight=1f })
+            container.addView(footerHost,lp(-1,-2))
             settings(body,footerHost); if(focusNav) nav[tab].requestFocus(); return
         }
         if(tab<=1) {
@@ -1358,18 +1359,34 @@ class MainActivity: Activity() {
         }
     }
     private fun settings(parent: LinearLayout, footerHost: LinearLayout) {
-        val settingRows=mutableListOf<TextView>()
-        parent.addView(text("按你的习惯播放",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(15),0,dp(7)) })
-        parent.addView(text("偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(18)) })
-        val groups=row().apply { gravity=Gravity.TOP }
-        val playback=column(); val device=column()
-        listOf(playback,device).forEachIndexed { i,group ->
-            group.setPadding(dp(16),dp(16),dp(16),dp(16)); group.background=rounded(surface)
-            groups.addView(group,lp(0,-2).apply { weight=1f; if(i==0) rightMargin=dp(16) })
+        parent.addView(text("设置",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,dp(5)) })
+        parent.addView(text("按类别调整，偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(12)) })
+        // 左右分栏：左侧类别与常用入口，右侧只渲染当前类别；页脚仍在滚动区之外
+        val shell=row().apply { gravity=Gravity.TOP }
+        parent.addView(shell,lp(-1,0).apply { weight=1f })
+        val railScroll=ScrollView(this).apply {
+            isVerticalScrollBarEnabled=false; clipToPadding=false
+            setPadding(dp(10),dp(10),dp(10),dp(10)); background=rounded(surface)
         }
-        parent.addView(groups)
+        val rail=column()
+        railScroll.addView(rail)
+        val rightScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
+        val rightPane=column()
+        rightScroll.addView(rightPane)
+        shell.addView(railScroll,lp(dp(236),-1))
+        shell.addView(rightScroll,lp(0,-1).apply { weight=1f; leftMargin=dp(14) })
+
+        val playback=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
+        val look=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
+        val device=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
+        val about=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
+        val settingRows=mutableListOf<TextView>()
+        val groupRows=linkedMapOf<LinearLayout,MutableList<TextView>>()
+
         fun heading(group: LinearLayout,title: String,subtitle: String) {
-            group.addView(text(title,18f).apply { setTypeface(null,Typeface.BOLD) })
+            group.addView(text(title,18f).apply {
+                typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,0)
+            })
             group.addView(text(subtitle,12f,muted).apply { setPadding(0,dp(5),0,dp(15)) })
         }
         fun setting(group: LinearLayout,label: String,action: ()->Unit): TextView {
@@ -1380,10 +1397,37 @@ class MainActivity: Activity() {
             }
             group.addView(view,lp(-1,-2).apply { bottomMargin=dp(8) })
             settingRows+=view
+            groupRows.getOrPut(group){mutableListOf()}+=view
             return view
         }
-        heading(playback,"播放偏好","所有剧集共用，播放中也可调整")
-        heading(device,"片单与设备","保管记录，保持应用更新")
+        fun railAction(label: String,action: ()->Unit)=button(label,onClick=action).apply {
+            gravity=Gravity.CENTER_VERTICAL; textSize=13f; minHeight=dp(42); maxLines=2
+            setPadding(dp(10),dp(6),dp(10),dp(6))
+        }
+
+        val categories=listOf(
+            Triple("播放与观看","所有剧集共用，播放中也可调整",playback),
+            Triple("外观与界面","主题、时钟与首页导航",look),
+            Triple("设备与数据","本机记录、存储与快传文件",device),
+            Triple("关于红果","版本更新、接口自检与许可",about))
+        var active=0
+        val railButtons=categories.map { entry ->
+            button(entry.first,onClick={}).apply {
+                gravity=Gravity.CENTER_VERTICAL; textSize=16f; minHeight=dp(42)
+                setPadding(dp(12),dp(8),dp(12),dp(8))
+            }
+        }
+        railButtons.forEachIndexed { i,item -> rail.addView(item,lp(-1,-2).apply { bottomMargin=dp(4) }) }
+        var showCategory: (Int,Boolean)->Unit = { _,_-> }
+        var rechainSettings: ()->Unit = {}
+        fun paintRail(index: Int,focused: Boolean) {
+            val item=railButtons[index]
+            item.setTextColor(if(focused) bg else if(index==active) accent else muted)
+            item.background=rounded(if(focused) white else if(index==active) TvStyle.selectedSurface else Color.TRANSPARENT,if(index==active) accent else Color.TRANSPARENT)
+            item.setTypeface(null,if(focused || index==active) Typeface.BOLD else Typeface.NORMAL)
+        }
+
+        heading(playback,"播放与观看",categories[0].second)
         lateinit var qualityButton: TextView
         qualityButton=setting(playback,"默认清晰度  ·  ${library.maxQuality}P") { showQualityPicker(qualityButton,false) }
         lateinit var defaultSpeed: TextView
@@ -1402,7 +1446,6 @@ class MainActivity: Activity() {
         }
         val danmakuPrefRows=mutableListOf<TextView>()
         var danmakuExpanded=false
-        var rechainSettings: ()->Unit={}
         lateinit var danmakuToggle: TextView
         fun syncDanmakuRows() {
             val show=library.danmaku
@@ -1449,21 +1492,20 @@ class MainActivity: Activity() {
             extras.autoSkipUnplayable=!extras.autoSkipUnplayable
             autoSkipButton.text="不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}"
         }
-        syncDanmakuRows()
-
+        heading(look,"外观与界面",categories[1].second)
         lateinit var themeButton: TextView
-        themeButton=setting(device,"系统风格  ·  ${TvStyle.theme.label}") {
+        themeButton=setting(look,"系统风格  ·  ${TvStyle.theme.label}") {
             library.theme=TvStyle.toggle().name; recreate()
         }
         lateinit var clockButton: TextView
-        clockButton=setting(device,"显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}") {
+        clockButton=setting(look,"显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}") {
             library.showClock=!library.showClock
             clockButton.text="显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}"
             applyClock()
         }
         lateinit var backdropButton: TextView
         fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
-        backdropButton=setting(device,backdropLabel()) {
+        backdropButton=setting(look,backdropLabel()) {
             tvTools.choose("自定义背景",listOf("手机上传图片","恢复默认背景"),backdropButton,{ choice ->
                 when(choice) {
                     0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext) { refreshBackdropSetting?.invoke() } }
@@ -1475,10 +1517,14 @@ class MainActivity: Activity() {
             })
         }
         refreshBackdropSetting={ backdropButton.text=backdropLabel() }
+        lateinit var navModulesButton: TextView
+        navModulesButton=setting(look,navModulesLabel()) { showNavModules(navModulesButton) }
+
+        heading(device,"设备与数据",categories[2].second)
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var backup: TextView
-        backup=setting(device,"手机备份与恢复") {
+        backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
                 tvTools.libraryTransfer(encoded,backup) { data,restoreSettings ->
                     favoriteMonitor.stop(); library.restore(data,restoreSettings)
@@ -1498,7 +1544,7 @@ class MainActivity: Activity() {
             }
         }
         lateinit var quickSend: TextView
-        quickSend=setting(device,"手机快传  ·  传 APK / 视频") {
+        quickSend=railAction("手机快传  ·  传 APK / 视频") {
             tvTools.quickTransfer(quickSend,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() })
         }
         quickFiles=setting(device,quickFilesLabel(0,0)) {
@@ -1507,14 +1553,16 @@ class MainActivity: Activity() {
             },{ refreshQuickFiles() })
         }
         refreshQuickFiles()
+        rail.addView(text("常用",11f,muted).apply { setPadding(dp(12),dp(10),0,dp(5)) })
+        rail.addView(quickSend,lp(-1,-2).apply { bottomMargin=dp(6) })
+        rail.addView(backup,lp(-1,-2).apply { bottomMargin=dp(6) })
+        val commonButtons=listOf(quickSend,backup)
         lateinit var hidden: TextView
         hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
             library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
         }
         lateinit var statsButton: TextView
         statsButton=setting(device,"观看统计  ·  本机累计") { showWatchStats(statsButton) }
-        lateinit var navModulesButton: TextView
-        navModulesButton=setting(device,navModulesLabel()) { showNavModules(navModulesButton) }
         fun cacheBytes()=listOfNotNull(cacheDir,externalCacheDir).sumOf { dir -> dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }
         fun cacheLabel(bytes: Long?)="清理缓存  ·  ${when {
             bytes==null -> "计算中…"
@@ -1540,11 +1588,12 @@ class MainActivity: Activity() {
             val bytes=cacheBytes()
             main.post { if(!isDestroyed) clearCache.text=cacheLabel(bytes) }
         }
+        heading(about,"关于红果",categories[3].second)
         lateinit var updates: TextView
-        updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
+        updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
         lateinit var checkButton: TextView
-        checkButton=setting(device,"接口自检  ·  首页 / 搜索 / 播放") { showInterfaceCheck(checkButton) }
-        val license=setting(device,"开源许可") {
+        checkButton=setting(about,"接口自检  ·  首页 / 搜索 / 播放") { showInterfaceCheck(checkButton) }
+        val license=setting(about,"开源许可") {
             TvDialog.info(this,"开源许可","本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").show()
         }
         // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
@@ -1555,18 +1604,50 @@ class MainActivity: Activity() {
             gravity=Gravity.CENTER; setPadding(dp(10),0,dp(10),dp(6))
         }
         rechainSettings={
-            val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton,danmakuButton)+
-                (if(library.danmaku) listOf(danmakuToggle)+(if(danmakuExpanded) danmakuPrefRows else emptyList()) else emptyList())+
-                listOf(blockedWords,keySettings,autoSkipButton)
-            val right=listOf(themeButton,clockButton,backdropButton,localBackupButton,backup,quickSend,quickFiles,hidden,statsButton,navModulesButton,clearCache,updates,checkButton,license)
-            listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
-                view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
+            val group=categories[active].third
+            val items=groupRows[group].orEmpty().filter { it.visibility==View.VISIBLE }
+            items.forEachIndexed { index,view ->
+                view.nextFocusUpId=items.getOrNull(index-1)?.id ?: railButtons[active].id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
                 view.nextFocusDownId=items.getOrNull(index+1)?.id ?: View.NO_ID
-            } }
-            left.forEachIndexed { i,v -> v.nextFocusLeftId=v.id; v.nextFocusRightId=right.getOrNull(i)?.id ?: v.id }
-            right.forEachIndexed { i,v -> v.nextFocusLeftId=left.getOrNull(i)?.id ?: v.id; v.nextFocusRightId=v.id }
-            nav.forEach { it.nextFocusDownId=qualityButton.id }
+                view.nextFocusLeftId=railButtons[active].id
+                view.nextFocusRightId=view.id
+            }
+            railButtons.forEachIndexed { index,item ->
+                item.nextFocusUpId=railButtons.getOrNull(index-1)?.id ?: nav[tab].id
+                item.nextFocusDownId=railButtons.getOrNull(index+1)?.id ?: commonButtons.firstOrNull()?.id ?: View.NO_ID
+                item.nextFocusLeftId=item.id
+                item.nextFocusRightId=if(index==active) items.firstOrNull()?.id ?: item.id else item.id
+            }
+            commonButtons.forEachIndexed { index,item ->
+                item.nextFocusUpId=if(index==0) railButtons.last().id else commonButtons[index-1].id
+                item.nextFocusDownId=commonButtons.getOrNull(index+1)?.id ?: View.NO_ID
+                item.nextFocusLeftId=item.id
+                item.nextFocusRightId=items.firstOrNull()?.id ?: item.id
+            }
+            nav.forEach { it.nextFocusDownId=railButtons.first().id }
+        }
+        showCategory={ index,focusFirst ->
+            if(index in categories.indices) {
+                val changed=index!=active
+                active=index
+                if(changed) {
+                    rightPane.removeAllViews()
+                    rightPane.addView(categories[index].third,lp(-1,-2))
+                }
+                railButtons.forEachIndexed { i,item -> paintRail(i,item.hasFocus()) }
+                rechainSettings()
+                if(focusFirst) {
+                    (groupRows[categories[index].third].orEmpty().firstOrNull { it.visibility==View.VISIBLE } ?: railButtons[index]).requestFocus()
+                }
+            }
+        }
+        rightPane.addView(playback,lp(-1,-2))
+        syncDanmakuRows()
+        railButtons.forEachIndexed { i,item ->
+            paintRail(i,false)
+            item.setOnFocusChangeListener { _,focused -> paintRail(i,focused); if(focused) showCategory(i,false) }
+            item.setOnClickListener { showCategory(i,true) }
         }
         rechainSettings()
         footerHost.addView(settingsFooter,lp(-2,-2))
@@ -1574,7 +1655,11 @@ class MainActivity: Activity() {
         // 页面重建（如切换片源显隐）后按标签恢复焦点，避免跳回顶部导航
         val wanted=settingsFocusKey.also { settingsFocusKey=null }
         val target=wanted?.let { key -> settingRows.firstOrNull { it.text.toString().startsWith(key) } }
-        if(target!=null) target.requestFocus() else nav[tab].requestFocus()
+        if(target!=null) {
+            val index=categories.indexOfFirst { it.third===(target.parent as? View) }
+            if(index>=0) showCategory(index,false)
+            target.requestFocus()
+        } else nav[tab].requestFocus()
     }
     private fun runSearch(value: String,type: ContentType=library.contentType,fromPhone: Boolean=false) {
         val clean=value.trim(); if(clean.isEmpty() || clean.length>80) return
@@ -2259,7 +2344,9 @@ class MainActivity: Activity() {
             root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
-            playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
+            playbackStatus=text("",14f,gold).apply { setPadding(0,dp(6),0,0); maxLines=1 }
+            hud.addView(playbackStatus)
+            playbackText=text("",15f,muted).apply { setPadding(0,dp(7),0,dp(9)) }; hud.addView(playbackText)
             progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
             hud.addView(text("确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
@@ -2534,12 +2621,14 @@ class MainActivity: Activity() {
         transportPlay?.text=if(player?.playWhenReady==true) "暂停" else "播放"
         sleepButton?.text="定时 ${sleepTimer.label()}"
         if(screen!="player" || playError) return
+        val danmakuOn=library.danmaku && detail?.series?.id?.let { extras.danmakuEnabled(it,true) }!=false
+        playbackStatus.text=listOfNotNull(quality.ifBlank { null },PlaybackSpeed.label(player?.playbackParameters?.speed ?: library.playbackSpeed),"弹幕 "+(if(danmakuOn) "开" else "关")).joinToString("   ·   ")
         if(sleepStopped) { playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"; return }
         if(!playbackReady) { playbackText.text=(if(!requestedAutoplay) "准备后保持暂停 · " else "")+if(video==null) "正在获取播放地址…" else "正在缓冲…"; return }
         val p=player ?: return
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { ffActive -> "3× 快进中"; p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
-        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  ${PlaybackSpeed.label(p.playbackParameters.speed)}"+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
+        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}"+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
         progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
     }
     private fun requestPlayback(play: Boolean) {

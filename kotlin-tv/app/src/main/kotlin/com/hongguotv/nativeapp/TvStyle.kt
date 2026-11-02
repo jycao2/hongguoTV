@@ -19,6 +19,8 @@ object TvStyle {
     val surface get() = if (theme == Theme.NIGHT) Color.rgb(23,30,40) else Color.rgb(255,255,255)
     val raised get() = if (theme == Theme.NIGHT) Color.rgb(32,42,54) else Color.rgb(243,236,224)
     val accent get() = if (theme == Theme.NIGHT) Color.rgb(255,137,100) else Color.rgb(196,83,46)
+    /** 辅助强调色：剧集元信息与播放状态小标，不与焦点橙冲突。 */
+    val gold get() = if (theme == Theme.NIGHT) Color.rgb(255,196,107) else Color.rgb(166,104,28)
     val text get() = if (theme == Theme.NIGHT) Color.rgb(243,244,246) else Color.rgb(58,52,44)
     val muted get() = if (theme == Theme.NIGHT) Color.rgb(147,160,178) else Color.rgb(139,125,107)
     val outline get() = if (theme == Theme.NIGHT) Color.rgb(43,55,70) else Color.rgb(206,195,176)
