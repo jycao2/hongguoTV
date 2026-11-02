@@ -9,6 +9,10 @@
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 
+## 0.24.1 修复
+
+- **修复全部剧集无法播放**：平台下线旧播放接口后整族只返回空响应，改为先调用官方现行的 `video_tab` 取流接口，失败时再按旧接口多路由兜底。
+
 ## 0.24.0 新增
 
 - **手机快传**：手机扫码或输入局域网地址即可把视频、图片、APK 传到电视，服务端流式落盘 + 原子改名，支持传输进度、预览播放与文件管理；APK 可直接发起安装。
@@ -315,7 +319,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.24.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.24.1-android8.apk
 ```
 
 ## 工程结构
