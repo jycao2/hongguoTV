@@ -117,6 +117,8 @@ class MainActivity: Activity() {
     private val activityStarted=launchStarted
     private var homeContentLogged=false
     private lateinit var library: Library
+    private lateinit var accountManager: AccountManager
+    private var accountButton: TextView?=null
     private lateinit var tvTools: TvTools
     private lateinit var extras: PlaybackExtras
     private lateinit var thirdStore: ThirdStore
@@ -358,6 +360,12 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); extras=PlaybackExtras(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        accountManager=AccountManager(this,library)
+        accountManager.onAccountChanged={
+            accountButton?.text="红果账号  ·  ${accountManager.accountLabel}"
+            // 登录合并云端历史后，正在展示的记录页立即重建
+            if(screen=="catalog" && (tab==4 || collection=="resume")) showCatalog()
+        }
         // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
         thirdStore=ThirdStore(this)
         library.thirdSourcesProvider={ thirdStore.backupSources() }
@@ -1681,6 +1689,7 @@ class MainActivity: Activity() {
         navModulesButton=setting(look,navModulesLabel()) { showNavModules(navModulesButton) }
 
         heading(device,"设备与数据",categories[2].second)
+        accountButton=setting(device,"红果账号  ·  ${accountManager.accountLabel}") { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var backup: TextView
@@ -3531,7 +3540,9 @@ class MainActivity: Activity() {
     }
     private fun saveProgress(completed: Boolean=false) {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
-        library.save(WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis()))
+        val progress=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis())
+        library.save(progress)
+        accountManager.onLocalProgressSaved(progress,data.episodes.size)
     }
     /** Starts the official-comment overlay for the current episode; safe to call repeatedly. */
     private fun startDanmaku() {
@@ -3702,7 +3713,7 @@ class MainActivity: Activity() {
     override fun onDestroy() {
         generation++; cancelWork()
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
-        favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); releasePlayer(); library.close()
+        favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); releasePlayer(); accountManager.destroy(); library.close()
         third?.release()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
         io.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()

@@ -104,7 +104,7 @@ class Library(context: Context) {
             }
         }
     }
-    private fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
+    internal fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
     private fun put(key: String, value: Any?) { writes.submit(mapOf(key to { value })); scheduleLocalBackup() }
     private fun persist(vararg keys: String) {
         val state = state()
