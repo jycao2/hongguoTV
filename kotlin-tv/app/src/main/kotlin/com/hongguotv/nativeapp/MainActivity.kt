@@ -182,6 +182,17 @@ class MainActivity: Activity() {
     private var catalog=emptyList<Series>()
     private var hasMore=false
     private var catalogFocus=""
+    // 播放中长按菜单键呼出快捷面板：短按仍在抬起时执行用户设定行为
+    private var menuLongFired=false
+    private val menuLongRunnable=Runnable { menuLongFired=true; showQuickPanel() }
+    // 收藏排序：update 最近更新 / watch 最近观看 / name 名称；管理模式支持多选批量取消收藏
+    private var favoriteManage=false
+    private val favoriteSelected=linkedSetOf<String>()
+    private var favoriteSortButtons=emptyList<TextView>()
+    private var favoriteSortFirst: TextView?=null
+    private var favoriteSelectAll: TextView?=null
+    private var favoriteRemove: TextView?=null
+    private var favoriteManageButton: TextView?=null
     // 高级搜索：与关键词搜索共用结果网格，但条件、分页游标和筛选面板单独维护
     private var advancedSearch=false
     private var discoverySelection=DiscoverySelection()
@@ -535,6 +546,7 @@ class MainActivity: Activity() {
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
         historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; favoriteFilterFirst=null; favoriteFilterButtons=emptyList(); homeUpdates=null; resumeCards.clear()
+        favoriteSortFirst=null; favoriteSortButtons=emptyList(); favoriteSelectAll=null; favoriteRemove=null; favoriteManageButton=null
         filterToggle=null; filterSummary=null; filterPanel=null; filterGroupsScroll=null; filterChips=linkedMapOf(); filterRows=mutableListOf()
         filterCollapse=null; filterReset=null; filterRefresh=null
     }
@@ -620,7 +632,14 @@ class MainActivity: Activity() {
         "later" -> library.later()
         "updates" -> library.favorites().filter { library.favoriteUpdate(it.id)?.hasUpdate == true }
         "resume" -> library.history().filterNot { library.watched(it.series.id) }.map { it.series }
-        else -> if(tab==3) library.favorites().filter { favoriteGroupFilter==null || library.groupOf(it.id)==favoriteGroupFilter } else library.history().map { it.series }
+        else -> if(tab==3) {
+            val base=library.favorites().filter { favoriteGroupFilter==null || library.groupOf(it.id)==favoriteGroupFilter }
+            when(library.favoriteSort) {
+                "watch" -> base.sortedByDescending { library.progress(it.id)?.updatedAt ?: 0L }
+                "name" -> base.sortedBy { it.title }
+                else -> base.sortedByDescending { library.favoriteUpdate(it.id)?.checkedAt ?: 0L }
+            }
+        } else library.history().map { it.series }
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false) {
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
@@ -935,14 +954,33 @@ class MainActivity: Activity() {
             container.addView(rankSubtitle)
             nav.forEach { it.nextFocusDownId=(if(aiCatalog) aiBack ?: aiGenreButton else aiEntry ?: rankSwitch)?.id ?: View.NO_ID }
         } else if(tab>2) {
+            if(tab!=3 && favoriteManage) { favoriteManage=false; favoriteSelected.clear() }
             val heading=row().apply { setPadding(0,dp(14),0,dp(6)) }
-            heading.addView(text(if(tab==3) "我的收藏" else "接着上次看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
-            if(tab==3) {
+            heading.addView(text(if(tab==3) if(favoriteManage) "管理收藏" else "我的收藏" else "接着上次看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            if(tab==3 && !favoriteManage) {
                 favoriteCheck=addButton(heading,"检查更新") {
                     if(favoriteMonitor.running) Toast.makeText(this,"正在检查收藏更新…",Toast.LENGTH_SHORT).show()
                     else if(library.favorites().isEmpty()) Toast.makeText(this,"先收藏几部剧，再来检查更新",Toast.LENGTH_SHORT).show()
                     else { favoriteMonitor.check(force=true); Toast.makeText(this,"开始检查收藏更新…",Toast.LENGTH_SHORT).show() }
                 }.apply { nextFocusUpId=nav[tab].id }
+                favoriteManageButton=addButton(heading,"管理") {
+                    favoriteManage=true; favoriteSelected.clear(); showCatalog()
+                }.apply { nextFocusUpId=nav[tab].id }
+            }
+            if(tab==3 && favoriteManage) {
+                favoriteSelectAll=addButton(heading,if(favoriteSelected.size==catalog.size && catalog.isNotEmpty()) "取消全选" else "全选") {
+                    if(favoriteSelected.size==catalog.size) favoriteSelected.clear() else catalog.forEach { favoriteSelected+=it.id }
+                    catalogAdapter?.notifyDataSetChanged(); refreshFavoriteManageBar()
+                }.apply { nextFocusUpId=nav[tab].id }
+                favoriteRemove=addButton(heading,"取消收藏所选（${favoriteSelected.size}）") {
+                    val targets=catalog.filter { it.id in favoriteSelected }
+                    if(targets.isEmpty()) return@addButton
+                    tvTools.confirm("取消收藏","将取消收藏选中的 ${targets.size} 部剧，观看记录会保留。",favoriteRemove) {
+                        targets.forEach { library.toggle(it) }
+                        favoriteSelected.clear(); favoriteManage=false; catalogFocus=""; showCatalog()
+                    }
+                }.apply { nextFocusUpId=nav[tab].id; isEnabled=favoriteSelected.isNotEmpty(); alpha=if(isEnabled) 1f else .4f }
+                addButton(heading,"退出管理") { favoriteManage=false; favoriteSelected.clear(); showCatalog() }.apply { nextFocusUpId=nav[tab].id }
             }
             if(tab==4 && library.history().isNotEmpty()) {
                 historyManage=addButton(heading,"管理记录") {
@@ -953,8 +991,26 @@ class MainActivity: Activity() {
                 }.apply { nextFocusUpId=nav[tab].id }
             }
             container.addView(heading)
+            if(tab==3 && !favoriteManage) {
+                // 排序行：管理模式隐藏；收藏页任意位置按菜单键也可循环切换排序
+                val sortRow=row().apply { setPadding(0,0,0,dp(6)) }
+                sortRow.addView(text("排序",13f,muted).apply { setPadding(dp(4),0,dp(6),0) })
+                val sortOptions=listOf("update" to "最近更新","watch" to "最近观看","name" to "名称")
+                favoriteSortButtons=sortOptions.mapIndexed { index,(key,label) ->
+                    addButton(sortRow,label,library.favoriteSort==key) {
+                        if(library.favoriteSort!=key) { library.favoriteSort=key; showCatalog(); favoriteSortButtons.getOrNull(index)?.let { btn -> btn.post { if(btn.isAttachedToWindow) btn.requestFocus() } } }
+                    }.apply { nextFocusUpId=favoriteCheck?.id ?: nav[tab].id; minHeight=dp(36); setPadding(dp(12),dp(6),dp(12),dp(6)) }
+                }
+                // 行内左右显式接线：最右不再被默认焦点搜索带到 tab 栏
+                favoriteSortButtons.forEachIndexed { index,btn ->
+                    btn.nextFocusLeftId=favoriteSortButtons[(index-1).coerceAtLeast(0)].id
+                    btn.nextFocusRightId=favoriteSortButtons[(index+1).coerceAtMost(favoriteSortButtons.lastIndex)].id
+                }
+                favoriteSortFirst=favoriteSortButtons.firstOrNull()
+                container.addView(sortRow)
+            }
             if(tab==3) {
-                favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }; container.addView(favoriteStatus)
+                favoriteStatus=text(if(favoriteManage) "已选 ${favoriteSelected.size} 部 · 确认键勾选/取消 · 返回键退出管理" else favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }; container.addView(favoriteStatus)
             }
         }
         // 三栏/两栏搜索页的结果区已在 contentRow 内挂载，其余页面走全宽纵向容器
@@ -962,13 +1018,13 @@ class MainActivity: Activity() {
         if(tab==3) {
             val groups=library.groups()
             if(favoriteGroupFilter!=null && favoriteGroupFilter !in groups) favoriteGroupFilter=null
-            if(groups.isNotEmpty()) {
+            if(groups.isNotEmpty() && !favoriteManage) {
                 val filterRow=row().apply { setPadding(0,0,0,dp(6)) }
                 val options=listOf<String?>(null)+groups
                 favoriteFilterButtons=options.mapIndexed { index,group ->
                     addButton(filterRow,group ?: "全部",favoriteGroupFilter==group) {
                         favoriteGroupFilter=group; favoriteFilterFocus=index; showCatalog(focusFilter=true)
-                    }.apply { nextFocusUpId=favoriteCheck?.id ?: nav[tab].id }
+                    }.apply { nextFocusUpId=favoriteSortFirst?.id ?: favoriteCheck?.id ?: nav[tab].id }
                 }
                 favoriteFilterFirst=favoriteFilterButtons.first()
                 container.addView(filterRow,container.indexOfChild(favoriteStatus))
@@ -979,7 +1035,7 @@ class MainActivity: Activity() {
             val firstControl: View?=when(tab) {
                 1 -> if(advancedSearch) filterToggle ?: searchInput else searchInput
                 2 -> aiBack ?: aiGenreButton ?: aiEntry ?: rankSwitch ?: rankRefresh
-                3 -> favoriteFilterFirst ?: favoriteCheck
+                3 -> if(favoriteManage) favoriteSelectAll else favoriteSortFirst ?: favoriteFilterFirst ?: favoriteCheck
                 else -> historyManage
             }
             segmentChips.forEachIndexed { index,item ->
@@ -1128,7 +1184,13 @@ class MainActivity: Activity() {
                 else -> favoriteCheck?.id ?: historyManage?.id ?: recycler.id
             }
         }
-        rankSwitch?.nextFocusDownId=recycler.id; rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id; favoriteCheck?.nextFocusDownId=favoriteFilterFirst?.id ?: recycler.id
+        rankSwitch?.nextFocusDownId=recycler.id; rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id
+        // 收藏页头部按钮行：检查更新/管理左右互连，↓ 回排序行；管理模式按钮 ↓ 直接进网格
+        favoriteCheck?.nextFocusDownId=favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: recycler.id
+        favoriteCheck?.nextFocusRightId=favoriteManageButton?.id ?: View.NO_ID
+        favoriteManageButton?.nextFocusLeftId=favoriteCheck?.id ?: View.NO_ID
+        favoriteManageButton?.nextFocusDownId=favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: recycler.id
+        favoriteSelectAll?.nextFocusDownId=recycler.id; favoriteRemove?.nextFocusDownId=recycler.id
         aiEntry?.nextFocusDownId=recycler.id; aiBack?.nextFocusDownId=recycler.id
         favoriteFilterButtons.forEach { it.nextFocusDownId=recycler.id }
         collectionBack?.nextFocusDownId=recycler.id; genreClear?.nextFocusDownId=recycler.id
@@ -1265,15 +1327,23 @@ class MainActivity: Activity() {
             } else holder.rank.visibility=View.GONE
             holder.title.text=item.title
             val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
-            holder.badge.text=if(tab==3) library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
-            holder.badge.setTextColor(if(ranked || tab==3) accent else muted)
-            if(tab==3) favoriteBadges[item.id]=holder.badge
-            card.setOnClickListener { catalogFocus=item.id; openDetail(item,tab==4 || collection=="resume" || collection=="updates") }
+            // 收藏管理模式：角标前缀 ✓ 表示已勾选，确认键只切换勾选不进详情
+            val managePicked=tab==3 && favoriteManage && item.id in favoriteSelected
+            holder.badge.text=if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.setTextColor(if(managePicked) gold else if(ranked || tab==3) accent else muted)
+            if(tab==3 && !favoriteManage) favoriteBadges[item.id]=holder.badge
+            card.setOnClickListener {
+                catalogFocus=item.id
+                if(tab==3 && favoriteManage) {
+                    if(!favoriteSelected.remove(item.id)) favoriteSelected+=item.id
+                    catalogAdapter?.notifyItemChanged(position); refreshFavoriteManageBar()
+                } else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
+            }
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
             // 高级搜索下 searchInput 未挂载但非空，会让 Elvis 链提前命中导致 ↑ 回不到筛选面板，故面板分支必须放最前
-            card.nextFocusUpId=if(position<cols) (if(tab==1 && advancedSearch) filterRows.lastOrNull()?.firstOrNull()?.id else null) ?: suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            card.nextFocusUpId=if(position<cols) (if(tab==1 && advancedSearch) filterRows.lastOrNull()?.firstOrNull()?.id else null) ?: suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteSelectAll?.id ?: favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
             if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
@@ -1408,7 +1478,7 @@ class MainActivity: Activity() {
     private fun refreshFavoriteLabels() {
         if(screen!="catalog" || !library.isLoaded) return
         favoriteBadges.forEach { (id,label) -> val value=library.favoriteLabel(id); if(label.text.toString()!=value) label.text=value }
-        favoriteStatus?.text=favoriteMonitor.status
+        if(!favoriteManage) favoriteStatus?.text=favoriteMonitor.status
         favoriteCheck?.text=if(favoriteMonitor.running) "正在检查…" else "检查更新"
         homeUpdates?.text="收藏更新 ${library.updatedFavorites()} 部"
         val home=homeScreen
@@ -1421,6 +1491,13 @@ class MainActivity: Activity() {
                 home.refresh.setOnClickListener { showCatalog() }
             }
         }
+    }
+    /** 管理模式就地刷新：勾选数、全选/删除按钮状态，不重建页面避免焦点丢失。 */
+    private fun refreshFavoriteManageBar() {
+        val count=favoriteSelected.size
+        favoriteSelectAll?.text=if(count==catalog.size && catalog.isNotEmpty()) "取消全选" else "全选"
+        favoriteRemove?.let { it.text="取消收藏所选（$count）"; it.isEnabled=count>0; it.alpha=if(it.isEnabled) 1f else .4f }
+        if(favoriteManage) favoriteStatus?.text="已选 $count 部 · 确认键勾选/取消 · 返回键退出管理"
     }
     private fun settings(parent: LinearLayout, footerHost: LinearLayout) {
         parent.addView(text("设置",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,dp(5)) })
@@ -2231,7 +2308,7 @@ class MainActivity: Activity() {
         val body=base("剧集详情")
         val scroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false }; val content=column(); scroll.addView(content); body.addView(scroll,lp(-1,0).apply { weight=1f })
         val hero=row(); hero.gravity=Gravity.TOP; hero.setPadding(0,dp(12),0,dp(12))
-        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP }; hero.addView(image,lp(dp(123),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
+        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP }; hero.addView(image,lp(dp(140),dp(198)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
         info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}"+library.progress(data.series.id)?.let { "  ·  看到第 ${it.episodeIndex+1} 集" }.orEmpty(),13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })
@@ -2272,12 +2349,15 @@ class MainActivity: Activity() {
             synopsisButton.text=if(synopsisExpanded) "收起简介" else "完整简介"
             synopsisButton.post { synopsisButton.requestRectangleOnScreen(android.graphics.Rect(0,0,synopsisButton.width,synopsisButton.height),false) }
         }
+        lateinit var jump: TextView
+        jump=addButton(actions,"跳转集数") { tvTools.episodePicker(data.episodes.size,episodeIndex,jump) { target -> episodeIndex=target; group=target/20; showDetail(true) } }
         content.addView(hero)
-        // 系列剧季导航：同名条目按季号排序，快速跳季并回显每季已看到的集数
+        // 系列剧季导航与集数网格收进海报右侧栏：一屏内完成「看点什么、从哪集看」的决定
         val seasons=(listOf(data.series)+data.sameName).distinctBy { it.id }
             .sortedBy { val number=seasonNumber(it.title); if(number==Int.MAX_VALUE) 0 else number }
+        val seasonButtons=mutableListOf<TextView>()
         if(seasons.size>1) {
-            val seasonRow=row(); seasonRow.setPadding(0,dp(3),0,dp(6))
+            val seasonRow=row(); seasonRow.setPadding(0,dp(10),0,dp(2))
             seasonRow.addView(text("系列 ${seasons.size} 季",13f,muted),lp(dp(78),dp(42)))
             val strip=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
             val line=row(); strip.addView(line)
@@ -2285,25 +2365,25 @@ class MainActivity: Activity() {
                 val number=seasonNumber(season.title)
                 val seen=library.progress(season.id)?.let { " · 看到${it.episodeIndex+1}集" }.orEmpty()
                 val title=if(number==Int.MAX_VALUE) season.title.take(12) else "第 ${number} 季"
-                addButton(line,title+seen,season.id==data.series.id) { if(season.id!=data.series.id) openDetail(season) }
+                seasonButtons+=addButton(line,title+seen,season.id==data.series.id) { if(season.id!=data.series.id) openDetail(season) }
             }
             seasonRow.addView(strip,lp(0,dp(42)).apply { weight=1f })
-            content.addView(seasonRow)
+            info.addView(seasonRow)
         }
-        val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
-        val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
-        val previous=addButton(groupRow,"‹ 上一组") { if(group>0) { group--; showDetail(true) } }.apply { isEnabled=group>0; isFocusable=group>0; alpha=if(group>0) 1f else .4f }
-        groupRow.addView(text("第 ${group*20+1}—${minOf((group+1)*20,data.episodes.size)} 集",16f).apply { gravity=Gravity.CENTER },lp(dp(190),dp(42)))
-        addButton(groupRow,"下一组 ›") { if(group<maxGroup) { group++; showDetail(true) } }.apply { isEnabled=group<maxGroup; isFocusable=group<maxGroup; alpha=if(group<maxGroup) 1f else .4f }
-        lateinit var jump: TextView
-        jump=addButton(groupRow,"跳转集数") { tvTools.episodePicker(data.episodes.size,episodeIndex,jump) { target -> episodeIndex=target; group=target/20; showDetail(true) } }
-        content.addView(groupRow)
+        // 集数 8 列直排全部显示，已看降透明度、当前集保持高亮；不再按 20 集分组翻页
+        val episodeCols=8
         val episodes=mutableListOf<View>()
-        (group*20 until minOf((group+1)*20,data.episodes.size)).toList().chunked(10).forEach { numbers ->
+        data.episodes.indices.toList().chunked(episodeCols).forEach { numbers ->
             val line=row()
-            numbers.forEach { index -> val item=button("${index+1}",index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.contentDescription="第 ${index+1} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
-            repeat(10-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
-            content.addView(line,lp(-1,dp(49)))
+            numbers.forEach { index ->
+                val seen=watched || index<episodeIndex
+                val item=button("${index+1}",index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }
+                item.contentDescription="第 ${index+1} 集"+(if(seen) "，已看" else if(index==episodeIndex && progress!=null && !progress.completed) "，看到 ${formatTime(progress.position)}" else "")
+                if(seen) item.alpha=.45f
+                line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item
+            }
+            repeat(episodeCols-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
+            info.addView(line,lp(-1,dp(49)))
         }
         val extraRows=mutableListOf<MutableList<View>>()
         fun recommendationRow(title: String,items: List<Series>) {
@@ -2337,17 +2417,27 @@ class MainActivity: Activity() {
         }
         recommendationRow("系列剧推荐",data.sameName)
         recommendationRow("相关推荐",data.related)
-        val lastRowStart=((episodes.size-1)/10)*10
+        val lastRowStart=((episodes.size-1)/episodeCols)*episodeCols
         val firstRow=extraRows.firstOrNull()
+        val aboveEpisodes: View=seasonButtons.lastOrNull() ?: jump
         episodes.forEachIndexed { i,v ->
-            v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id
-            v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id
-            if(i>=10) v.nextFocusUpId=episodes[i-10].id
+            v.nextFocusLeftId=if(i%episodeCols==0) v.id else episodes[i-1].id
+            v.nextFocusRightId=if(i%episodeCols==episodeCols-1 || i==episodes.lastIndex) v.id else episodes[i+1].id
+            v.nextFocusUpId=if(i>=episodeCols) episodes[i-episodeCols].id else aboveEpisodes.id
             v.nextFocusDownId=when {
-                i+10<episodes.size -> episodes[i+10].id
+                i+episodeCols<episodes.size -> episodes[i+episodeCols].id
                 firstRow!=null && i>=lastRowStart -> firstRow[(i-lastRowStart).coerceAtMost(firstRow.lastIndex)].id
                 else -> v.id
             }
+        }
+        // 季条 ↑ 回操作行、↓ 进集数网格；操作行 ↓ 优先进季条，否则直达第一集
+        seasonButtons.forEachIndexed { index,view ->
+            view.nextFocusUpId=jump.id
+            view.nextFocusDownId=episodes.getOrNull(index.coerceAtMost(episodes.lastIndex))?.id ?: View.NO_ID
+        }
+        episodes.firstOrNull()?.let { first ->
+            val down=seasonButtons.firstOrNull()?.id ?: first.id
+            listOf(play,favorite,synopsisButton,jump).forEach { it.nextFocusDownId=down }
         }
         extraRows.forEachIndexed { rowIndex,cards ->
             cards.forEachIndexed { i,v ->
@@ -2358,7 +2448,7 @@ class MainActivity: Activity() {
                 v.nextFocusDownId=if(rowIndex<extraRows.lastIndex) extraRows[rowIndex+1].getOrNull(i.coerceAtMost(extraRows[rowIndex+1].lastIndex))?.id ?: v.id else v.id
             }
         }
-        if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
+        if(focusEpisode) episodes.getOrNull(episodeIndex.coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         updater.interrupt()
@@ -2412,7 +2502,7 @@ class MainActivity: Activity() {
             hud.addView(playbackStatus)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(7),0,dp(9)) }; hud.addView(playbackText)
             progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
-            hud.addView(text("确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
+            hud.addView(text("确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    ↓ 选集    ↑ 更多    长按菜单 快捷面板    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
@@ -3031,6 +3121,75 @@ class MainActivity: Activity() {
         }.apply { tag="playback-settings" }
         play.requestFocus()
     }
+    /** 播放快捷面板：长按菜单键呼出。清晰度/倍速/弹幕/更多四列，列内上下循环，改动立即生效，播放不中断。 */
+    private fun showQuickPanel() {
+        if(screen!="player" || playError) return
+        panel=true; showHud(); controls.visibility=View.VISIBLE; controls.removeAllViews()
+        val data=detail
+        val seriesId=data?.series?.id.orEmpty()
+        controls.addView(text("播放快捷面板",16f).apply { setTypeface(null,Typeface.BOLD) },lp(-2,-2))
+        controls.addView(text("上下选择 · 确认更改 · 返回或菜单键关闭 · 短按菜单仍执行你设置的行为",12f,muted).apply { setPadding(0,dp(2),0,dp(10)) })
+        val columnsRow=row().apply { gravity=Gravity.TOP }
+        controls.addView(columnsRow)
+        val columns=mutableListOf<List<TextView>>()
+        fun optionColumn(title: String,options: List<String>,current: Int,onPick: (Int,TextView)->Unit): List<TextView> {
+            val col=column()
+            col.addView(text(title,13f,gold).apply { setPadding(dp(10),0,0,dp(6)) })
+            val items=options.mapIndexed { index,label ->
+                TextView(this).apply {
+                    text=if(index==current) "$label · 当前" else label; textSize=14f
+                    setTextColor(if(index==current) accent else white); includeFontPadding=false
+                    gravity=Gravity.CENTER_VERTICAL; setPadding(dp(12),dp(7),dp(12),dp(7)); minHeight=dp(36); minWidth=dp(150)
+                    focusStyle(this,index==current)
+                    setOnClickListener { onPick(index,this) }
+                    col.addView(this,lp(-2,-2).apply { bottomMargin=dp(4) })
+                }
+            }
+            columnsRow.addView(col,lp(-2,-2).apply { rightMargin=dp(22) })
+            return items
+        }
+        // 清晰度：切换后按当前进度重新取流，面板随之关闭（playEpisode 会清空 controls）
+        columns+=optionColumn("清晰度",PlaybackQuality.options.map { "${it}P" },PlaybackQuality.options.indexOf(library.maxQuality)) { index,_ ->
+            val target=PlaybackQuality.options[index]
+            if(library.maxQuality!=target) {
+                library.maxQuality=target; sessionQuality=null; downgradeEpisode=""; downgradeCount=0
+                playEpisode(episodeIndex,currentPosition(),player?.playWhenReady ?: requestedAutoplay)
+            } else showQuickPanel()
+        }
+        // 倍速：立即生效并停留在面板
+        columns+=optionColumn("倍速",PlaybackSpeed.options.map(PlaybackSpeed::label),PlaybackSpeed.options.indexOf(library.playbackSpeed)) { index,_ ->
+            library.playbackSpeed=PlaybackSpeed.options[index]; player?.setPlaybackSpeed(library.playbackSpeed)
+            updatePlaybackText(); showQuickPanel()
+        }
+        // 弹幕：本剧开关即时切换；其余进入既有弹幕设置
+        val danmakuOn=library.danmaku && extras.danmakuEnabled(seriesId,true)
+        columns+=optionColumn("弹幕",listOf(if(danmakuOn) "关闭弹幕（仅本剧）" else "开启弹幕（仅本剧）","弹幕设置"),-1) { index,anchor ->
+            if(index==0) { toggleSeriesDanmaku(seriesId); showQuickPanel() } else showDanmakuPrefsDialog(anchor)
+        }
+        // 更多：跳过片头片尾 / 画面 / 定时 / 从头播放
+        val mark=data?.series?.id?.let { library.skipMark(it) }
+        fun skipLabel(seconds: Int)=if(seconds>0) "$seconds 秒" else "关闭"
+        columns+=optionColumn("更多",listOf("跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}","跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放本集"),-1) { index,anchor ->
+            when(index) {
+                0 -> showSkipPicker(anchor,true)
+                1 -> showSkipPicker(anchor,false)
+                2 -> showFramePicker(anchor,true)
+                3 -> showSleepPicker(anchor)
+                4 -> { seekTo(0); hidePanel() }
+            }
+        }
+        // 列内上下循环，列间左右按行号对齐（越界夹到末项），遥控器不会跳出面板的网格
+        val maxRows=columns.maxOf { it.size }
+        columns.forEachIndexed { c,items ->
+            items.forEachIndexed { i,item ->
+                item.nextFocusUpId=items[(i-1+items.size)%items.size].id
+                item.nextFocusDownId=items[(i+1)%items.size].id
+                if(c>0) item.nextFocusLeftId=columns[c-1][i.coerceAtMost(columns[c-1].lastIndex)].id
+                if(c<columns.lastIndex) item.nextFocusRightId=columns[c+1][i.coerceAtMost(columns[c+1].lastIndex)].id
+            }
+        }
+        if(maxRows>0) columns[1].getOrNull(0)?.requestFocus() ?: columns[0].firstOrNull()?.requestFocus()
+    }
     /** Season finale auto-continues into the next season only when both the master autoplay and the season switch are on. */
     private fun continueToNextSeason(): Boolean {
         val data=detail ?: return false
@@ -3354,6 +3513,7 @@ class MainActivity: Activity() {
     }
     private fun releasePlayer() {
         cancelRecovery(); cancelPrefetch(); mediaSession.deactivate(); tvTools.close()
+        main.removeCallbacks(menuLongRunnable); menuLongFired=false
         ffActive=false; outroSkipSeconds=0; outroTriggered=false
         val wasForeground=foreground; foreground=false
         val oldPanel=episodePanel; episodePanel=null; oldPanel?.dismiss(); foreground=wasForeground
@@ -3375,16 +3535,43 @@ class MainActivity: Activity() {
         when(screen) {
             "player" -> if(player?.playbackState==Player.STATE_ENDED) returnToDetail() else if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
-            else -> if(tab==1 && advancedSearch) { switchAdvanced(false); filterToggle?.post { filterToggle?.requestFocus() } } else if(tab==6 && third?.onBack()==true) {} else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
+            else -> if(tab==1 && advancedSearch) { switchAdvanced(false); filterToggle?.post { filterToggle?.requestFocus() } } else if(tab==6 && third?.onBack()==true) {} else if(tab==3 && favoriteManage) { favoriteManage=false; favoriteSelected.clear(); showCatalog() } else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
         }
     }
     @Deprecated("TV remote back is handled through the activity")
     override fun onBackPressed()=goBack()
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if(tab==6 && third?.onKey(event)==true) return true
+        // 收藏页：菜单键循环切换排序（卡片上的快捷菜单改用长按确认键，与设计稿按键表一致）
+        if(screen=="catalog" && tab==3 && collection==null && event.keyCode==KeyEvent.KEYCODE_MENU) {
+            if(event.action==KeyEvent.ACTION_UP && !favoriteManage) {
+                val order=listOf("update","watch","name")
+                library.favoriteSort=order[(order.indexOf(library.favoriteSort)+1)%order.size]
+                showCatalog()
+                favoriteSortButtons.getOrNull(order.indexOf(library.favoriteSort))?.let { btn -> btn.post { if(btn.isAttachedToWindow) btn.requestFocus() } }
+            }
+            return true
+        }
         if(screen=="player") {
             val key=event.keyCode
             if(key==KeyEvent.KEYCODE_BACK) { if(event.action==KeyEvent.ACTION_UP) goBack(); return true }
+            // 菜单键：短按执行「菜单键行为」设置的动作（抬起时触发），长按 500ms 呼出播放快捷面板
+            if(key==KeyEvent.KEYCODE_MENU) {
+                if(event.action==KeyEvent.ACTION_DOWN) {
+                    if(event.repeatCount==0 && !playError) { menuLongFired=false; main.postDelayed(menuLongRunnable,500) }
+                } else if(event.action==KeyEvent.ACTION_UP) {
+                    main.removeCallbacks(menuLongRunnable)
+                    if(menuLongFired) { menuLongFired=false; return true }
+                    if(playError) return true
+                    if(panel) { hidePlaybackOverlay(); return true }
+                    when(extras.menuKeyAction) {
+                        PlaybackExtras.MENU_EPISODES -> showEpisodePanel(hud)
+                        PlaybackExtras.MENU_DANMAKU -> detail?.series?.id?.let { toggleSeriesDanmaku(it) }
+                        else -> showPanel()
+                    }
+                }
+                return true
+            }
             if(key in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,KeyEvent.KEYCODE_MEDIA_PLAY,KeyEvent.KEYCODE_MEDIA_PAUSE,KeyEvent.KEYCODE_MEDIA_NEXT,KeyEvent.KEYCODE_MEDIA_PREVIOUS,KeyEvent.KEYCODE_MEDIA_STOP,KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,KeyEvent.KEYCODE_MEDIA_REWIND)) {
                 if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) when(key) {
                     KeyEvent.KEYCODE_MEDIA_PLAY -> requestPlayback(true)
@@ -3399,18 +3586,13 @@ class MainActivity: Activity() {
                 return true
             }
             if(!panel) {
-                if(key in listOf(KeyEvent.KEYCODE_DPAD_LEFT,KeyEvent.KEYCODE_DPAD_RIGHT,KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_MENU)) {
+                if(key in listOf(KeyEvent.KEYCODE_DPAD_LEFT,KeyEvent.KEYCODE_DPAD_RIGHT,KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN)) {
                     if(key==KeyEvent.KEYCODE_DPAD_RIGHT && event.action==KeyEvent.ACTION_UP) { stopFastForward(); return true }
                     if(event.action==KeyEvent.ACTION_DOWN) when(key) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> seek(-1,event.repeatCount)
                         KeyEvent.KEYCODE_DPAD_RIGHT -> if(event.repeatCount==0) seek(1,0) else startFastForward()
                         KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> if(event.repeatCount==0) togglePlayback()
                         KeyEvent.KEYCODE_DPAD_DOWN -> if(event.repeatCount==0) showEpisodePanel(hud)
-                        KeyEvent.KEYCODE_MENU -> if(event.repeatCount==0) when(extras.menuKeyAction) {
-                            PlaybackExtras.MENU_EPISODES -> showEpisodePanel(hud)
-                            PlaybackExtras.MENU_DANMAKU -> detail?.series?.id?.let { toggleSeriesDanmaku(it) }
-                            else -> showPanel()
-                        }
                         KeyEvent.KEYCODE_DPAD_UP -> if(event.repeatCount==0) showPanel()
                         else -> showHud()
                     }

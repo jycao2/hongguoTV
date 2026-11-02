@@ -311,7 +311,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             detailReturnMode = Mode.BROWSE; mode = back; rebuild(); true
         }
         Mode.SEARCH -> { searchWord = null; mode = Mode.BROWSE; rebuild(); true }
-        Mode.SOURCES -> { sourceBatchMode = false; sourceSelected.clear(); mode = Mode.BROWSE; rebuild(); true }
+        Mode.SOURCES -> { mode = Mode.BROWSE; rebuild(); true }
         Mode.HISTORY -> { mode = Mode.BROWSE; rebuild(); true }
         Mode.FAVORITE -> { mode = Mode.BROWSE; rebuild(); true }
         // 搜索结果页返回搜索页，方便改关键词；普通浏览交还 MainActivity
@@ -381,17 +381,69 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     // ================= 浏览态 =================
 
+    /** 顶部分段：浏览 / 搜索 / 源管理 + 观看历史 / 收藏，active 项高亮；返回引用便于焦点接线。 */
+    private data class SegmentRefs(val row: LinearLayout, val browse: TextView, val search: TextView, val sources: TextView, val history: TextView, val favorite: TextView)
+
+    private fun segmentRow(active: Mode): SegmentRefs {
+        val row = row()
+        fun seg(label: String, on: Boolean, action: () -> Unit) = text(label, 14f, if(on) TvStyle.accent else TvStyle.text).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            focusStyle(this, selected = on)
+            setOnClickListener { if(!on) action() }
+        }
+        val browse = seg("浏览", active == Mode.BROWSE) { mode = Mode.BROWSE; rebuild() }
+        val search = seg("搜索", active == Mode.SEARCH) { openSearch() }
+        val sources = seg("源管理", active == Mode.SOURCES) { openSources() }
+        row.addView(browse, lp(-2, -2).apply { rightMargin = dp(8) })
+        row.addView(search, lp(-2, -2).apply { rightMargin = dp(8) })
+        row.addView(sources, lp(-2, -2))
+        // 撑开左右两端：空白 View 若用 WRAP_CONTENT 会在 AT_MOST 下占满整行高度，这里固定 1dp
+        row.addView(View(activity), lp(0, dp(1)).apply { weight = 1f })
+        val history = seg("观看历史", active == Mode.HISTORY) { openHistory() }
+        val favorite = seg("收藏", active == Mode.FAVORITE) { openFavorites() }
+        row.addView(history, lp(-2, -2).apply { rightMargin = dp(8) })
+        row.addView(favorite, lp(-2, -2))
+        browse.nextFocusRightId = search.id; search.nextFocusLeftId = browse.id
+        search.nextFocusRightId = sources.id; sources.nextFocusLeftId = search.id
+        sources.nextFocusRightId = history.id; history.nextFocusLeftId = sources.id
+        history.nextFocusRightId = favorite.id; favorite.nextFocusLeftId = history.id
+        return SegmentRefs(row, browse, search, sources, history, favorite)
+    }
+
+    /** 当前源状态条文案：源名 + 探活状态（可连接 · 片量 · 延迟）。 */
+    private fun currentSourceBarText(): String {
+        val source = currentSource() ?: return "未选择片源"
+        val (label, _) = probeLabel(source.id)
+        return "当前源 ${source.name} · $label"
+    }
+
     private fun renderBrowse(container: LinearLayout) {
         detachPlayerViews()
         if(sources.isEmpty()) { renderEmptySources(container); return }
         val body = column().apply { setPadding(0, dp(4), 0, 0) }
 
-        // 源胶囊条 + 管理（搜索态隐藏，把高度让给结果网格）
+        // 分段导航 + 当前源状态条 + 源胶囊条（搜索态隐藏，把高度让给结果网格）
         var capsuleViews: List<View> = emptyList()
-        var manage: TextView? = null
-        var historyRef: TextView? = null
-        var favoriteRef: TextView? = null
+        var segment: SegmentRefs? = null
         if(searchWord == null) {
+            segment = segmentRow(Mode.BROWSE)
+            body.addView(segment.row)
+
+            // 当前源条：源名 / 探活状态 / 片量 / 延迟常驻，探活完成就地刷新
+            val bar = row().apply { setPadding(0, dp(2), 0, dp(6)) }
+            val barDot = View(activity).apply {
+                background = rounded(dotColor(currentId ?: ""), radius = 3)
+                layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) }
+            }
+            currentBarDot = barDot
+            bar.addView(barDot)
+            currentBarText = text(currentSourceBarText(), 13f)
+            bar.addView(currentBarText, lp(0, -2).apply { weight = 1f })
+            probeSummary = text(probeSummaryText(), 12f, muted)
+            bar.addView(probeSummary)
+            body.addView(bar)
+
             val sourceRow = row()
             val capsuleScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isFocusable = false; clipToPadding = false }
             val capsules = row(); capsuleDots.clear()
@@ -400,13 +452,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             sourceButtons = capsuleViews
             capsuleScroll.addView(capsules)
             sourceRow.addView(capsuleScroll, lp(0, -2).apply { weight = 1f })
-            historyRef = addButton(sourceRow, "观看历史") { openHistory() }
-            favoriteRef = addButton(sourceRow, "收藏") { openFavorites() }
-            manage = addButton(sourceRow, "管理") { openSources() }
             body.addView(sourceRow)
-
-            probeSummary = text(probeSummaryText(), 12f, muted).apply { setPadding(0, dp(5), 0, dp(5)) }
-            body.addView(probeSummary)
         } else sourceButtons = emptyList()
 
         // 分类 + 搜索：浏览态合为一行（分类居左、搜索居右上），搜索态只保留「重新搜索」
@@ -534,39 +580,33 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 recycler.post { recycler.findViewHolderForAdapterPosition(restorePosition)?.itemView?.requestFocus() }
             }
         }
-        // 焦点接线：源胶囊 ↓ → 分类（搜索态为重新搜索）；管理 ↓ → 右上角搜索；分类/搜索 ↓ → 网格
-        val rowAbove = currentCapsule?.id ?: historyRef?.id ?: favoriteRef?.id ?: manage?.id ?: View.NO_ID
+        // 焦点接线：分段 ↓ → 源胶囊；源胶囊 ↓ → 分类（搜索态为重新搜索）；分类/搜索 ↓ → 网格
+        val rowAbove = currentCapsule?.id ?: segment?.browse?.id ?: View.NO_ID
         gridRecycler?.id?.let { gridId ->
             val browseRow = categoryButtons.firstOrNull()?.id
             val secondRow = browseRow ?: filterButtons.firstOrNull()?.id ?: gridId
             capsuleViews.forEach { it.nextFocusDownId = browseRow ?: search.id }
-            historyRef?.nextFocusDownId = browseRow ?: search.id
-            favoriteRef?.nextFocusDownId = browseRow ?: search.id
-            manage?.nextFocusDownId = search.id
+            segment?.let { seg ->
+                val capsuleTarget = currentCapsule?.id ?: capsuleViews.firstOrNull()?.id ?: browseRow ?: gridId
+                seg.browse.nextFocusDownId = capsuleTarget
+                seg.search.nextFocusDownId = capsuleTarget
+                seg.sources.nextFocusDownId = capsuleTarget
+                seg.history.nextFocusDownId = if(searchWord == null) search.id else capsuleTarget
+                seg.favorite.nextFocusDownId = if(searchWord == null) search.id else capsuleTarget
+            }
             search.nextFocusDownId = if(browseRow != null) gridId else secondRow
             clearRef?.nextFocusDownId = secondRow
             categoryButtons.forEach { it.nextFocusDownId = gridId }
             filterButtons.forEach { it.nextFocusDownId = gridId; it.nextFocusUpId = search.id }
         }
+        capsuleViews.forEach { it.nextFocusUpId = segment?.browse?.id ?: View.NO_ID }
         categoryButtons.forEach { chip ->
             chip.nextFocusUpId = rowAbove
             chip.nextFocusRightId = search.id
         }
-        // 搜索入口在右上角，↑ 优先回到正上方的「管理」
-        search.nextFocusUpId = manage?.id ?: rowAbove
-        search.nextFocusLeftId = categoryButtons.firstOrNull()?.id ?: manage?.id ?: favoriteRef?.id ?: historyRef?.id ?: View.NO_ID
-        historyRef?.let { button ->
-            button.nextFocusRightId = favoriteRef?.id ?: manage?.id ?: View.NO_ID
-        }
-        favoriteRef?.let { button ->
-            button.nextFocusLeftId = historyRef?.id ?: View.NO_ID
-            button.nextFocusRightId = manage?.id ?: View.NO_ID
-        }
-        manage?.let { button ->
-            button.nextFocusLeftId = favoriteRef?.id ?: historyRef?.id ?: View.NO_ID
-            button.nextFocusRightId = clearRef?.id ?: search.id
-            clearRef?.nextFocusLeftId = button.id
-        }
+        // 搜索入口在右上角，↑ 回到分段行右侧的「收藏」
+        search.nextFocusUpId = segment?.favorite?.id ?: rowAbove
+        search.nextFocusLeftId = categoryButtons.firstOrNull()?.id ?: segment?.sources?.id ?: View.NO_ID
     }
 
     private fun sourceCapsule(source: ThirdSource, index: Int): LinearLayout {
@@ -1270,6 +1310,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                             val (label, color) = probeLabel(source.id)
                             view.text = label; view.setTextColor(color)
                         }
+                        if(source.id == currentId) {
+                            currentBarDot?.background = rounded(dotColor(source.id), radius = 3)
+                            currentBarText?.text = currentSourceBarText()
+                        }
                         probeSummary?.text = probeSummaryText()
                     }
                 }
@@ -1295,15 +1339,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     // ================= 源管理（独立页面）/ 添加 / 导入 =================
 
-    private var sourceBatchMode = false
-    private val sourceSelected = mutableSetOf<String>()
     private val sourceStatusViews = HashMap<String, TextView>()
-    private val sourceCheckViews = HashMap<String, TextView>()
-    private var batchActionButton: TextView? = null
-    private var batchSelectAllButton: TextView? = null
+    /** 浏览页「当前源」状态条：探活/测速完成时就地刷新，不重建页面。 */
+    private var currentBarDot: View? = null
+    private var currentBarText: TextView? = null
 
     private fun openSources() {
-        sourceBatchMode = false; sourceSelected.clear()
         mode = Mode.SOURCES
         rebuild()
     }
@@ -1340,6 +1381,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                         val (label, color) = probeLabel(source.id)
                         view.text = label; view.setTextColor(color)
                     }
+                    if(source.id == currentId) {
+                        currentBarDot?.background = rounded(dotColor(source.id), radius = 3)
+                        currentBarText?.text = currentSourceBarText()
+                    }
                 }
                 if(result.ok && cost < bestMs) { bestMs = cost; best = source }
             }
@@ -1361,147 +1406,150 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         detachPlayerViews()
         val body = column().apply { setPadding(0, dp(2), 0, 0) }
 
-        // 顶栏：返回 + 标题 + 批量选择
-        val head = row()
-        addButton(head, "‹ 返回") { onBack() }
-        head.addView(text("源管理", 20f).apply {
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(dp(8), 0, 0, 0); gravity = Gravity.CENTER_VERTICAL
-        }, lp(0, dp(46)).apply { weight = 1f })
-        addButton(head, if(sourceBatchMode) "退出批量" else "批量删除") {
-            sourceBatchMode = !sourceBatchMode
-            sourceSelected.clear()
-            rebuild()
-        }
-        body.addView(head, lp(-1, -2).apply { bottomMargin = dp(8) })
+        // 顶部分段：浏览 / 搜索 / 源管理（当前）+ 观看历史 / 收藏
+        val segment = segmentRow(Mode.SOURCES)
+        body.addView(segment.row, lp(-1, -2).apply { bottomMargin = dp(8) })
 
-        // 操作行
+        // 操作行：添加与两种导入并列，测速优选自动切到最快可用源
         val actions = row()
         val add = addButton(actions, "＋ 添加源") { showAddSourceDialog() }
         val importTvbox = addButton(actions, "＋ 导入配置") { showImportDialog() }
         val transfer = addButton(actions, "导入/导出配置（扫码）") { showSourceTransfer() }
         val speed = addButton(actions, "测速优选") { speedTest() }
-        body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(6) })
+        body.addView(actions, lp(-1, -2).apply { bottomMargin = dp(4) })
 
-        // 源列表：名称 / 主机 / 探活状态 / 使用中；批量模式下点击勾选
-        capsuleDots.clear(); sourceStatusViews.clear(); sourceCheckViews.clear()
-        batchActionButton = null; batchSelectAllButton = null
+        // 源卡片：每行 3 张，卡内 设为当前 / 测试 / 删除，探活状态就地刷新
+        capsuleDots.clear(); sourceStatusViews.clear()
         val listScroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         val list = column()
         listScroll.addView(list, FrameLayout.LayoutParams(-1, -2))
-        val rows = mutableListOf<View>()
-        sources.forEach { source ->
-            val isCurrent = source.id == currentId
-            val selected = source.id in sourceSelected
-            val line = row().apply {
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-                background = rounded(if(selected) TvStyle.selectedSurface else TvStyle.surface)
+        val grid = mutableListOf<MutableList<List<TextView>>>()
+        sources.chunked(3).forEach { group ->
+            val line = row().apply { gravity = Gravity.TOP }
+            val rowButtons = mutableListOf<List<TextView>>()
+            group.forEachIndexed { c, source ->
+                val isCurrent = source.id == currentId
+                val card = column().apply {
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = rounded(if(isCurrent) TvStyle.selectedSurface else TvStyle.surface,
+                        if(isCurrent) TvStyle.accent else Color.TRANSPARENT)
+                }
+                val topLine = row()
+                val dot = View(activity).apply {
+                    background = rounded(dotColor(source.id), radius = 3)
+                    layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(8) }
+                }
+                capsuleDots[source.id] = dot
+                topLine.addView(dot)
+                topLine.addView(text(source.name, 15f, if(isCurrent) TvStyle.accent else TvStyle.text).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, lp(0, -2).apply { weight = 1f })
+                if(isCurrent) topLine.addView(text("当前", 12f, TvStyle.accent))
+                card.addView(topLine)
+                card.addView(text(hostOf(source.api), 12f, muted).apply { setPadding(0, dp(2), 0, 0) })
+                val (label, color) = probeLabel(source.id)
+                val status = text(label, 12f, color).apply { setPadding(0, dp(2), 0, dp(6)) }
+                sourceStatusViews[source.id] = status
+                card.addView(status)
+                val btnRow = row()
+                val useBtn = text(if(isCurrent) "使用中" else "设为当前", 13f, if(isCurrent) TvStyle.accent else TvStyle.text).apply {
+                    gravity = Gravity.CENTER; setPadding(dp(10), dp(7), dp(10), dp(7)); focusStyle(this, selected = isCurrent)
+                    setOnClickListener { if(source.id != currentId) switchSource(source) }
+                }
+                val testBtn = text("测试", 13f).apply {
+                    gravity = Gravity.CENTER; setPadding(dp(10), dp(7), dp(10), dp(7)); focusStyle(this)
+                    setOnClickListener { speedTestOne(source) }
+                }
+                val delBtn = text("删除", 13f, muted).apply {
+                    gravity = Gravity.CENTER; setPadding(dp(10), dp(7), dp(10), dp(7)); focusStyle(this)
+                    setOnClickListener { confirmDeleteSource(source) }
+                }
+                btnRow.addView(useBtn, lp(-2, -2).apply { rightMargin = dp(6) })
+                btnRow.addView(testBtn, lp(-2, -2).apply { rightMargin = dp(6) })
+                btnRow.addView(delBtn, lp(-2, -2))
+                card.addView(btnRow, lp(-1, -2).apply { topMargin = dp(2) })
+                line.addView(card, lp(0, -2).apply { weight = 1f; if(c < group.lastIndex) rightMargin = dp(10) })
+                rowButtons += listOf(useBtn, testBtn, delBtn)
             }
-            if(sourceBatchMode) {
-                val check = text(if(selected) "✓" else "○", 16f, if(selected) TvStyle.accent else muted)
-                sourceCheckViews[source.id] = check
-                line.addView(check, lp(-2, -2).apply { rightMargin = dp(10) })
-            }
-            val dot = View(activity).apply {
-                background = rounded(dotColor(source.id), radius = 3)
-                layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { rightMargin = dp(8) }
-            }
-            capsuleDots[source.id] = dot
-            line.addView(dot)
-            val nameColumn = column()
-            nameColumn.addView(text(source.name, 15f, if(isCurrent) TvStyle.accent else TvStyle.text))
-            nameColumn.addView(text(hostOf(source.api), 12f, muted))
-            line.addView(nameColumn, lp(0, -2).apply { weight = 1f })
-            val (label, color) = probeLabel(source.id)
-            val status = text(label, 12f, color)
-            sourceStatusViews[source.id] = status
-            line.addView(status, lp(-2, -2).apply { rightMargin = dp(8) })
-            if(isCurrent) line.addView(text("使用中", 12f, TvStyle.accent))
-            focusStyle(line, selected = isCurrent || selected)
-            line.setOnClickListener {
-                if(sourceBatchMode) {
-                    // 就地更新勾选，不重建页面，避免焦点丢失
-                    if(!sourceSelected.remove(source.id)) sourceSelected += source.id
-                    refreshBatchUi()
-                } else switchSource(source)
-            }
-            line.setOnKeyListener { _, key, event ->
-                if(!sourceBatchMode && key == KeyEvent.KEYCODE_DPAD_LEFT && event.action == KeyEvent.ACTION_UP) {
-                    confirmDeleteSource(source); true
-                } else false
-            }
-            list.addView(line, lp(-1, -2).apply { bottomMargin = dp(6) })
-            rows += line
+            repeat(3 - group.size) { line.addView(View(activity), lp(0, dp(1)).apply { weight = 1f }) }
+            list.addView(line, lp(-1, -2).apply { bottomMargin = dp(10) })
+            grid += rowButtons
         }
         if(sources.isEmpty()) message(list, "暂无片源信息，请添加源或导入配置")
         body.addView(listScroll, lp(-1, 0).apply { weight = 1f })
-
-        // 底部：全选 / 批量删除 / 操作提示
-        var selectAllRef: TextView? = null
-        var removeRef: TextView? = null
-        if(sourceBatchMode) {
-            val bar = row().apply { setPadding(0, dp(6), 0, 0) }
-            selectAllRef = addButton(bar, if(sourceSelected.size == sources.size) "取消全选" else "全选") {
-                if(sourceSelected.size == sources.size) sourceSelected.clear()
-                else sourceSelected.addAll(sources.map { it.id })
-                refreshBatchUi()
-            }
-            removeRef = addButton(bar, "删除所选（${sourceSelected.size}）") { confirmBatchDelete() }
-            removeRef?.let { it.isEnabled = sourceSelected.isNotEmpty() }
-            batchSelectAllButton = selectAllRef
-            batchActionButton = removeRef
-            body.addView(bar)
-            body.addView(text("点击条目勾选 · 「全选」一键勾选全部 · 删除前二次确认", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
-        } else {
-            body.addView(text("点击源条目切换使用 · 条目上按 ← 删除该源 · 顶部「批量删除」可多选 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
-        }
+        body.addView(text("卡内直接操作：设为当前 / 测试 / 删除 · 删除前二次确认 · 上限 ${ThirdCms.MAX_SOURCES} 个", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         body.addView(text(SOURCE_DISCLAIMER, 12f, muted).apply { setPadding(0, dp(8), 0, dp(2)) })
 
         container.addView(body, lp(-1, 0).apply { weight = 1f })
 
-        // 焦点：默认第一条源；上下串联，操作行与列表互通
-        topFocusId = rows.firstOrNull()?.id ?: add.id
-        rows.forEachIndexed { index, view ->
-            view.nextFocusUpId = rows.getOrNull(index - 1)?.id ?: add.id
-            view.nextFocusDownId = rows.getOrNull(index + 1)?.id ?: View.NO_ID
-        }
-        // 批量操作条：列表末尾 ↓ 进入，全选 ↔ 删除所选
-        if(selectAllRef != null || removeRef != null) {
-            rows.lastOrNull()?.let { last -> last.nextFocusDownId = selectAllRef?.id ?: removeRef?.id ?: View.NO_ID }
-            selectAllRef?.let { all -> all.nextFocusRightId = removeRef?.id ?: View.NO_ID }
-            removeRef?.let { remove ->
-                remove.nextFocusLeftId = selectAllRef?.id ?: View.NO_ID
-                remove.nextFocusUpId = rows.lastOrNull()?.id ?: View.NO_ID
+        // 焦点：默认第一张卡的「设为当前」；卡内左右串联，跨卡同位列对齐，行间上下串联
+        topFocusId = grid.firstOrNull()?.firstOrNull()?.firstOrNull()?.id ?: add.id
+        add.nextFocusRightId = importTvbox.id; importTvbox.nextFocusLeftId = add.id
+        importTvbox.nextFocusRightId = transfer.id; transfer.nextFocusLeftId = importTvbox.id
+        transfer.nextFocusRightId = speed.id; speed.nextFocusLeftId = transfer.id
+        segment.browse.nextFocusDownId = add.id
+        segment.search.nextFocusDownId = add.id
+        segment.sources.nextFocusDownId = add.id
+        segment.history.nextFocusDownId = speed.id
+        segment.favorite.nextFocusDownId = speed.id
+        add.nextFocusUpId = segment.browse.id; importTvbox.nextFocusUpId = segment.browse.id
+        transfer.nextFocusUpId = segment.history.id; speed.nextFocusUpId = segment.favorite.id
+        val actionDown = listOf(add.id, transfer.id, speed.id)
+        grid.forEachIndexed { r, rowButtons ->
+            rowButtons.forEachIndexed { c, buttons ->
+                buttons.forEachIndexed { k, button ->
+                    button.nextFocusLeftId = if(k > 0) buttons[k - 1].id
+                        else grid[r].getOrNull(c - 1)?.lastOrNull()?.id ?: View.NO_ID
+                    button.nextFocusRightId = if(k < buttons.lastIndex) buttons[k + 1].id
+                        else grid[r].getOrNull(c + 1)?.firstOrNull()?.id ?: View.NO_ID
+                    button.nextFocusUpId = if(r > 0) grid[r - 1].getOrNull(c)?.getOrNull(k)?.id
+                        ?: grid[r - 1].lastOrNull()?.getOrNull(k)?.id ?: View.NO_ID
+                        else actionDown.getOrElse(c) { speed.id }
+                    button.nextFocusDownId = grid.getOrNull(r + 1)?.getOrNull(c)?.getOrNull(k)?.id
+                        ?: grid.getOrNull(r + 1)?.lastOrNull()?.getOrNull(k)?.id ?: View.NO_ID
+                }
             }
         }
-        // 操作行左右串联：添加源 → 导入配置 → 导入/导出配置
-        add.nextFocusRightId = importTvbox.id
-        importTvbox.nextFocusLeftId = add.id
-        importTvbox.nextFocusRightId = transfer.id
-        transfer.nextFocusLeftId = importTvbox.id
-        transfer.nextFocusRightId = speed.id
-        speed.nextFocusLeftId = transfer.id
-        speed.nextFocusRightId = View.NO_ID
-        speed.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
-        transfer.nextFocusDownId = rows.firstOrNull()?.id ?: View.NO_ID
+        // 操作行 ↓ → 首行对应列卡片
+        grid.firstOrNull()?.let { firstRow ->
+            add.nextFocusDownId = firstRow.getOrNull(0)?.firstOrNull()?.id ?: View.NO_ID
+            importTvbox.nextFocusDownId = firstRow.getOrNull(0)?.firstOrNull()?.id ?: View.NO_ID
+            transfer.nextFocusDownId = (firstRow.getOrNull(1) ?: firstRow.getOrNull(0))?.firstOrNull()?.id ?: View.NO_ID
+            speed.nextFocusDownId = (firstRow.getOrNull(2) ?: firstRow.lastOrNull())?.firstOrNull()?.id ?: View.NO_ID
+        }
     }
 
-    /** 批量模式就地刷新：勾选标记、按钮文字与可用状态，不重建页面（避免焦点丢失）。 */
-    private fun refreshBatchUi() {
-        val count = sourceSelected.size
-        sourceCheckViews.forEach { (id, check) ->
-            val on = id in sourceSelected
-            check.text = if(on) "✓" else "○"
-            check.setTextColor(if(on) TvStyle.accent else muted)
+    /** 单源测速：只探这一个源并就地刷新状态与延迟，不触发自动切源。 */
+    private fun speedTestOne(source: ThirdSource) {
+        Toast.makeText(activity, "正在测试「${source.name}」…", Toast.LENGTH_SHORT).show()
+        val gen = generation
+        probeExecutor.execute {
+            val started = android.os.SystemClock.elapsedRealtime()
+            val result = client.probe(source.api)
+            val cost = android.os.SystemClock.elapsedRealtime() - started
+            main.post {
+                if(gen != generation) return@post
+                probes[source.id] = if(result.ok) ProbeState(Dot.OK, result.total) else ProbeState(Dot.DEAD, 0, result.reason)
+                latencyMs[source.id] = if(result.ok) cost else -1L
+                store.saveProbe(source.api, ThirdProbeRecord(result.ok, result.total, result.reason, System.currentTimeMillis()))
+                capsuleDots[source.id]?.let { dot -> dot.background = rounded(dotColor(source.id), radius = 3) }
+                sourceStatusViews[source.id]?.let { view ->
+                    val (label, color) = probeLabel(source.id)
+                    view.text = label; view.setTextColor(color)
+                }
+                if(source.id == currentId) {
+                    currentBarDot?.background = rounded(dotColor(source.id), radius = 3)
+                    currentBarText?.text = currentSourceBarText()
+                }
+                probeSummary?.text = probeSummaryText()
+                Toast.makeText(activity,
+                    if(result.ok) "「${source.name}」可连接 · ${cost}ms" else "「${source.name}」不可用：${result.reason ?: "无响应"}",
+                    Toast.LENGTH_LONG).show()
+            }
         }
-        batchActionButton?.let { button ->
-            button.text = "删除所选（$count）"
-            button.isEnabled = count > 0
-        }
-        batchSelectAllButton?.text = if(sources.isNotEmpty() && count == sources.size) "取消全选" else "全选"
     }
 
-    /** 单源删除：行上遥控器左键触发；删除当前源则顺延到第一个剩余源。 */
+    /** 单源删除：卡片「删除」按钮触发；删除当前源则顺延到第一个剩余源。 */
     private fun confirmDeleteSource(source: ThirdSource) {
         tvTools.confirm("删除片源", "确定删除「${source.name}」吗？删除后可通过导入配置或扫码导入找回。", null) {
             val remaining = sources.filterNot { it.id == source.id }
@@ -1510,22 +1558,6 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             probes.remove(source.id)
             resetBrowseState()
             Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
-            backupRequest(); rebuild()
-        }
-    }
-
-    /** 批量删除：选中项二次确认后移除，当前源被删则顺延到第一个剩余源。 */
-    private fun confirmBatchDelete() {
-        val targets = sources.filter { it.id in sourceSelected }
-        if(targets.isEmpty()) return
-        tvTools.confirm("批量删除源", "确定删除选中的 ${targets.size} 个源吗？删除后可通过导入配置或扫码导入找回。", null) {
-            val remaining = sources.filterNot { it.id in sourceSelected }
-            store.saveSources(remaining.take(ThirdCms.MAX_SOURCES))
-            if(remaining.none { it.id == currentId }) store.setCurrent(remaining.firstOrNull()?.id)
-            targets.forEach { probes.remove(it.id) }
-            sourceSelected.clear(); sourceBatchMode = false
-            resetBrowseState()
-            Toast.makeText(activity, "已删除 ${targets.size} 个源", Toast.LENGTH_SHORT).show()
             backupRequest(); rebuild()
         }
     }
