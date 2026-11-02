@@ -219,6 +219,8 @@ class MainActivity: Activity() {
     private val tabState=mutableMapOf<Int,CatalogState>()
     private val tabFocus=mutableMapOf<Int,String>()
     private val nav=mutableListOf<View>()
+    // 二级分段首项：导航 ↓ 先落到分段，再进内容
+    private var segmentFirst: View?=null
     private val typeButtons=mutableMapOf<ContentType,View>()
     private var searchInput: View?=null
     private var searchButton: View?=null
@@ -528,7 +530,7 @@ class MainActivity: Activity() {
         homeScreen?.let { homePosition=it.capturePosition() }
         (catalogRecycler?.layoutManager as? GridLayoutManager)?.let { scrollPositions[catalogPageKey]=it.findFirstVisibleItemPosition() }
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
-        nav.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
+        nav.clear(); segmentFirst=null; typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
         historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
@@ -637,24 +639,60 @@ class MainActivity: Activity() {
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
         brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
         top.addView(brand,lp(dp(172),dp(44)))
-        listOf("首页","搜索","排行榜","收藏","最近观看","设置","片源").forEachIndexed { index,label ->
-            // 首页与设置固定显示，其余模块可单独隐藏（设置 → 导航模块）
-            val hidden=navHiddenAt(index)
-            val item=addButton(top,label,index==tab) { switchTab(index) }
-            item.visibility=if(hidden) View.GONE else View.VISIBLE
-            fun paint(focused: Boolean) {
-                item.setTextColor(if(focused) bg else if(index==tab) accent else muted)
-                item.background=rounded(if(focused) white else if(index==tab) TvStyle.selectedSurface else Color.TRANSPARENT)
-                item.setTypeface(null,if(focused || index==tab) Typeface.BOLD else Typeface.NORMAL)
+        // 一级导航收为四个意图区：首页 / 发现 / 片源 / 我的；搜索与排行榜并入发现，收藏与历史并入我的
+        val homeButton=button("首页",tab==0) { switchTab(0) }
+        val areaButtons=listOf(
+            Triple(1,"发现",listOf(1,2)),
+            Triple(6,"片源",listOf(6)),
+            Triple(3,"我的",listOf(3,4))).map { entry ->
+            lateinit var view: TextView
+            view=button(entry.second,tab==entry.first || tab in entry.third) {
+                val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
+                if(target!=tab) switchTab(target) else view.requestFocus()
             }
-            paint(false); item.setOnFocusChangeListener { _,focused -> paint(focused) }; nav+=item
+            // 子模块全部隐藏时整个意图区消失
+            view.visibility=if(entry.third.all { navHiddenAt(it) }) View.GONE else View.VISIBLE
+            view
+        }
+        lateinit var quickTool: TextView
+        quickTool=button("手机快传",false) {
+            tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{})
+        }.apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
+        val settingsTool=button("设置",tab==5) { switchTab(5) }
+            .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2]).forEach { item ->
+            top.addView(item,lp(-2,-2).apply { rightMargin=dp(4) })
+        }
+        // 右上工具与首页内容类型一起，等类型按钮挂完后再按 类型 → 留白 → 工具 的顺序追加
+        // 保留 7 项索引语义：搜索/排行榜共用发现按钮，收藏/历史共用我的按钮，设置由右上工具承载
+        nav.addAll(listOf(homeButton,areaButtons[0],areaButtons[0],areaButtons[2],areaButtons[2],settingsTool,areaButtons[1]))
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],quickTool,settingsTool).let { chain ->
+            chain.forEachIndexed { index,item ->
+                item.nextFocusLeftId=chain.getOrNull(index-1)?.id ?: item.id
+                item.nextFocusRightId=chain.getOrNull(index+1)?.id ?: item.id
+                item.nextFocusUpId=item.id
+            }
         }
         container.addView(top)
         container.addView(View(this).apply { setBackgroundColor(TvStyle.outline) },lp(-1,dp(1)).apply { bottomMargin=dp(6) })
+        // 二级分段：发现（搜索/排行榜）与我的（收藏/最近观看）同层切换，隐藏的模块不占位
+        var segmentChips: List<TextView> =emptyList()
+        if(tab in 1..4) {
+            val options=if(tab<=2) listOf(1 to "搜索",2 to "排行榜") else listOf(3 to "收藏",4 to "最近观看")
+            val segRow=row().apply { setPadding(0,0,0,dp(8)) }
+            segmentChips=options.filter { !navHiddenAt(it.first) }.map { (index,label) ->
+                chip(label,index==tab) { if(index!=tab) switchTab(index) }.apply {
+                    textSize=14f; minHeight=dp(34); setPadding(dp(16),dp(7),dp(16),dp(7))
+                }
+            }
+            segmentChips.forEach { segRow.addView(it,lp(-2,-2).apply { rightMargin=dp(6) }) }
+            segmentFirst=segmentChips.firstOrNull()
+            if(segmentChips.isNotEmpty()) container.addView(segRow)
+        }
         if(tab==6) {
             val instance=third ?: ThirdSourceScreen(this, { showCatalog() }, { library.requestBackup() }).also { third=it }
             instance.show(container)
-            nav[tab].nextFocusDownId=instance.topFocusId
+            nav.forEach { it.nextFocusDownId=instance.topFocusId }
             val target=if(instance.topFocusId != View.NO_ID) container.findViewById<View>(instance.topFocusId) else null
             if(target != null) target.requestFocus() else nav[tab].requestFocus()
             return
@@ -695,7 +733,7 @@ class MainActivity: Activity() {
                 types.addView(filterToggle,lp(-2,-2))
             }
             if(inlineHomeFilters()) {
-                top.addView(Space(this),lp(0,1).apply { weight=1f })
+                top.addView(Space(this),lp(dp(10),1))
                 typeButtons.values.forEach { view -> (view as TextView).apply { textSize=12f; minHeight=dp(34); setPadding(dp(12),dp(7),dp(12),dp(7)) } }
                 types.setPadding(0,0,0,0); top.addView(types)
             } else {
@@ -705,6 +743,10 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=(if(tab==1) filterToggle else typeButtons[library.contentType] ?: typeButtons.values.firstOrNull())?.id ?: nav[tab].id }
             }
         }
+        // 右上工具固定在行末：类型按钮靠左，留白推开后接手机快传与设置
+        top.addView(Space(this),lp(0,1).apply { weight=1f })
+        top.addView(quickTool,lp(-2,-2).apply { rightMargin=dp(8) })
+        top.addView(settingsTool,lp(-2,-2))
         if(tab==1) {
             // 机型分级：≥900dp 三栏（键盘+历史 / 联想 / 结果），700-900dp 两栏，<700dp 回退纵向堆叠
             val mode=when { widthDp()>=900 -> 3; widthDp()>=700 -> 2; else -> 0 }
@@ -721,6 +763,12 @@ class MainActivity: Activity() {
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=typeButtons[library.contentType]?.id ?: nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
+            // 输入框会吞掉方向键：↑ 显式交回分段/内容类型，避免焦点困在搜索框里
+            input.setOnKeyListener { _,key,event ->
+                if(key==KeyEvent.KEYCODE_DPAD_UP && event.action==KeyEvent.ACTION_DOWN) {
+                    (segmentFirst ?: typeButtons[library.contentType] ?: nav.getOrNull(tab))?.requestFocus(); true
+                } else false
+            }
             if(mode==0) {
                 lateinit var recent: TextView
                 recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
@@ -926,6 +974,22 @@ class MainActivity: Activity() {
                 container.addView(filterRow,container.indexOfChild(favoriteStatus))
             }
         }
+        // 分段与页面首个可操作控件互连：导航 ↓ 分段，分段 ↓ 内容，焦点从内容 ↑ 可回到分段
+        if(segmentChips.isNotEmpty()) {
+            val firstControl: View?=when(tab) {
+                1 -> if(advancedSearch) filterToggle ?: searchInput else searchInput
+                2 -> aiBack ?: aiGenreButton ?: aiEntry ?: rankSwitch ?: rankRefresh
+                3 -> favoriteFilterFirst ?: favoriteCheck
+                else -> historyManage
+            }
+            segmentChips.forEachIndexed { index,item ->
+                item.nextFocusUpId=nav[tab].id
+                item.nextFocusLeftId=segmentChips[(index-1).coerceAtLeast(0)].id
+                item.nextFocusRightId=segmentChips[(index+1).coerceAtMost(segmentChips.lastIndex)].id
+                item.nextFocusDownId=firstControl?.id ?: View.NO_ID
+            }
+            nav.forEach { it.nextFocusDownId=segmentChips.first().id }
+        }
         if(localCatalog()) {
             catalog=localItems(); ranking=null; page=1; hasMore=false
         }
@@ -1058,7 +1122,7 @@ class MainActivity: Activity() {
         }
         body.addView(recycler,lp(-1,0).apply { weight=1f })
         nav.forEach {
-            it.nextFocusDownId=when {
+            it.nextFocusDownId=segmentFirst?.id ?: when {
                 tab==2 -> (if(aiCatalog) aiBack ?: aiGenreButton ?: rankRefresh else aiEntry ?: rankSwitch ?: rankRefresh)?.id ?: recycler.id
                 tab<=1 -> (if(tab==1) filterToggle else typeButtons[library.contentType])?.id ?: recycler.id
                 else -> favoriteCheck?.id ?: historyManage?.id ?: recycler.id
@@ -1240,9 +1304,9 @@ class MainActivity: Activity() {
     }
     private fun renderHome(body: LinearLayout,focusNav: Boolean,focusType: Boolean,loading: Boolean) {
         homeUpdateCount=library.updatedFavorites()
-        val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
         val top=if(inlineHomeFilters()) nav[0] else typeButtons.getValue(library.contentType)
-        val home=HomeScreen(this,top,::loadCover,{ item,label -> preview.show(item,if(label.startsWith("第 ")) selectionStatus(item) else listOf(label,selectionStatus(item)).filter { it.isNotBlank() }.joinToString(" · ")) },
+        // 首页改由 Hero 展示当前焦点剧集（图、剧名、进度），不再额外占用一行文字预览
+        val home=HomeScreen(this,top,::loadCover,{ _, _-> },
             { item,resume -> openDetail(item,resume) },::quickActions,{ catalogFocus=it })
         homeScreen=home; body.addView(home,lp(-1,0).apply { weight=1f })
         val hot=catalog.filterNot { it.id in library.hidden() }

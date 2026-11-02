@@ -2,7 +2,9 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
@@ -63,6 +65,36 @@ class HomeScreen(
     private var restoring=false
     private var revision=0
     val refresh=label("正在更新热门…",14f,TvStyle.muted).apply { id=View.generateViewId(); tag="home:refresh"; isFocusable=true; isFocusableInTouchMode=true; gravity=Gravity.CENTER; minHeight=dp(44); setPadding(dp(16),dp(10),dp(16),dp(10)); background=shape(false); setOnFocusChangeListener { _,f -> background=shape(f); setTextColor(if(f) TvStyle.text else TvStyle.muted); if(f) lastFocus=tag.toString() } }
+    // Hero：跟随当前焦点换图换字，只替换内容不做动画，冷启动先用纯色兜底
+    private val heroImage=ImageView(context).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
+    private val heroKicker=label("",11f,TvStyle.gold).apply { setPadding(0,0,0,dp(4)) }
+    private val heroTitle=label("",29f).apply {
+        typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END
+    }
+    private val heroMeta=label("",12f,TvStyle.muted).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(0,dp(5),0,0) }
+    private val heroDesc=label("",13f,TvStyle.muted).apply { maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(0,dp(5),0,0) }
+    private val heroProgress=ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal).apply {
+        max=100; visibility=INVISIBLE; progressTintList=android.content.res.ColorStateList.valueOf(accent)
+    }
+    private val heroCopy=LinearLayout(context).apply {
+        orientation=VERTICAL; gravity=Gravity.BOTTOM
+        setPadding(dp(26),dp(12),dp(26),dp(14))
+        addView(heroKicker); addView(heroTitle); addView(heroMeta); addView(heroDesc)
+        addView(heroProgress,LayoutParams(-1,dp(3)).apply { topMargin=dp(9) })
+    }
+    private val hero=FrameLayout(context).apply {
+        addView(heroImage,LayoutParams(-1,-1))
+        addView(View(context).apply {
+            background=GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,intArrayOf(
+                Color.argb(240,11,15,21),Color.argb(196,11,15,21),Color.argb(84,11,15,21),Color.argb(6,11,15,21)))
+        },LayoutParams(-1,-1))
+        addView(View(context).apply {
+            background=GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,intArrayOf(Color.argb(238,11,15,21),Color.TRANSPARENT))
+        },LayoutParams(-1,-1))
+        addView(heroCopy,LayoutParams(-1,-1).apply { gravity=Gravity.BOTTOM })
+    }
+    private var heroEntry: Entry?=null
+    private fun heroHeight()=(resources.displayMetrics.heightPixels*.30f).toInt()
     init { orientation=VERTICAL; scroll.addView(contents); addView(scroll,LayoutParams(-1,0,1f)) }
 
     fun capturePosition(): Position {
@@ -91,7 +123,30 @@ class HomeScreen(
         return true
     }
 
-    fun refreshSelection() { cards[lastFocus]?.entry?.let { selected(it.series,it.label) } }
+    fun refreshSelection() {
+        cards[lastFocus]?.entry?.let { entry ->
+            selected(entry.series,entry.label)
+            showHero(entry,lastFocus.substringBefore(':'))
+        }
+    }
+
+    /** Hero 只替换图与文字：焦点换到哪张卡，就同步展示该剧的封面、剧名与进度。 */
+    private fun showHero(entry: Entry,shelfKey: String) {
+        heroEntry=entry
+        val shelf=shelves.firstOrNull { it.key==shelfKey }
+        heroKicker.text=listOfNotNull(shelf?.title,entry.label.takeIf { it.isNotBlank() }).joinToString("  ·  ")
+        heroTitle.text=entry.series.title
+        val meta=listOf(entry.series.badge,entry.series.tags).map { it.trim() }.filter { it.isNotBlank() }.joinToString("  /  ")
+        heroMeta.text=meta; heroMeta.visibility=if(meta.isBlank()) GONE else VISIBLE
+        val desc=entry.series.description.trim()
+        heroDesc.text=desc; heroDesc.visibility=if(desc.isBlank()) GONE else VISIBLE
+        heroProgress.apply { progress=entry.progress ?: 0; visibility=if(entry.progress==null) INVISIBLE else VISIBLE }
+        if(entry.series.cover.isNotBlank()) loadCover(heroImage,entry.series.cover) else heroImage.setImageDrawable(null)
+    }
+
+    private fun requestHeroCover() {
+        heroEntry?.let { if(it.series.cover.isNotBlank()) loadCover(heroImage,it.series.cover) }
+    }
 
     /** Retry visible cover requests after the owner cancels work for a page or lifecycle change. */
     fun reloadArtwork() {
@@ -102,7 +157,9 @@ class HomeScreen(
         val previous=position ?: if(rows.isNotEmpty()) capturePosition() else null
         this.shelves=shelves; footerMore=more; revision++; val ticket=revision; restoring=true
         contents.removeAllViews(); rows.clear(); cards.clear(); moreButton=null; lastRow=null
-        shelves.filter { it.entries.isNotEmpty() || it.more!=null }.forEach { shelf ->
+        val display=shelves.filter { it.entries.isNotEmpty() || it.more!=null }
+        if(display.isNotEmpty()) contents.addView(hero,LayoutParams(-1,heroHeight()).apply { bottomMargin=dp(12) })
+        display.forEach { shelf ->
             val block=LinearLayout(context).apply { orientation=VERTICAL }
             val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(2),dp(4),dp(2),dp(9)) }
             heading.addView(View(context).apply { background=TvStyle.shape(context,accent,radius=2) },LayoutParams(dp(3),dp(14)).apply { rightMargin=dp(8) })
@@ -114,11 +171,13 @@ class HomeScreen(
             horizontal.addView(line); block.addView(horizontal)
             val rowCards=mutableListOf<Card>()
             fun addCard(entry: Entry?,moreAction: (() -> Unit)?=null) {
-                val width=((resources.displayMetrics.widthPixels*.9f-dp(70))/6).toInt().coerceAtLeast(dp(100))
+                // 接着看首轨用横版卡：一屏能放下更多「继续看」的剧
+                val landscape=shelf.key=="resume"
+                val width=((resources.displayMetrics.widthPixels*.9f-dp(70))/if(landscape) 4 else 6).toInt().coerceAtLeast(dp(if(landscape) 200 else 100))
                 val key=if(entry!=null) "${shelf.key}:${entry.series.id}" else "${shelf.key}:more"
                 val view=LinearLayout(context).apply { orientation=VERTICAL; id=View.generateViewId(); tag=key; isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(4),dp(4),dp(4),dp(8)); background=shape(false) }
-                val image=if(entry!=null) ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO } else null
-                view.addView(image ?: label("›",36f).apply { gravity=Gravity.CENTER },LayoutParams(-1,((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
+                val image=if(entry!=null) ImageView(context).apply { scaleType=if(landscape) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO } else null
+                view.addView(image ?: label("›",36f).apply { gravity=Gravity.CENTER },LayoutParams(-1,if(landscape) (width*.56f).toInt() else ((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
                 val title=label(entry?.series?.title ?: "查看全部",14f).apply { gravity=Gravity.TOP; includeFontPadding=true; minLines=2; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(5),dp(3),0) }
                 val badge=label(entry?.label ?: shelf.title,12f,TvStyle.muted).apply { minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(2),0,0) }
                 val progress=ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; progress=entry?.progress ?: 0; visibility=if(entry?.progress==null) INVISIBLE else VISIBLE; progressTintList=android.content.res.ColorStateList.valueOf(accent) }
@@ -133,7 +192,7 @@ class HomeScreen(
                 view.setOnFocusChangeListener { _,focused ->
                     view.background=shape(focused)
                     if(focused) {
-                        lastFocus=key; remember(key); card.entry?.let { selected(it.series,it.label) }
+                        lastFocus=key; remember(key); card.entry?.let { entry -> selected(entry.series,entry.label); showHero(entry,shelf.key) }
                         if(!restoring) {
                             loadNearbySelection()
                             if(lastRow!=shelf.key) scroll.post { if(revision==ticket && view.hasFocus()) reveal(block) }
@@ -166,6 +225,8 @@ class HomeScreen(
         top.nextFocusDownId=firstId()
         val preferred=focus.ifBlank { previous?.focus.orEmpty() }
         val target=target(preferred,previous)
+        val seedKey=cards.keys.firstOrNull { it==preferred } ?: cards.keys.firstOrNull().orEmpty()
+        cards[seedKey]?.entry?.let { showHero(it,seedKey.substringBefore(':')) }
         if(requestFocus) target.requestFocus()
         post layout@{
             if(revision!=ticket) return@layout
@@ -176,6 +237,7 @@ class HomeScreen(
                 restoring=false
                 if(requestFocus && previous==null) rows.firstOrNull { row -> row.cards.any { it.view===target } }?.let { revealSelection(it) }
                 loadNearbySelection()
+                requestHeroCover()
             }
         }
     }
@@ -242,8 +304,8 @@ class HomeScreen(
             })
         }
     }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); post { reloadArtwork() } }
-    override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh); if(w!=oldw || h!=oldh) post { fitArtwork(); loadNearbySelection() } }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); post { reloadArtwork(); requestHeroCover() } }
+    override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh); if(w!=oldw || h!=oldh) post { fitArtwork(); loadNearbySelection(); requestHeroCover() } }
     private fun fitArtwork() {
         if(height<=0) return
         rows.forEach { row ->
@@ -254,7 +316,8 @@ class HomeScreen(
                 val view=item.view.getChildAt(child); val params=view.layoutParams as LayoutParams
                 (if(params.height>0) params.height else view.measuredHeight)+params.topMargin+params.bottomMargin
             } }
-            val desired=((row.cards.first().view.width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
+            val width=row.cards.first().view.width
+            val desired=if(row.key=="resume") (width*.56f).toInt() else ((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
             val imageHeight=minOf(desired,(height-row.block.getChildAt(0).measuredHeight-textHeight-dp(8)).coerceAtLeast(dp(48)))
             row.cards.forEach { card -> card.view.getChildAt(0).let { artwork -> if(artwork.layoutParams.height!=imageHeight) artwork.layoutParams=artwork.layoutParams.apply { height=imageHeight } } }
         }
