@@ -42,6 +42,48 @@ class ContentRepositoryTest {
         assertEquals("720P",repo.stream("123",720).quality)
     }
 
+    private fun videoInfo() =
+        """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
+    private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
+
+    @Test fun videoTabRouteSuppliesPlaybackModel() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths += request.url.encodedPath
+            when {
+                request.url.host=="example.com" -> videoInfo()
+                request.url.encodedPath==tabPath ->
+                    """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
+                else -> ""
+            }
+        }
+        assertEquals("1080P",repo.stream("123").quality)
+        assertEquals(tabPath,paths.first())
+    }
+
+    @Test fun newRouteVideoModelCanBeStringEncodedJson() {
+        val repo=repository { request ->
+            if(request.url.host=="example.com") videoInfo()
+            else if(request.url.encodedPath=="/novel/player/video_model/v1/") """{"data":{"video_model":"{\"fallback_api\":\"https://example.com/stream\"}"}}"""
+            else ""
+        }
+        assertEquals("1080P",repo.stream("123").quality)
+    }
+
+    @Test fun blankRouteFallsBackToNextRoute() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths += request.url.encodedPath
+            if(request.url.host=="example.com") videoInfo()
+            else if(request.url.encodedPath=="/novel/player/multi_video_model/v1/") ""
+            else """{"data":{"video_model":{"fallback_api":"https://example.com/stream"}}}"""
+        }
+        assertEquals("1080P",repo.stream("123").quality)
+        assertEquals(tabPath,paths.first())
+        assertTrue(paths.contains("/novel/player/multi_video_model/v1/"))
+        assertTrue(paths.contains("/novel/player/video_model/v1/"))
+    }
+
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(
         OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)

@@ -71,6 +71,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private val suggestCache=linkedMapOf<String,Pair<Long,List<String>>>()
     // 签名搜索接口被平台关停时会稳定返回空体，短期内不再重复尝试，避免每次搜索都白等两次往返
     @Volatile private var appSearchRetryAt=0L
+    // 最近一次取播放模型成功的路由，下次优先复用，减少平台按请求量限流时的无效请求
+    @Volatile private var goodRoute: String?=null
     // 分类筛选接口只在较新客户端版本开放；版本号沿用参考实现验证过的取值，平台升级时集中改这里
     private val discoveryVersion=mapOf(
         "version_code" to "73532",
@@ -458,13 +460,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  `Cookie` header. No signature headers are involved in this call. */
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val data=JSONObject(playbackResponse(id,payload))
-        val code=data.optInt("Code",data.optInt("code",0))
-        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
-        val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
-        val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
-        val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+        return streamFromModel(videoModel(id),maxQuality)
+    }
+    private fun streamFromModel(model: JSONObject, maxQuality: Int): StreamInfo {
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -483,37 +481,123 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
     }
-    private fun playerRequest(id: String,payload: ByteArray,identity: PlaybackDeviceSession.Profile): Request {
+    private fun playerRequest(path: String,payload: ByteArray,identity: PlaybackDeviceSession.Profile): Request {
         val query=Signer.encode(identity.values+("_rticket" to clock().toString()))
         return Request.Builder()
-            .url("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query")
+            .url("https://api5-normal-sinfonlineb.fqnovel.com$path?$query")
             .header("User-Agent",PLAYBACK_UA)
             .header("Accept","application/json; charset=utf-8,application/x-protobuf")
             .apply { if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie) }
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
     }
-    /** 播放信息接口会间歇性返回 HTTP 200 空体（同身份、同参数连发十几次全成功，说明是平台侧抖动而非参数问题）。
-     *  先按 0/700/1500/3000 毫秒退避重试，仍为空则重新注册一台匿名设备再走一轮，
-     *  覆盖「进程内的注册身份在长时间播放后失效」的情况。 */
-    private fun playbackResponse(id: String,payload: ByteArray): String {
-        var identity=playbackSession.profile(http)
-        repeat(2) { round ->
-            var attempt=0
-            while(true) {
-                val body=RequestScope.execute(http.newCall(playerRequest(id,payload,identity))) { response ->
+    /** 官方 App 现行的播放模型接口：`GET /reading/bookapi/video_tab/multi_video_model/v1/`。
+     *  2026-11-02 起旧的 `/novel/player/` 接口族对所有请求返回 HTTP 200 + 0 字节（多域名、多 UA、
+     *  签名与匿名身份均如此），而这条 GET 接口同刻正常返回 `code 0` 与完整 `video_list`。
+     *  参数取自官方 `GetVideoModelRequest` 的 snake_case 字段，缺任一字段会回 `100103`。
+     *  失败一律返回 null，由调用方回退旧接口，不改变旧的空响应与身份轮换语义。 */
+    private fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile): JSONObject? {
+        val extra="&video_id=$id&video_id_type=0&device_level=1&need_all_video_definition=1"+
+            "&need_mp4_align=0&use_os_player=0&video_platform=1024&source=0&from_video_id="
+        val query=Signer.encode(identity.values+("_rticket" to clock().toString()))
+        val request=Request.Builder()
+            .url("https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/?$query$extra")
+            .header("User-Agent",PLAYBACK_UA)
+            .header("Accept","application/json; charset=utf-8")
+            .apply { if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie) }
+            .get()
+            .build()
+        val body=try {
+            RequestScope.execute(http.newCall(request)) { response ->
+                if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+        } catch (problem: IOException) {
+            if(Thread.currentThread().isInterrupted) throw problem
+            return null
+        } catch (problem: RuntimeException) {
+            return null
+        }
+        val root=runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if(root.optInt("code",root.optInt("Code",-1))!=0) return null
+        val data=root.optJSONObject("data") ?: return null
+        val rows=data.optJSONObject("video_model_data") ?: data
+        val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: return null
+        val model=modelOf(row.opt("video_model")) ?: return null
+        return model
+    }
+    /** 播放模型：官方现行的 `video_tab` 接口优先，失败再走旧 `/novel/player/` 多路由兜底。
+     *  旧接口按「旧路径 → 新路径 → 带场景段」依次尝试，第一个能取到 `video_model` 的用；
+     *  记住上次成功的路由优先复用、其余路由各试一次，避免把请求量放大。
+     *  空响应是网关拦截，直接报错；只有业务错误码时才重新注册一台匿名设备再走一轮。 */
+    private fun videoModel(id: String): JSONObject {
+        val identity=playbackSession.profile(http)
+        tabVideoModel(id,identity)?.let { return it }
+        val biz="""{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
+        val single="""{"video_id":"$id","biz_param":$biz}""".toByteArray()
+        val map="""{"biz_param":$biz,"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
+        val routes=linkedMapOf(
+            "/novel/player/multi_video_model/v1/" to map,
+            "/novel/player/video_model/v1/" to single,
+            "/novel/player/multi_video_model/preload/v1/" to map,
+            "/novel/player/multi_video_model/default/v1/" to map,
+            "/novel/player/multi_video_model/detail/v1/" to map,
+        )
+        val good=goodRoute
+        val ordered=buildList {
+            if(good!=null && routes.containsKey(good)) add(good to routes.getValue(good))
+            for((path,payload) in routes) if(path!=good) add(path to payload)
+        }
+        val first=sweepRoutes(ordered,identity)
+        first.model?.let { model -> goodRoute=first.path; return model }
+        // 全部路由都是空体时是网关限流，重新注册设备不会改变结果，直接报空响应，别把限流窗口延长。
+        if(first.allBlank) throw EmptyPlaybackResponseException()
+        val renewed=sweepRoutes(ordered,playbackSession.renew(http))
+        renewed.model?.let { model -> goodRoute=renewed.path; return model }
+        throw renewed.failure ?: IOException("播放信息为空")
+    }
+    /** 一轮路由扫描：首条路由原地重发一次，其余路由各发一次，尽量少的请求量覆盖所有候选。 */
+    private fun sweepRoutes(routes: List<Pair<String,ByteArray>>, identity: PlaybackDeviceSession.Profile): Sweep {
+        var allBlank=true
+        var failure: IOException?=null
+        for((index,pair) in routes.withIndex()) {
+            val (path,payload)=pair
+            // 首条路由既是上次成功的那条、也最可能是当前唯一可用的，值得原地重发一次。
+            val attempts=if(index==0) BLANK_RETRIES else 1
+            for(attempt in 0 until attempts) {
+                if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("播放请求已取消")
+                val body=RequestScope.execute(http.newCall(playerRequest(path,payload,identity))) { response ->
                     if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
                     response.body?.string().orEmpty()
                 }
-                if(body.isNotBlank()) return body
-                val delay=listOf(700L,1500L,3000L).getOrNull(attempt) ?: break
-                if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("播放请求已取消")
-                Thread.sleep(delay)
-                attempt++
+                if(body.isBlank()) {
+                    if(attempt+1<attempts) Thread.sleep(BLANK_BACKOFF_MS)
+                    continue
+                }
+                allBlank=false
+                val data=JSONObject(body)
+                val code=data.optInt("Code",data.optInt("code",0))
+                if(code==0) {
+                    videoModelOf(data)?.let { model -> return Sweep(model,path,false,null) }
+                    failure=IOException("播放信息为空")
+                } else failure=IOException("播放接口暂不可用（错误码 $code）")
+                break
             }
-            if(round==0) identity=playbackSession.renew(http)
         }
-        throw EmptyPlaybackResponseException()
+        return Sweep(null,null,allBlank,failure)
+    }
+    private data class Sweep(val model: JSONObject?, val path: String?, val allBlank: Boolean, val failure: IOException?)
+    /** 新路由的播放模型在 `data.video_model`，旧路由在 `data[<vid>].video_model`；两种都可能被序列化成字符串。 */
+    private fun videoModelOf(data: JSONObject): JSONObject? {
+        val root=data.optJSONObject("data") ?: return null
+        modelOf(root.opt("video_model"))?.let { return it }
+        val entry=root.keys().asSequence().mapNotNull { root.optJSONObject(it) }.firstOrNull() ?: return null
+        return modelOf(entry.opt("video_model"))
+    }
+    private fun modelOf(value: Any?): JSONObject? = when(value) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
     }
     companion object {
         // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
@@ -522,6 +606,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         private const val SHORT_WEB_GENRE="203"
         // 播放接口认的客户端版本与内容接口不同，沿用抓包样本里 7.1.5.32 + tt-ok 的 UA。
         private const val PLAYBACK_UA="com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
+        // 首条路由的空响应重发次数与退避：网关抖动时先原地重试，再换下一条路由。
+        private const val BLANK_RETRIES=2
+        private const val BLANK_BACKOFF_MS=400L
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")
