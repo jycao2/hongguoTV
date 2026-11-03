@@ -100,8 +100,8 @@ class AccountManager(private val context: Context, private val library: Library)
     val accountLabel: String get() {
         val p = profile
         return when {
-            credentials == null -> "未登录"
-            p == null -> "红果账号"
+            credentials == null -> "红果账号 · 未登录"
+            p == null -> "红果账号 · 验证中"
             else -> "${p.nickname} · 云端 ${cloudRows().size} 部"
         }
     }
@@ -343,7 +343,7 @@ class AccountManager(private val context: Context, private val library: Library)
                     toast("登录二维码无法显示，请重试")
                     return@task
                 }
-                val size = (300 * activity.resources.displayMetrics.density).toInt()
+                val size = (240 * activity.resources.displayMetrics.density).toInt()
                 val image = android.widget.ImageView(activity).apply {
                     setImageBitmap(bitmap)
                     adjustViewBounds = true
@@ -360,7 +360,7 @@ class AccountManager(private val context: Context, private val library: Library)
                     addView(
                         android.widget.TextView(activity).apply {
                             text = "用手机红果 App：我的 → 右上角菜单 → 扫一扫\n扫码后请在手机确认登录"
-                            textSize = 15f
+                            textSize = 13f
                             setTextColor(TvStyle.muted)
                             gravity = android.view.Gravity.CENTER
                             setLineSpacing(0f, 1.25f)
@@ -379,7 +379,7 @@ class AccountManager(private val context: Context, private val library: Library)
                 val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
                 buttons.addView(cancel)
                 panel.addView(buttons)
-                TvDialog.styleWindow(activity, dialog) { cancel.requestFocus() }
+                TvDialog.styleWindow(activity, dialog, widthFraction = 0.42f, maxWidthDp = 460) { cancel.requestFocus() }
                 dialog.show()
                 val token = generation
                 val deadline = android.os.SystemClock.elapsedRealtime() + qr.expiresIn.coerceIn(1, 300) * 1000L

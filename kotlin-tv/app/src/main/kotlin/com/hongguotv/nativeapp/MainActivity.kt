@@ -372,7 +372,7 @@ class MainActivity: Activity() {
         fun paint(focused: Boolean) {
             when {
                 selected -> {
-                    view.background=rounded(Color.TRANSPARENT,Color.TRANSPARENT)
+                    view.background=rounded(Color.TRANSPARENT,accent)
                     view.setTextColor(accent); view.typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
                     view.compoundDrawables[0]?.setTint(accent)
                 }
@@ -716,9 +716,12 @@ class MainActivity: Activity() {
         val top=row().apply { setPadding(0,0,0,dp(8)) }
         val compactNav=widthDp()<1600
         val brand=row()
-        brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
-        brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false })
-        brand.addView(text(" v${BuildConfig.VERSION_NAME}",12f,muted).apply { includeFontPadding=false })
+        val brandIcon=ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) }
+        val brandName=text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false }
+        val brandVer=text("v${BuildConfig.VERSION_NAME}",12f,muted).apply { includeFontPadding=false }
+        brand.addView(brandIcon,lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
+        brand.addView(brandName)
+        brand.addView(brandVer,lp(-2,-2).apply { topMargin=dp(6) })
         top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(8) })
         // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
         val navMargin=if(compactNav) dp(4) else dp(6)
