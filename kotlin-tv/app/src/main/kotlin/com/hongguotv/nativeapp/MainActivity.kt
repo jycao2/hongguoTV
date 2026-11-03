@@ -1255,14 +1255,17 @@ class MainActivity: Activity() {
             // Focus entering the grid lands on the first visible card, keeping the user's place.
             isFocusable=true; isFocusableInTouchMode=true
             setOnFocusChangeListener { _,focused -> if(focused) { val first=grid.findFirstVisibleItemPosition().coerceAtLeast(0); post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() } } }
-            // 长按下键到达最后一项后拦截焦点搜索，避免焦点跳出网格跑到顶部导航栏形成循环
+            // 长按下键到达最后一行后拦截焦点搜索，避免 GridLayoutManager 在尾行不满 cols 时跳出 recycler 跑到顶部导航栏形成循环
             setOnKeyListener { _,keyCode,event ->
                 if(keyCode==KeyEvent.KEYCODE_DPAD_DOWN && event.action==KeyEvent.ACTION_DOWN) {
                     val focusedChild=focusedChild
                     if(focusedChild!=null) {
                         val pos=getChildAdapterPosition(focusedChild)
-                        val total=adapter.itemCount
-                        if(pos>=0 && pos>=total-1) return@setOnKeyListener true
+                        if(pos>=0) {
+                            val cols=(layoutManager as? GridLayoutManager)?.spanCount ?: 1
+                            val lastRowFirst=((adapter.itemCount-1)/cols)*cols
+                            if(pos>=lastRowFirst) return@setOnKeyListener true
+                        }
                     }
                 }
                 false
