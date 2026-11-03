@@ -380,7 +380,7 @@ class MainActivity: Activity() {
                     view.compoundDrawables[0]?.setTint(white)
                 }
                 else -> {
-                    view.background=rounded(Color.TRANSPARENT,TvStyle.outline); view.setTextColor(muted)
+                    view.background=rounded(Color.TRANSPARENT,Color.TRANSPARENT); view.setTextColor(muted)
                     view.compoundDrawables[0]?.setTint(muted)
                 }
             }
@@ -716,9 +716,9 @@ class MainActivity: Activity() {
         val compactNav=widthDp()<1600
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
-        brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
-        brand.addView(text("  v${BuildConfig.VERSION_NAME}",13f,muted))
-        top.addView(brand,lp(-2,dp(44)))
+        brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false })
+        brand.addView(text(" v${BuildConfig.VERSION_NAME}",12f,muted).apply { includeFontPadding=false })
+        top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(8) })
         // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
         val navMargin=if(compactNav) dp(4) else dp(6)
         val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0,{ switchTab(0) },compactNav)
