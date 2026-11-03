@@ -688,7 +688,7 @@ class MainActivity: Activity() {
             Triple(1,"搜索",listOf(1)),
             Triple(2,"排行榜",listOf(2)),
             Triple(6,"片源",listOf(6)),
-            Triple(3,"我的",listOf(3,4))).map { entry ->
+            Triple(3,"我的",listOf(4,3))).map { entry ->
             lateinit var view: TextView
             view=button(entry.second,tab==entry.first || tab in entry.third) {
                 val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
@@ -720,10 +720,10 @@ class MainActivity: Activity() {
         }
         container.addView(top)
         container.addView(View(this).apply { setBackgroundColor(TvStyle.outline) },lp(-1,dp(1)).apply { bottomMargin=dp(6) })
-        // 二级分段：我的（收藏/最近观看）同层切换，隐藏的模块不占位
+        // 二级分段：我的（最近观看/收藏）同层切换，隐藏的模块不占位
         var segmentChips: List<TextView> =emptyList()
         if(tab in 3..4) {
-            val options=listOf(3 to "收藏",4 to "最近观看")
+            val options=listOf(4 to "最近观看",3 to "收藏")
             val segRow=row().apply { setPadding(0,0,0,dp(8)) }
             segmentChips=options.filter { !navHiddenAt(it.first) }.map { (index,label) ->
                 chip(label,index==tab) { if(index!=tab) switchTab(index) }.apply {
