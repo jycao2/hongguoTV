@@ -68,7 +68,7 @@ class HomeScreen(
     // Hero：跟随当前焦点换图换字，只替换内容不做动画，冷启动先用纯色兜底
     private val heroImage=ImageView(context).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
     private val heroKicker=label("",11f,TvStyle.gold).apply { setPadding(0,0,0,dp(4)) }
-    private val heroTitle=label("",29f).apply {
+    private val heroTitle=label("",24f).apply {
         typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END
     }
     private val heroMeta=label("",12f,TvStyle.muted).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(0,dp(5),0,0) }
@@ -78,7 +78,7 @@ class HomeScreen(
     }
     private val heroCopy=LinearLayout(context).apply {
         orientation=VERTICAL; gravity=Gravity.BOTTOM
-        setPadding(dp(26),dp(12),dp(26),dp(14))
+        setPadding(dp(26),dp(10),dp(26),dp(10))
         addView(heroKicker); addView(heroTitle); addView(heroMeta); addView(heroDesc)
         addView(heroProgress,LayoutParams(-1,dp(3)).apply { topMargin=dp(9) })
     }
@@ -94,7 +94,7 @@ class HomeScreen(
         addView(heroCopy,LayoutParams(-1,-1).apply { gravity=Gravity.BOTTOM })
     }
     private var heroEntry: Entry?=null
-    private fun heroHeight()=(resources.displayMetrics.heightPixels*.30f).toInt()
+    private fun heroHeight()=(resources.displayMetrics.heightPixels*.24f).toInt()
     init { orientation=VERTICAL; scroll.addView(contents); addView(scroll,LayoutParams(-1,0,1f)) }
 
     fun capturePosition(): Position {
@@ -158,7 +158,7 @@ class HomeScreen(
         this.shelves=shelves; footerMore=more; revision++; val ticket=revision; restoring=true
         contents.removeAllViews(); rows.clear(); cards.clear(); moreButton=null; lastRow=null
         val display=shelves.filter { it.entries.isNotEmpty() || it.more!=null }
-        if(display.isNotEmpty()) contents.addView(hero,LayoutParams(-1,heroHeight()).apply { bottomMargin=dp(12) })
+        if(display.isNotEmpty()) contents.addView(hero,LayoutParams(-1,heroHeight()).apply { bottomMargin=dp(8) })
         display.forEach { shelf ->
             val block=LinearLayout(context).apply { orientation=VERTICAL }
             val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(2),dp(4),dp(2),dp(9)) }

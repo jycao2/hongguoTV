@@ -754,7 +754,7 @@ class MainActivity: Activity() {
             container.addView(footerHost,lp(-1,-2))
             settings(body,footerHost); if(focusNav) nav[tab].requestFocus(); return
         }
-        if(tab<=1) {
+        if(tab<=1 && collection==null) {
             val types=row().apply { setPadding(0,dp(8),0,dp(6)) }
             if(tab==1 && advancedSearch) {
                 // 高级搜索模式不建内容类型页签，类型统一由筛选面板的服务端选项决定
