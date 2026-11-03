@@ -43,7 +43,9 @@ data class BackupThirdHistory(
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
-    /** 首页与设置始终显示，只有这四个导航模块支持单独隐藏。 */
+    /** 顶部导航栏模块的隐藏键：搜索、排行榜、收藏、最近观看。
+     *  UI 上「收藏」和「最近观看」是「我的」的子 tab，设置里的「我的」开关会同时设置这两个 key。
+     *  首页与设置始终显示，片源独立用 sourceHidden 字段。 */
     val NAV_KEYS=setOf("search","rank","favorite","history")
     const val MAX_THIRD_HISTORY=100
     const val MAX_THIRD_FAVORITES=100

@@ -97,7 +97,14 @@ class AccountManager(private val context: Context, private val library: Library)
     var onAccountChanged: (() -> Unit)? = null
 
     val signedIn get() = credentials != null && profile != null
-    val accountLabel get() = profile?.nickname ?: if (credentials != null) "红果账号" else "未登录"
+    val accountLabel: String get() {
+        val p = profile
+        return when {
+            credentials == null -> "未登录"
+            p == null -> "红果账号"
+            else -> "${p.nickname} · 云端 ${cloudRows().size} 部"
+        }
+    }
     val syncStatus get() = status
     val isBusy get() = busy
 
@@ -265,7 +272,7 @@ class AccountManager(private val context: Context, private val library: Library)
             toast("账号操作进行中，请稍候")
             return
         }
-        val choices = if (signedIn) listOf("刷新云端记录", "退出红果账号") else listOf("扫码登录")
+        val choices = if (signedIn) listOf("刷新云端记录", "同步本机到云端", "退出红果账号") else listOf("扫码登录")
         TvDialog.choose(
             activity,
             profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号",
@@ -275,7 +282,16 @@ class AccountManager(private val context: Context, private val library: Library)
                     qrLogin(activity)
                 } else when (index) {
                     0 -> refreshHistory()
-                    1 -> logout()
+                    1 -> syncLocalToCloud { pushed, skipped, failed ->
+                        toast(
+                            when {
+                                failed > 0 -> "同步完成：上传 $pushed 部，失败 $failed 部"
+                                pushed > 0 -> "已上传 $pushed 部到云端${if (skipped > 0) "，$skipped 部云端已是最新" else ""}"
+                                else -> "云端已是最新，无需上传"
+                            }
+                        )
+                    }
+                    2 -> logout()
                 }
             },
         ).show()
@@ -503,6 +519,20 @@ class AccountManager(private val context: Context, private val library: Library)
 
     private fun changed() {
         onAccountChanged?.invoke()
+    }
+
+    /** 检测账号登录态：同步调 profile 接口验证 token 是否有效；未登录直接返回提示。 */
+    fun checkAccountHealth(): String {
+        val cred = credentials ?: return "未登录，跳过"
+        val user = client.profile(cred)
+        return "登录态有效 · ${user.nickname}"
+    }
+
+    /** 检测云端历史接口：同步调 history 接口；未登录直接返回提示。 */
+    fun checkCloudHistory(): String {
+        val cred = credentials ?: return "未登录，跳过"
+        val rows = client.history(cred)
+        return "返回 ${rows.size} 条云端观看记录"
     }
 
     fun destroy() {

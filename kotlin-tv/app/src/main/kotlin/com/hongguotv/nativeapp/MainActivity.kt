@@ -356,6 +356,33 @@ class MainActivity: Activity() {
     private fun button(label: String,selected: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
         gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); focusStyle(this,selected); setOnClickListener { onClick() }
     }
+    /** 顶栏 Pill 导航按钮：icon + label，选中态填充 accent，未选中透明+outline，焦点态 raised+accent border。 */
+    private fun pillNav(iconRes: Int,label: String,selected: Boolean,onClick: ()->Unit): TextView {
+        val view=text(label,15f,white).apply {
+            gravity=Gravity.CENTER; isFocusable=true; isClickable=true; includeFontPadding=false
+            setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(8)
+            setPadding(dp(18),dp(10),dp(18),dp(10)); minHeight=dp(42); setOnClickListener { onClick() }
+        }
+        view.id=View.generateViewId()
+        fun paint(focused: Boolean) {
+            when {
+                selected -> {
+                    view.background=rounded(accent,accent); view.setTextColor(Color.WHITE)
+                    view.compoundDrawables[0]?.setTint(Color.WHITE)
+                }
+                focused -> {
+                    view.background=rounded(TvStyle.raised,accent); view.setTextColor(white)
+                    view.compoundDrawables[0]?.setTint(white)
+                }
+                else -> {
+                    view.background=rounded(Color.TRANSPARENT,TvStyle.outline); view.setTextColor(muted)
+                    view.compoundDrawables[0]?.setTint(muted)
+                }
+            }
+        }
+        paint(false); view.setOnFocusChangeListener { _,focused -> paint(focused) }
+        return view
+    }
     private fun addButton(parent: LinearLayout,label: String,selected: Boolean=false,onClick: ()->Unit): TextView {
         val view=button(label,selected,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
     }
@@ -366,8 +393,8 @@ class MainActivity: Activity() {
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); extras=PlaybackExtras(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
         accountManager=AccountManager(this,library)
         accountManager.onAccountChanged={
-            accountButton?.text="红果账号  ·  ${accountManager.accountLabel}"
-            // 登录合并云端历史后，正在展示的记录页立即重建
+            accountButton?.text=accountManager.accountLabel
+            // 账号状态变化后，正在展示的记录页立即重建（登录后拉取云端历史、退出后清空云端区）
             if(screen=="catalog" && (tab==4 || collection=="resume")) showCatalog()
         }
         // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
@@ -416,7 +443,7 @@ class MainActivity: Activity() {
         }
         if(storage.restoreAllowed) { restoreLocalBackup(done); return }
         library.localPermissionAsked=true
-        TvDialog.confirm(this,"本地备份","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时在设置中关闭。") {
+        TvDialog.confirm(this,"本地备份","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时在设置中关闭。云端观看记录不会随本地备份迁移，登录同一账号后会自动拉取。") {
             localPermissionContinuation={ restoreLocalBackup(done) }
             if(!storage.request(this)) {
                 localPermissionContinuation=null; library.localRestoreChecked=true
@@ -457,7 +484,7 @@ class MainActivity: Activity() {
             return
         }
         if(!library.localBackupEnabled) {
-            TvDialog.confirm(this,"本地备份与恢复","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。") {
+            TvDialog.confirm(this,"本地备份与恢复","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。云端观看记录不会随本地备份迁移，登录同一账号后会自动拉取。") {
                 library.localBackupEnabled=true; anchor.text=localBackupLabel()
                 if(storage.needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
             }.show()
@@ -684,17 +711,17 @@ class MainActivity: Activity() {
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
-        brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
-        top.addView(brand,lp(dp(172),dp(44)))
-        // 一级导航：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
-        val homeButton=button("首页",tab==0) { switchTab(0) }
+        top.addView(brand,lp(dp(132),dp(44)))
+        // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
+        val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0) { switchTab(0) }
         val areaButtons=listOf(
             Triple(1,"搜索",listOf(1)),
             Triple(2,"排行榜",listOf(2)),
             Triple(6,"片源",listOf(6)),
-            Triple(3,"我的",listOf(4,3))).map { entry ->
+            Triple(3,"我的",listOf(4,3))).mapIndexed { index,entry ->
+            val iconRes=when(index) { 0->com.hongguotv.nativeapp.R.drawable.ic_nav_search; 1->com.hongguotv.nativeapp.R.drawable.ic_nav_rank; 2->com.hongguotv.nativeapp.R.drawable.ic_nav_source; else->com.hongguotv.nativeapp.R.drawable.ic_nav_mine }
             lateinit var view: TextView
-            view=button(entry.second,tab==entry.first || tab in entry.third) {
+            view=pillNav(iconRes,entry.second,tab==entry.first || tab in entry.third) {
                 val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
                 if(target!=tab) switchTab(target) else view.requestFocus()
             }
@@ -710,7 +737,7 @@ class MainActivity: Activity() {
         val settingsTool=button("设置",tab==5) { switchTab(5) }
             .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
         listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3]).forEach { item ->
-            top.addView(item,lp(-2,-2).apply { rightMargin=dp(4) })
+            top.addView(item,lp(-2,-2).apply { rightMargin=dp(6) })
         }
         // 右上工具与首页内容类型一起，等类型按钮挂完后再按 类型 → 留白 → 工具 的顺序追加
         // 保留 7 项索引语义：搜索/排行榜/片源各占独立按钮，收藏/历史共用我的按钮，设置由右上工具承载
@@ -1759,7 +1786,7 @@ class MainActivity: Activity() {
         navModulesButton=setting(look,navModulesLabel()) { showNavModules(navModulesButton) }
 
         heading(device,"设备与数据",categories[2].second)
-        accountButton=setting(device,"红果账号  ·  ${accountManager.accountLabel}") { accountManager.showLoginDialog(this) }
+        accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var backup: TextView
@@ -1769,7 +1796,7 @@ class MainActivity: Activity() {
                     favoriteMonitor.stop(); library.restore(data,restoreSettings)
                     tabState.clear(); tabFocus.clear(); catalogFocus=""; page=1
                     showCatalog(); favoriteMonitor.check()
-                    Toast.makeText(this,"记录已合并恢复",Toast.LENGTH_LONG).show()
+                    Toast.makeText(this,"本机收藏与记录已合并；云端记录请登录账号后拉取",Toast.LENGTH_LONG).show()
                 }
             }.onFailure { tvTools.info("无法生成备份","本机记录暂时无法导出，请重试。",backup) }
         }
@@ -1837,7 +1864,7 @@ class MainActivity: Activity() {
             TvDialog.info(this,"开源许可","本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").show()
         }
         // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
-        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    所有数据保存在本机",12f,muted).apply {
+        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与本机记录保存在设备 · 登录后可同步到红果账号",12f,muted).apply {
             id=View.generateViewId(); isFocusable=false; setPadding(dp(10),dp(8),dp(10),dp(3))
         }
         val settingsDisclaimer=text("本应用仅用于技术交流与学习，不提供、不存储、不传播任何视频内容，内容版权归原平台所有。",11f,muted).apply {
@@ -3084,6 +3111,10 @@ class MainActivity: Activity() {
                 append("\n题材分布\n")
                 tags.forEach { (tag,count) -> append("· $tag  $count 集\n") }
             }
+            if(accountManager.signedIn) {
+                val cloudCount=accountManager.cloudRows().size
+                if(cloudCount>0) append("\n云端另有 $cloudCount 部观看记录（只读展示，不合并统计）")
+            }
             append("\n统计来自本机观看记录，不上传、不联网。")
         }
         tvTools.info("观看统计 · 本机",body,anchor)
@@ -3154,8 +3185,10 @@ class MainActivity: Activity() {
             val info=repository.stream(progress.episodeId,library.maxQuality); "获取成功 · ${info.quality}"
         }
         add("联想") { val words=repository.suggest("修仙"); "联想 ${words.size} 个" }
+        add("账号") { accountManager.checkAccountHealth() }
+        add("云端") { accountManager.checkCloudHistory() }
         content.addView(actions)
-        content.addView(text("说明：每项只发一次请求，签名搜索接口被平台停用时「搜索」会走网站兜底。",12f,muted).apply { setPadding(dp(8),dp(10),dp(8),0) })
+        content.addView(text("说明：每项只发一次请求；账号与云端检测需要先登录，未登录会跳过。",12f,muted).apply { setPadding(dp(8),dp(10),dp(8),0) })
         dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
         TvDialog.styleWindow(this,dialog)
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
@@ -3448,17 +3481,22 @@ class MainActivity: Activity() {
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show(); list.setSelection(selected); list.requestFocus()
     }
-    private fun navModuleNames()=listOf("search" to "搜索","rank" to "排行榜","favorite" to "收藏","history" to "最近观看","source" to "片源")
-    private fun navModuleHidden(key: String)=if(key=="source") library.sourceHidden else library.navHidden(key)
+    /** 顶部导航栏模块：与实际顶栏对齐——搜索/排行榜/片源/我的；收藏与最近观看是"我的"的子 tab，不单独列。 */
+    private fun navModuleNames()=listOf("search" to "搜索","rank" to "排行榜","source" to "片源","mine" to "我的")
+    private fun navModuleHidden(key: String): Boolean = when(key) {
+        "source" -> library.sourceHidden
+        "mine" -> library.navHidden("favorite") && library.navHidden("history")
+        else -> library.navHidden(key)
+    }
     private fun navModulesLabel(): String {
         val names=navModuleNames()
         return "导航模块  ·  ${names.count { !navModuleHidden(it.first) }}/${names.size} 显示"
     }
-    /** 导航栏模块显隐：逐项开关，关闭后立即生效；首页与设置始终显示，不在此列。 */
+    /** 导航栏模块显隐：逐项开关，关闭后立即从顶部导航栏移除；首页与设置始终显示，不在此列。 */
     private fun showNavModules(anchor: TextView) {
         val content=column()
         content.addView(TvDialog.title(this,"导航模块"))
-        content.addView(text("首页与设置始终显示；关闭的模块会从顶部导航栏移除，收藏与记录不会删除。",13f,muted)
+        content.addView(text("首页与设置始终显示；关闭后会从顶部导航栏移除，收藏与观看记录不会删除。",13f,muted)
             .apply { setPadding(0,0,0,dp(10)) })
         lateinit var dialog: AlertDialog
         navModuleNames().forEach { (key,label) ->
@@ -3467,8 +3505,12 @@ class MainActivity: Activity() {
             row.gravity=Gravity.CENTER_VERTICAL
             row.setPadding(dp(16),0,dp(16),0)
             row.setOnClickListener {
-                val next=!navModuleHidden(key)
-                if(key=="source") library.sourceHidden=next else library.setNavHidden(key,next)
+                val hide=!navModuleHidden(key)
+                when(key) {
+                    "source" -> library.sourceHidden=hide
+                    "mine" -> { library.setNavHidden("favorite",hide); library.setNavHidden("history",hide) }
+                    else -> library.setNavHidden(key,hide)
+                }
                 row.text=rowText(); anchor.text=navModulesLabel()
             }
             content.addView(row,lp(-1,dp(46)).apply { bottomMargin=dp(8) })
