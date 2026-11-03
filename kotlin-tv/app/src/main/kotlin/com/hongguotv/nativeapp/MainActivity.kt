@@ -356,13 +356,13 @@ class MainActivity: Activity() {
     private fun button(label: String,selected: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
         gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); focusStyle(this,selected); setOnClickListener { onClick() }
     }
-    /** 顶栏 Pill 导航按钮：icon + label，选中态填充 accent，未选中透明+outline，焦点态 raised+accent border。 */
+    /** 顶栏文字导航：icon + label，选中态粗体 accent 色，焦点态 raised 底+accent 边框，默认态 muted。 */
     private fun pillNav(iconRes: Int,label: String,selected: Boolean,onClick: ()->Unit,compact: Boolean=false): TextView {
-        val padH=if(compact) 14 else 18
-        val padV=if(compact) 8 else 10
-        val drawPad=if(compact) 6 else 8
-        val h=if(compact) 36 else 42
-        val ts=if(compact) 13f else 15f
+        val padH=if(compact) 10 else 14
+        val padV=if(compact) 6 else 8
+        val drawPad=if(compact) 4 else 6
+        val h=if(compact) 32 else 36
+        val ts=if(compact) 14f else 15f
         val view=text(label,ts,white).apply {
             gravity=Gravity.CENTER; isFocusable=true; isClickable=true; includeFontPadding=false
             setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(drawPad)
@@ -372,15 +372,16 @@ class MainActivity: Activity() {
         fun paint(focused: Boolean) {
             when {
                 selected -> {
-                    view.background=rounded(accent,accent); view.setTextColor(Color.WHITE)
-                    view.compoundDrawables[0]?.setTint(Color.WHITE)
+                    view.background=rounded(Color.TRANSPARENT,Color.TRANSPARENT)
+                    view.setTextColor(accent); view.typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
+                    view.compoundDrawables[0]?.setTint(accent)
                 }
                 focused -> {
-                    view.background=rounded(TvStyle.raised,accent); view.setTextColor(white)
+                    view.background=rounded(TvStyle.raised,accent); view.setTextColor(white); view.typeface=Typeface.DEFAULT
                     view.compoundDrawables[0]?.setTint(white)
                 }
                 else -> {
-                    view.background=rounded(Color.TRANSPARENT,Color.TRANSPARENT); view.setTextColor(muted)
+                    view.background=rounded(Color.TRANSPARENT,Color.TRANSPARENT); view.setTextColor(muted); view.typeface=Typeface.DEFAULT
                     view.compoundDrawables[0]?.setTint(muted)
                 }
             }
