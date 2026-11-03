@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
-// 账号状态与历史同步：登录凭证安全存储、云端历史合并、播放进度自动上传。
+// 账号状态与云端记录：登录凭证安全存储、云端历史只读拉取、本机记录手动同步到云端。
 
 import android.content.Context
 import android.os.Handler
@@ -69,8 +69,9 @@ private class AccountStore(context: Context) {
 }
 
 /**
- * 账号管理器：登录、历史合并、进度上传。
- * 本地历史仍是单一数据源；登录后云端历史合并到本地，本地新增进度自动上传。
+ * 账号管理器：登录、云端历史拉取、本机记录手动同步。
+ * 本机与云端观看记录相互独立：云端记录只读展示、不合并不回写本机；
+ * 本机记录由用户在最近观看页手动「同步到云端」。
  */
 class AccountManager(private val context: Context, private val library: Library) {
     private val main = Handler(Looper.getMainLooper())
@@ -93,10 +94,6 @@ class AccountManager(private val context: Context, private val library: Library)
     private var historyLoaded = false
     private var status = "未登录"
     private var busy = false
-    private var lastUpload = 0L
-    private var lastEpisode = ""
-    private var pendingUpload: Pair<CloudProgress, Int>? = null
-    private var draining = false
     var onAccountChanged: (() -> Unit)? = null
 
     val signedIn get() = credentials != null && profile != null
@@ -139,7 +136,7 @@ class AccountManager(private val context: Context, private val library: Library)
                 result
                     .onSuccess { user ->
                         profile = user
-                        status = "已登录，正在同步云端历史…"
+                        status = "已登录，正在读取云端历史…"
                         changed()
                         refreshHistory()
                     }
@@ -156,7 +153,7 @@ class AccountManager(private val context: Context, private val library: Library)
         }
     }
 
-    /** 拉取云端历史并合并到本地。 */
+    /** 拉取云端历史，仅作只读展示：不合并不回写本机记录。 */
     fun refreshHistory() {
         val account = credentials ?: return
         if (closed) return
@@ -173,8 +170,7 @@ class AccountManager(private val context: Context, private val library: Library)
                         cloudHistory = rows.distinctBy { it.series.id }
                             .sortedByDescending { it.updatedAt }
                         historyLoaded = true
-                        mergeHistory()
-                        status = "已同步 ${cloudHistory.size} 部云端观看记录"
+                        status = "已读取 ${cloudHistory.size} 部云端观看记录"
                         changed()
                     }
                     .onFailure { error ->
@@ -185,140 +181,81 @@ class AccountManager(private val context: Context, private val library: Library)
         }
     }
 
-    /** 合并云端历史到本地：云端有而本地没有的写入本地；两边都有的取 position 较大者。 */
-    private fun mergeHistory(retry: Int = 0) {
-        if (!signedIn || cloudHistory.isEmpty() || closed) return
-        if (!library.isLoaded) {
-            // 本地库还在加载：延迟重试，加载失败时放弃本轮合并（可手动刷新云端记录）
-            if (retry < 10) main.postDelayed({ if (!closed) mergeHistory(retry + 1) }, 1000)
+    /** 云端观看记录（只读）：按更新时间倒序，只保留有播放进度的。 */
+    fun cloudRows(): List<CloudProgress> = cloudHistory.filter { it.position > 0 }
+
+    /**
+     * 手动同步本机记录到云端：逐部上传本机进度。
+     * 云端已有同剧且云端更新时间不旧于本机的跳过（云端为准，不覆盖）；
+     * 全程不写本机记录，完成后刷新云端缓存并在主线程回调 onDone(上传, 跳过, 失败)。
+     */
+    fun syncLocalToCloud(onDone: (pushed: Int, skipped: Int, failed: Int) -> Unit) {
+        val account = credentials ?: run { toast("未登录"); Log.i("HongguoTV","syncLocalToCloud: no account"); return }
+        if (closed || busy) {
+            toast("账号操作进行中，请稍候")
+            Log.i("HongguoTV","syncLocalToCloud: busy/closed")
             return
         }
-        val localIndex = library.state()
-        val localProgress = localIndex.history()
-        val localBySeries = localProgress.associateBy { it.series.id }
-        val toUpload = mutableListOf<Pair<CloudProgress, Int>>()
-
-        for (cloud in cloudHistory) {
-            val local = localBySeries[cloud.series.id]
-            when {
-                local == null -> {
-                    // 云端有、本地没有：写入本地
-                    val backup = BackupProgress(
-                        series = cloud.series,
-                        episodeId = cloud.episodeId,
-                        episodeIndex = cloud.episodeIndex,
-                        position = cloud.position,
-                        duration = cloud.duration,
-                        completed = false,
-                        updatedAt = cloud.updatedAt,
-                    )
-                    library.save(backup)
-                }
-                cloud.updatedAt > local.updatedAt && cloud.position > local.position -> {
-                    // 云端更新：用云端覆盖本地
-                    val backup = local.copy(
-                        episodeId = cloud.episodeId,
-                        episodeIndex = cloud.episodeIndex,
-                        position = cloud.position,
-                        duration = cloud.duration,
-                        updatedAt = cloud.updatedAt,
-                    )
-                    library.save(backup)
-                }
-                local.updatedAt > cloud.updatedAt && local.position > cloud.position -> {
-                    // 本地更新：标记待上传
-                    toUpload += cloud.copy(
-                        episodeId = local.episodeId,
-                        episodeIndex = local.episodeIndex,
-                        position = local.position,
-                        duration = local.duration,
-                        updatedAt = local.updatedAt,
-                    ) to (local.series.badge.toIntOrNull() ?: 0)
-                }
-            }
+        if (!signedIn) {
+            toast("请先登录红果账号")
+            Log.i("HongguoTV","syncLocalToCloud: not signedIn")
+            return
         }
-        library.flush()
-
-        // 上传本地更新的记录（走单槽节流队列）
-        for ((progress, episodeCount) in toUpload) {
-            upload(progress, episodeCount, force = false)
+        if (!library.isLoaded) {
+            toast("观看记录还在加载，请稍候再试")
+            Log.i("HongguoTV","syncLocalToCloud: library not loaded")
+            return
         }
-
-        // 本地有而云端没有的：后台逐条补齐到云端，绕开播放用的单槽节流队列
-        val account = credentials ?: return
+        busy = true
+        status = "正在把本机记录同步到云端…"
+        Log.i("HongguoTV", "syncLocalToCloud started")
+        // 手动同步期间不触发 onAccountChanged，避免 showCatalog 重建页面打断按钮
         val token = generation
-        val cloudSeriesIds = cloudHistory.map { it.series.id }.toSet()
-        val missing = localProgress.filter { it.series.id !in cloudSeriesIds && it.position > 0 }
-        if (missing.isEmpty()) return
         worker.execute {
-            var synced = 0
-            for (local in missing) {
+            val localRows = library.state().history().filter { it.position > 0 }
+            val cloudBySeries = cloudHistory.associateBy { it.series.id }
+            Log.i("HongguoTV", "syncLocalToCloud: local=${localRows.size} cloudKnown=${cloudBySeries.size}")
+            var pushed = 0
+            var skipped = 0
+            var failed = 0
+            val uploaded = mutableListOf<CloudProgress>()
+            for (local in localRows) {
                 if (closed || token != generation) return@execute
+                val cloud = cloudBySeries[local.series.id]
+                if (cloud != null && cloud.updatedAt >= local.updatedAt) {
+                    skipped++
+                    continue
+                }
                 val episodes = local.series.badge.toIntOrNull() ?: 0
-                val ok = runCatching {
-                    client.upload(
-                        account,
-                        CloudProgress(local.series, local.episodeId, local.episodeIndex, local.position, local.duration, local.updatedAt, episodes),
-                        episodes,
-                    )
-                }.isSuccess
-                if (ok) synced++
+                val row = CloudProgress(
+                    local.series,
+                    local.episodeId,
+                    local.episodeIndex,
+                    local.position,
+                    local.duration,
+                    local.updatedAt,
+                    episodes,
+                )
+                val ok = runCatching { client.upload(account, row, episodes) }.isSuccess
+                if (ok) {
+                    pushed++
+                    uploaded += row
+                } else failed++
             }
             main.post {
                 if (closed || token != generation) return@post
-                status = "云端合并完成，另补齐 $synced 部本机记录"
-                changed()
-            }
-        }
-    }
-
-    /** 保存播放进度时调用：本地保存 + 加入上传队列。 */
-    fun onLocalProgressSaved(progress: BackupProgress, episodeCount: Int) {
-        if (!signedIn) return
-        val cloud = CloudProgress(
-            series = progress.series,
-            episodeId = progress.episodeId,
-            episodeIndex = progress.episodeIndex,
-            position = progress.position,
-            duration = progress.duration,
-            updatedAt = progress.updatedAt,
-            episodeCount = episodeCount,
-        )
-        upload(cloud, episodeCount, force = false)
-    }
-
-    fun upload(progress: CloudProgress, episodes: Int, force: Boolean) {
-        val account = credentials?.takeIf { profile != null } ?: return
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (!force && progress.episodeId == lastEpisode && now - lastUpload < 30000) return
-        lastUpload = now
-        lastEpisode = progress.episodeId
-        pendingUpload = progress to episodes
-        if (draining) return
-        draining = true
-        drain(account, generation)
-    }
-
-    private fun drain(account: AccountCredentials, token: Int) {
-        val next = pendingUpload
-        if (closed || token != generation) return
-        if (next == null) {
-            draining = false
-            return
-        }
-        pendingUpload = null
-        worker.execute {
-            val result = runCatching {
-                if (!closed && token == generation) client.upload(account, next.first, next.second)
-            }
-            main.post {
-                if (closed) return@post
-                if (token == generation) {
-                    status = if (result.isSuccess) "播放进度已上传"
-                    else "进度上传失败：${safeError(result.exceptionOrNull()!!)}"
-                    changed()
+                busy = false
+                if (uploaded.isNotEmpty()) {
+                    // 云端缓存就地更新：同剧替换、新剧补上，避免同步后立刻再拉一遍
+                    val merged = cloudHistory.associateBy { it.series.id }.toMutableMap()
+                    uploaded.forEach { merged[it.series.id] = it }
+                    cloudHistory = merged.values.sortedByDescending { it.updatedAt }
                 }
-                drain(account, token)
+                status = if (failed > 0) "同步完成：上传 $pushed 部，失败 $failed 部"
+                else "同步完成：上传 $pushed 部，跳过 $skipped 部"
+                // 手动同步完成只回传计数给调用方弹 Toast/Dialog，不触发 onAccountChanged 重建页面
+                Log.i("HongguoTV", "syncLocalToCloud invoking onDone($pushed,$skipped,$failed)")
+                onDone(pushed, skipped, failed)
             }
         }
     }
@@ -507,11 +444,7 @@ class AccountManager(private val context: Context, private val library: Library)
         cloudHistory = emptyList()
         historyLoaded = false
         generation++
-        status = "已登录，正在同步云端历史…"
-        lastUpload = 0
-        lastEpisode = ""
-        pendingUpload = null
-        draining = false
+        status = "已登录，正在读取云端历史…"
         changed()
         toast("已登录 ${account.nickname}")
         refreshHistory()
@@ -524,10 +457,8 @@ class AccountManager(private val context: Context, private val library: Library)
         profile = null
         cloudHistory = emptyList()
         historyLoaded = false
-        pendingUpload = null
-        draining = false
         http.dispatcher.cancelAll()
-        status = "已退出账号，自动同步已停止"
+        status = "已退出账号"
         changed()
         worker.execute {
             val result = runCatching { store.clear() }
@@ -575,15 +506,11 @@ class AccountManager(private val context: Context, private val library: Library)
     }
 
     fun destroy() {
-        val account = credentials
-        val final = pendingUpload
         onAccountChanged = null
         closed = true
         generation++
-        pendingUpload = null
         http.dispatcher.cancelAll()
         worker.execute {
-            if (account != null && final != null) runCatching { client.upload(account, final.first, final.second) }
             http.connectionPool.evictAll()
             http.dispatcher.executorService.shutdown()
         }

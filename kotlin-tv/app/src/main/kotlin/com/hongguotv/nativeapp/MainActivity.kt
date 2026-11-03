@@ -38,6 +38,7 @@ import java.util.concurrent.Executors
 
 private const val TYPE_CARD=0
 private const val TYPE_FOOTER=1
+private const val TYPE_HEADER=2
 private const val FOOTER_NONE=0
 private const val FOOTER_LOADING=1
 private const val FOOTER_END=2
@@ -261,6 +262,9 @@ class MainActivity: Activity() {
     private var searchFocusPending=false
     private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
+    private var historySync: View?=null
+    /** 云端记录卡片点击后的续播进度：只用于起播，落地仍由播放中的 saveProgress 写本机。 */
+    private var pendingCloudResume: CloudProgress?=null
     /** 设置页重建后要恢复焦点的设置项标签前缀。 */
     private var settingsFocusKey: String?=null
     /** 手机快传来的 APK：等用户在系统设置里完成授权后自动续装，不必重新扫码。 */
@@ -569,7 +573,7 @@ class MainActivity: Activity() {
         nav.clear(); segmentFirst=null; typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
-        historyManage=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
+        historyManage=null; historySync=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; favoriteFilterFirst=null; favoriteFilterButtons=emptyList(); homeUpdates=null; resumeCards.clear()
         favoriteSortFirst=null; favoriteSortButtons=emptyList(); favoriteSelectAll=null; favoriteRemove=null; favoriteManageButton=null
         filterToggle=null; filterSummary=null; filterPanel=null; filterGroupsScroll=null; filterChips=linkedMapOf(); filterRows=mutableListOf()
@@ -666,7 +670,7 @@ class MainActivity: Activity() {
         } else library.history().map { it.series }
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false) {
-        initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
+        initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null; pendingCloudResume=null
         // 当前模块被隐藏时回到首页，避免停留在不可见的页签
         if(navHiddenAt(tab)) tab=0
         // Never cache a new page number with the previous page's results while a request is pending.
@@ -984,7 +988,7 @@ class MainActivity: Activity() {
         } else if(tab>2) {
             if(tab!=3 && favoriteManage) { favoriteManage=false; favoriteSelected.clear() }
             val heading=row().apply { setPadding(0,dp(14),0,dp(6)) }
-            heading.addView(text(if(tab==3) if(favoriteManage) "管理收藏" else "我的收藏" else "接着上次看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            heading.addView(text(if(tab==3) if(favoriteManage) "管理收藏" else "我的收藏" else "最近观看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(tab==3 && !favoriteManage) {
                 favoriteCheck=addButton(heading,"检查更新") {
                     if(favoriteMonitor.running) Toast.makeText(this,"正在检查收藏更新…",Toast.LENGTH_SHORT).show()
@@ -1010,13 +1014,30 @@ class MainActivity: Activity() {
                 }.apply { nextFocusUpId=nav[tab].id; isEnabled=favoriteSelected.isNotEmpty(); alpha=if(isEnabled) 1f else .4f }
                 addButton(heading,"退出管理") { favoriteManage=false; favoriteSelected.clear(); showCatalog() }.apply { nextFocusUpId=nav[tab].id }
             }
+            if(tab==4 && accountManager.signedIn) {
+                // 手动同步：本机记录推到云端；云端记录只读，不在这里提供删除
+                historySync=addButton(heading,"同步到云端") {
+                    accountManager.syncLocalToCloud { pushed,skipped,failed ->
+                        val message=buildString {
+                            append(if(pushed>0) "已上传 $pushed 部到云端" else "云端已是最新，无需上传")
+                            if(skipped>0) append("；$skipped 部云端已是最新")
+                            if(failed>0) append("；$failed 部上传失败，可稍后重试")
+                        }
+                        tvTools.info("同步完成",message,historySync)
+                    }
+                }.apply {
+                    id=View.generateViewId()
+                    nextFocusUpId=nav[tab].id
+                    if(accountManager.isBusy) { isEnabled=false; alpha=.4f }
+                }
+            }
             if(tab==4 && library.history().isNotEmpty()) {
                 historyManage=addButton(heading,"管理记录") {
                     val rows=library.history()
                     tvTools.choose("选择要管理的观看记录",rows.map { it.series.title },historyManage,{ index -> manageHistory(rows[index].series,historyManage) },"清空记录") {
                         tvTools.confirm("清空观看记录","将删除本机所有观看进度，收藏会保留。",historyManage) { library.clearHistory(); catalogFocus=""; showCatalog() }
                     }
-                }.apply { nextFocusUpId=nav[tab].id }
+                }.apply { id=View.generateViewId(); nextFocusUpId=nav[tab].id }
             }
             container.addView(heading)
             if(tab==3 && !favoriteManage) {
@@ -1062,7 +1083,7 @@ class MainActivity: Activity() {
         if(segmentChips.isNotEmpty()) {
             val firstControl: View?=when(tab) {
                 3 -> if(favoriteManage) favoriteSelectAll else favoriteSortFirst ?: favoriteFilterFirst ?: favoriteCheck
-                else -> historyManage
+                else -> historySync ?: historyManage
             }
             segmentChips.forEachIndexed { index,item ->
                 item.nextFocusUpId=nav[tab].id
@@ -1167,6 +1188,10 @@ class MainActivity: Activity() {
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
         val displayed=mutableListOf<Series>()
         displayed+=if(localCatalog()) catalog else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog
+        // 最近观看页：本机记录在前；登录且有云端记录时追加「云端记录」区，同剧可在两区各出现一次
+        val cloudRows=if(tab==4 && collection==null && accountManager.signedIn) accountManager.cloudRows() else emptyList()
+        val localCount=displayed.size
+        if(cloudRows.isNotEmpty()) displayed+=cloudRows.map { it.series }
         if(displayed.isEmpty()) {
             message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(advancedSearch) "当前条件下没有内容，可以换个条件或点「重置」" else if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
             wireSearchPanel(null)
@@ -1175,8 +1200,16 @@ class MainActivity: Activity() {
         }
         val cols=if(tab==1 && !advancedSearch) searchColumns else gridColumns
         val adapter=CatalogAdapter(displayed,cols)
+        if(cloudRows.isNotEmpty()) {
+            adapter.cloudRows=cloudRows
+            adapter.cloudStart=localCount
+            adapter.headers=buildMap {
+                if(localCount>0) put(0,"本机记录")
+                put(localCount+if(localCount>0) 1 else 0,"云端记录")
+            }
+        }
         val grid=GridLayoutManager(this,cols)
-        grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position)) cols else 1 }
+        grid.spanSizeLookup=object: GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int)=if(adapter.isFooter(position) || adapter.isHeader(position)) cols else 1 }
         val recycler=RecyclerView(this).apply {
             id=View.generateViewId(); clipToPadding=false; isVerticalScrollBarEnabled=false; itemAnimator=null
             layoutManager=grid; this.adapter=adapter
@@ -1207,10 +1240,13 @@ class MainActivity: Activity() {
             it.nextFocusDownId=segmentFirst?.id ?: when {
                 tab==2 -> (if(aiCatalog) aiBack ?: aiGenreButton ?: rankRefresh else aiEntry ?: rankSwitch ?: rankRefresh)?.id ?: recycler.id
                 tab<=1 -> (if(tab==1) filterToggle else typeButtons[library.contentType])?.id ?: recycler.id
-                else -> favoriteCheck?.id ?: historyManage?.id ?: recycler.id
+                else -> favoriteCheck?.id ?: historySync?.id ?: historyManage?.id ?: recycler.id
             }
         }
         rankSwitch?.nextFocusDownId=recycler.id; rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id
+        historySync?.nextFocusDownId=recycler.id
+        historySync?.nextFocusRightId=historyManage?.id ?: View.NO_ID
+        historyManage?.nextFocusLeftId=historySync?.id ?: View.NO_ID
         // 收藏页头部按钮行：检查更新/管理左右互连，↓ 回排序行；管理模式按钮 ↓ 直接进网格
         favoriteCheck?.nextFocusDownId=favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: recycler.id
         favoriteCheck?.nextFocusRightId=favoriteManageButton?.id ?: View.NO_ID
@@ -1233,8 +1269,9 @@ class MainActivity: Activity() {
         else {
             val found=displayed.indexOfFirst { it.id==catalogFocus }
             val target=if(found>=0) found else scrollPositions[catalogPageKey]?.coerceIn(0,displayed.size-1) ?: 0
-            grid.scrollToPositionWithOffset(target,0)
-            recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(target)?.itemView?.requestFocus() }
+            val targetAdapter=adapter.adapterPosition(target)
+            grid.scrollToPositionWithOffset(targetAdapter,0)
+            recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(targetAdapter)?.itemView?.requestFocus() }
         }
     }
     private fun maybeLoadMore() {
@@ -1286,17 +1323,41 @@ class MainActivity: Activity() {
     }
     private inner class CatalogAdapter(val displayed: MutableList<Series>,val cols: Int): RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         var footer=FOOTER_NONE
-        fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size
-        override fun getItemCount()=displayed.size+if(footer!=FOOTER_NONE) 1 else 0
-        override fun getItemViewType(position: Int)=if(isFooter(position)) TYPE_FOOTER else TYPE_CARD
+        /** 分节标题：key 为 adapter 位置；仅最近观看页的本机/云端双区使用，其余页面为空。 */
+        var headers: Map<Int,String> = emptyMap()
+        /** displayed 中云端区的起始下标；云端卡角标、徽标与点击续播都走云端进度。 */
+        var cloudStart=Int.MAX_VALUE
+        var cloudRows: List<CloudProgress> = emptyList()
+        fun isHeader(position: Int)=headers.containsKey(position)
+        fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size+headers.size
+        /** adapter 位置 → displayed 下标（前面每有一个分节标题就减一）。 */
+        fun displayedIndex(position: Int): Int {
+            var index=position
+            for(key in headers.keys) if(key<position) index--
+            return index
+        }
+        /** displayed 下标 → adapter 位置。 */
+        fun adapterPosition(index: Int): Int {
+            var position=index
+            for(key in headers.keys.sorted()) if(key<=position) position++
+            return position
+        }
+        override fun getItemCount()=displayed.size+headers.size+if(footer!=FOOTER_NONE) 1 else 0
+        override fun getItemViewType(position: Int)=if(isHeader(position)) TYPE_HEADER else if(isFooter(position)) TYPE_FOOTER else TYPE_CARD
         fun updateFooter(next: Int) {
-            if(footer==next) { if(next!=FOOTER_NONE) notifyItemChanged(displayed.size); return }
+            val footerPos=displayed.size+headers.size
+            if(footer==next) { if(next!=FOOTER_NONE) notifyItemChanged(footerPos); return }
             val had=footer!=FOOTER_NONE; footer=next
-            if(next==FOOTER_NONE) notifyItemRemoved(displayed.size)
-            else if(had) notifyItemChanged(displayed.size)
-            else notifyItemInserted(displayed.size)
+            if(next==FOOTER_NONE) notifyItemRemoved(footerPos)
+            else if(had) notifyItemChanged(footerPos)
+            else notifyItemInserted(footerPos)
         }
         override fun onCreateViewHolder(parent: ViewGroup,viewType: Int): RecyclerView.ViewHolder {
+            if(viewType==TYPE_HEADER) {
+                val label=text("",16f,muted).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(4),dp(10),0,dp(6)) }
+                label.layoutParams=RecyclerView.LayoutParams(-1,-2)
+                return object: RecyclerView.ViewHolder(label) {}
+            }
             if(viewType==TYPE_FOOTER) {
                 val frame=FrameLayout(this@MainActivity)
                 frame.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
@@ -1326,10 +1387,13 @@ class MainActivity: Activity() {
             return CardHolder(card,artwork,image,rank,title,badge)
         }
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
+            if(getItemViewType(position)==TYPE_HEADER) { (holder.itemView as TextView).text=headers[position]; return }
             if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
             holder as CardHolder
-            val item=displayed[position]; holder.boundId=item.id
-            if(position==0) resultFirstCard=holder.card
+            val di=displayedIndex(position)
+            val item=displayed[di]; holder.boundId=item.id
+            val cloudRow=if(di>=cloudStart) cloudRows.getOrNull(di-cloudStart) else null
+            if(di==0) resultFirstCard=holder.card
             val card=holder.card
             card.tag=item.id; card.contentDescription=item.title
             loadCover(holder.image,item.cover)
@@ -1350,12 +1414,19 @@ class MainActivity: Activity() {
                 holder.rank.background=rounded(if(rank==1) accent else Color.argb(235,255,255,255),6)
                 holder.rank.visibility=View.VISIBLE
                 card.contentDescription="$rankLabel，${item.title}，${rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
+            } else if(cloudRow!=null) {
+                // 云端记录角标：与本机记录同剧并存时一眼可辨
+                holder.rank.text="云端"
+                holder.rank.setTextColor(white)
+                holder.rank.background=rounded(accent,6)
+                holder.rank.visibility=View.VISIBLE
+                card.contentDescription="云端记录，${item.title}，第 ${cloudRow.episodeIndex+1} 集"
             } else holder.rank.visibility=View.GONE
             holder.title.text=item.title
             val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
             // 收藏管理模式：角标前缀 ✓ 表示已勾选，确认键只切换勾选不进详情
             val managePicked=tab==3 && favoriteManage && item.id in favoriteSelected
-            holder.badge.text=if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.text=if(cloudRow!=null) "第 ${cloudRow.episodeIndex+1} 集 · ${formatTime(cloudRow.position)} · 云端" else if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
             holder.badge.setTextColor(if(managePicked) gold else if(ranked || tab==3) accent else muted)
             if(tab==3 && !favoriteManage) favoriteBadges[item.id]=holder.badge
             card.setOnClickListener {
@@ -1363,14 +1434,14 @@ class MainActivity: Activity() {
                 if(tab==3 && favoriteManage) {
                     if(!favoriteSelected.remove(item.id)) favoriteSelected+=item.id
                     catalogAdapter?.notifyItemChanged(position); refreshFavoriteManageBar()
-                } else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
+                } else if(cloudRow!=null) openDetail(item,true,cloud=cloudRow) else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
             }
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
             card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) { catalogFocus=item.id; loadCover(holder.image,item.cover); selectionPreview?.show(item,selectionStatus(item)) } }
             // 高级搜索下 searchInput 未挂载但非空，会让 Elvis 链提前命中导致 ↑ 回不到筛选面板，故面板分支必须放最前
-            card.nextFocusUpId=if(position<cols) (if(tab==1 && advancedSearch) filterRows.lastOrNull()?.firstOrNull()?.id else null) ?: suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteSelectAll?.id ?: favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
-            if(position>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
+            card.nextFocusUpId=if(di<cols) (if(tab==1 && advancedSearch) filterRows.lastOrNull()?.firstOrNull()?.id else null) ?: suggestFirst?.id ?: historyFirst?.id ?: azLastRow.firstOrNull()?.id ?: searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: typeButtons[library.contentType]?.id ?: rankSwitch?.id ?: rankRefresh?.id ?: favoriteSelectAll?.id ?: favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: favoriteCheck?.id ?: historySync?.id ?: historyManage?.id ?: nav[tab].id else View.NO_ID
+            if(di>=displayed.size-12) catalogRecycler?.post { maybeLoadMore() }
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
             (holder as? CardHolder)?.let { h -> if(h.boundId.isNotEmpty() && favoriteBadges[h.boundId]===h.badge) favoriteBadges.remove(h.boundId) }
@@ -2319,17 +2390,24 @@ class MainActivity: Activity() {
             }
         })
     }
-    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true) {
-        pendingDetail=series; detailAutoplay=autoplay
+    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloud: CloudProgress?=null) {
+        pendingDetail=series; detailAutoplay=autoplay; pendingCloudResume=cloud
         invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false; detailEpisodePage=-1
         val body=base(series.title); message(body,"正在加载剧集…")
         work({ repository.detail(series.id) }, { result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
-            val progress=library.progress(series.id)
-            val target=ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
+            val cloudResume=pendingCloudResume.takeIf { it?.series?.id==series.id }; pendingCloudResume=null
+            val target=if(cloudResume!=null) {
+                // 云端进度续播：episodeId 对不上（换源/集数更新）时退回云端记录的集号；不写本机记录，起播后自然落本机
+                val index=result.episodes.indexOf(cloudResume.episodeId).takeIf { it>=0 } ?: cloudResume.episodeIndex.coerceIn(0,result.episodes.lastIndex)
+                ResumeTarget(index,cloudResume.position.coerceAtLeast(0))
+            } else {
+                val progress=library.progress(series.id)
+                ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
+            }
             episodeIndex=target.index; group=episodeIndex/20
             if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
-        }, { problem -> error(body,problem) { openDetail(series,resume,detailAutoplay) } })
+        }, { problem -> error(body,problem) { openDetail(series,resume,detailAutoplay,cloud) } })
     }
     private fun showDetail(focusEpisode: Boolean) {
         invalidatePage(); releaseCatalogViews(); screen="detail"; val data=detail ?: return showCatalog()
@@ -3541,7 +3619,6 @@ class MainActivity: Activity() {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
         val progress=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis())
         library.save(progress)
-        accountManager.onLocalProgressSaved(progress,data.episodes.size)
     }
     /** Starts the official-comment overlay for the current episode; safe to call repeatedly. */
     private fun startDanmaku() {
