@@ -91,7 +91,11 @@ class HomeScreen(
         return true
     }
 
-    fun refreshSelection() { cards[lastFocus]?.entry?.let { selected(it.series,it.label) } }
+    fun refreshSelection() {
+        cards[lastFocus]?.entry?.let { entry ->
+            selected(entry.series,entry.label)
+        }
+    }
 
     /** Retry visible cover requests after the owner cancels work for a page or lifecycle change. */
     fun reloadArtwork() {
@@ -102,7 +106,8 @@ class HomeScreen(
         val previous=position ?: if(rows.isNotEmpty()) capturePosition() else null
         this.shelves=shelves; footerMore=more; revision++; val ticket=revision; restoring=true
         contents.removeAllViews(); rows.clear(); cards.clear(); moreButton=null; lastRow=null
-        shelves.filter { it.entries.isNotEmpty() || it.more!=null }.forEach { shelf ->
+        val display=shelves.filter { it.entries.isNotEmpty() || it.more!=null }
+        display.forEach { shelf ->
             val block=LinearLayout(context).apply { orientation=VERTICAL }
             val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(2),dp(4),dp(2),dp(9)) }
             heading.addView(View(context).apply { background=TvStyle.shape(context,accent,radius=2) },LayoutParams(dp(3),dp(14)).apply { rightMargin=dp(8) })
@@ -133,7 +138,7 @@ class HomeScreen(
                 view.setOnFocusChangeListener { _,focused ->
                     view.background=shape(focused)
                     if(focused) {
-                        lastFocus=key; remember(key); card.entry?.let { selected(it.series,it.label) }
+                        lastFocus=key; remember(key); card.entry?.let { entry -> selected(entry.series,entry.label) }
                         if(!restoring) {
                             loadNearbySelection()
                             if(lastRow!=shelf.key) scroll.post { if(revision==ticket && view.hasFocus()) reveal(block) }
@@ -254,7 +259,8 @@ class HomeScreen(
                 val view=item.view.getChildAt(child); val params=view.layoutParams as LayoutParams
                 (if(params.height>0) params.height else view.measuredHeight)+params.topMargin+params.bottomMargin
             } }
-            val desired=((row.cards.first().view.width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
+            val width=row.cards.first().view.width
+            val desired=((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
             val imageHeight=minOf(desired,(height-row.block.getChildAt(0).measuredHeight-textHeight-dp(8)).coerceAtLeast(dp(48)))
             row.cards.forEach { card -> card.view.getChildAt(0).let { artwork -> if(artwork.layoutParams.height!=imageHeight) artwork.layoutParams=artwork.layoutParams.apply { height=imageHeight } } }
         }

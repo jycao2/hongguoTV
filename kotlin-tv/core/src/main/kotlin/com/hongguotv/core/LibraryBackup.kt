@@ -10,7 +10,7 @@ data class BackupProgress(val series: Series,val episodeId: String,val episodeIn
 }
 data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val autoSeason: Boolean=true,val danmaku: Boolean=true,
     val danmakuOpacity: Int=DanmakuPrefs.OPACITY_DEFAULT,val danmakuFont: Int=DanmakuPrefs.FONT_DEFAULT,val danmakuSpeed: Int=DanmakuPrefs.SPEED_DEFAULT,val danmakuRows: Int=DanmakuPrefs.ROWS_DEFAULT,
-    val showClock: Boolean=false,val sourceHidden: Boolean=false,val navHidden: Set<String> = emptySet()) {
+    val showClock: Boolean=true,val sourceHidden: Boolean=false,val navHidden: Set<String> = emptySet()) {
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock).put("sourceHidden",sourceHidden)
         .put("navHidden",JSONArray(navHidden.filter { it in LibraryBackup.NAV_KEYS }.sorted()))
@@ -43,7 +43,9 @@ data class BackupThirdHistory(
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
-    /** 首页与设置始终显示，只有这四个导航模块支持单独隐藏。 */
+    /** 顶部导航栏模块的隐藏键：搜索、排行榜、收藏、最近观看。
+     *  UI 上「收藏」和「最近观看」是「我的」的子 tab，设置里的「我的」开关会同时设置这两个 key。
+     *  首页与设置始终显示，片源独立用 sourceHidden 字段。 */
     val NAV_KEYS=setOf("search","rank","favorite","history")
     const val MAX_THIRD_HISTORY=100
     const val MAX_THIRD_FAVORITES=100
@@ -145,7 +147,7 @@ object LibraryBackup {
         val danmakuFont=DanmakuPrefs.font(settings.optInt("danmakuFont",DanmakuPrefs.FONT_DEFAULT))
         val danmakuSpeed=DanmakuPrefs.speed(settings.optInt("danmakuSpeed",DanmakuPrefs.SPEED_DEFAULT))
         val danmakuRows=DanmakuPrefs.rows(settings.optInt("danmakuRows",DanmakuPrefs.ROWS_DEFAULT))
-        val showClock=settings.optBoolean("showClock",false)
+        val showClock=settings.optBoolean("showClock",true)
         // 旧备份没有该字段时按默认「显示」处理
         val sourceHidden=settings.optBoolean("sourceHidden",false)
         // 导航模块显隐：只认已知模块键，未知值忽略

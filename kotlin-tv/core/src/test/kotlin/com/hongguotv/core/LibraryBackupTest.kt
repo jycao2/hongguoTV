@@ -40,11 +40,11 @@ class LibraryBackupTest {
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("autoSeason")
         assertTrue(LibraryBackup.decode(legacy.toString()).settings.autoSeason)
     }
-    @Test fun `clock setting round trips and legacy backups default to hidden`() {
+    @Test fun `clock setting round trips and legacy backups default to shown`() {
         val on=data().copy(settings=BackupSettings().copy(showClock=true))
         assertEquals(on,LibraryBackup.decode(LibraryBackup.encode(on)))
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("showClock")
-        assertFalse(LibraryBackup.decode(legacy.toString()).settings.showClock)
+        assertTrue(LibraryBackup.decode(legacy.toString()).settings.showClock)
         assertTrue(LibraryBackup.merge(data(),on,true).settings.showClock)
     }
     @Test fun `source entry defaults to shown and hidden setting round trips`() {

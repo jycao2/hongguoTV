@@ -104,7 +104,7 @@ class Library(context: Context) {
             }
         }
     }
-    private fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
+    internal fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
     private fun put(key: String, value: Any?) { writes.submit(mapOf(key to { value })); scheduleLocalBackup() }
     private fun persist(vararg keys: String) {
         val state = state()
@@ -213,6 +213,10 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    /** 收藏页排序：update 最近更新 / watch 最近观看 / name 名称。本机视图偏好，不进备份。 */
+    var favoriteSort: String
+        get() = prefs.getString("favoriteSort", null)?.takeIf { it in listOf("update", "watch", "name") } ?: "update"
+        set(value) { prefs.edit().putString("favoriteSort", value).apply() }
     /** 导航栏「片源」入口是否隐藏：默认显示，用户可在设置里单独隐藏；随备份一起恢复。 */
     var sourceHidden: Boolean
         get() = state().settings.sourceHidden
