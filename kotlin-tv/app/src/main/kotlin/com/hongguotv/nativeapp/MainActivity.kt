@@ -357,11 +357,16 @@ class MainActivity: Activity() {
         gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); focusStyle(this,selected); setOnClickListener { onClick() }
     }
     /** 顶栏 Pill 导航按钮：icon + label，选中态填充 accent，未选中透明+outline，焦点态 raised+accent border。 */
-    private fun pillNav(iconRes: Int,label: String,selected: Boolean,onClick: ()->Unit): TextView {
-        val view=text(label,15f,white).apply {
+    private fun pillNav(iconRes: Int,label: String,selected: Boolean,onClick: ()->Unit,compact: Boolean=false): TextView {
+        val padH=if(compact) 14 else 18
+        val padV=if(compact) 8 else 10
+        val drawPad=if(compact) 6 else 8
+        val h=if(compact) 36 else 42
+        val ts=if(compact) 13f else 15f
+        val view=text(label,ts,white).apply {
             gravity=Gravity.CENTER; isFocusable=true; isClickable=true; includeFontPadding=false
-            setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(8)
-            setPadding(dp(18),dp(10),dp(18),dp(10)); minHeight=dp(42); setOnClickListener { onClick() }
+            setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(drawPad)
+            setPadding(dp(padH),dp(padV),dp(padH),dp(padV)); minHeight=dp(h); setOnClickListener { onClick() }
         }
         view.id=View.generateViewId()
         fun paint(focused: Boolean) {
@@ -708,12 +713,15 @@ class MainActivity: Activity() {
         invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
         if(foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
         val top=row().apply { setPadding(0,0,0,dp(8)) }
+        val compactNav=widthDp()<1600
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
-        top.addView(brand,lp(dp(132),dp(44)))
+        brand.addView(text("  v${BuildConfig.VERSION_NAME}",13f,muted))
+        top.addView(brand,lp(-2,dp(44)))
         // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
-        val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0) { switchTab(0) }
+        val navMargin=if(compactNav) dp(4) else dp(6)
+        val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0,{ switchTab(0) },compactNav)
         val areaButtons=listOf(
             Triple(1,"搜索",listOf(1)),
             Triple(2,"排行榜",listOf(2)),
@@ -721,10 +729,10 @@ class MainActivity: Activity() {
             Triple(3,"我的",listOf(4,3))).mapIndexed { index,entry ->
             val iconRes=when(index) { 0->com.hongguotv.nativeapp.R.drawable.ic_nav_search; 1->com.hongguotv.nativeapp.R.drawable.ic_nav_rank; 2->com.hongguotv.nativeapp.R.drawable.ic_nav_source; else->com.hongguotv.nativeapp.R.drawable.ic_nav_mine }
             lateinit var view: TextView
-            view=pillNav(iconRes,entry.second,tab==entry.first || tab in entry.third) {
+            view=pillNav(iconRes,entry.second,tab==entry.first || tab in entry.third,{
                 val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
                 if(target!=tab) switchTab(target) else view.requestFocus()
-            }
+            },compactNav)
             // 子模块全部隐藏时整个意图区消失
             view.visibility=if(entry.third.all { navHiddenAt(it) }) View.GONE else View.VISIBLE
             view
@@ -737,7 +745,7 @@ class MainActivity: Activity() {
         val settingsTool=button("设置",tab==5) { switchTab(5) }
             .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
         listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3]).forEach { item ->
-            top.addView(item,lp(-2,-2).apply { rightMargin=dp(6) })
+            top.addView(item,lp(-2,-2).apply { rightMargin=navMargin })
         }
         // 右上工具与首页内容类型一起，等类型按钮挂完后再按 类型 → 留白 → 工具 的顺序追加
         // 保留 7 项索引语义：搜索/排行榜/片源各占独立按钮，收藏/历史共用我的按钮，设置由右上工具承载
