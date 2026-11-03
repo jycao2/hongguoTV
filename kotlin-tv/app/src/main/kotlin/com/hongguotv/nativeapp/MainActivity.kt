@@ -722,7 +722,7 @@ class MainActivity: Activity() {
         brand.addView(brandIcon,lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
         brand.addView(brandName)
         brand.addView(brandVer,lp(-2,-2).apply { topMargin=dp(6) })
-        top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(8) })
+        top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(20) })
         // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
         val navMargin=if(compactNav) dp(4) else dp(6)
         val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0,{ switchTab(0) },compactNav)
