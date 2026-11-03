@@ -32,11 +32,15 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10200 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.24.1+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.24.1-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.25.0+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.25.0-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- 修复全部剧集无法播放：平台下线旧播放接口后改为调用官方现行取流接口，并保留旧接口多路由兜底"
+            echo "- **顶栏导航改版**：五个入口改为纯文字样式，选中项加粗变色带边框；保留版本号，小屏电视自动紧凑"
+            echo "- **红果账号登录**：扫码登录后可手动同步观看记录到云端，本机与云端记录分区展示，云端记录带角标且只读"
+            echo "- **首页首屏改版**：移除 Hero 推荐区，「接着看」改用竖版海报，与热门发现尺寸统一，一屏看全两排"
+            echo "- **设置页左右分栏**：左分类右内容，新增播放状态小标；播放快捷面板、详情页与片源列表同步优化"
+            echo "- **修复焦点问题**：排行榜长按下键不再在卡片与首页按钮间闪烁，进入设置页按下键不再跳回首页"
             echo "RELEASE_NOTES_END"
           } >> "$GITHUB_ENV"
       - name: Tests, release lint, and signed APK
