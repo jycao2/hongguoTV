@@ -51,8 +51,6 @@ class WebLogin(http: OkHttpClient) {
     }
 
     private var token = ""
-    private var mobile = ""
-    private var sent = false
 
     data class Qr(val image: ByteArray, val expiresIn: Int)
 
@@ -90,10 +88,8 @@ class WebLogin(http: OkHttpClient) {
         val data = reply.optJSONObject("data") ?: throw IOException("官网登录返回格式异常")
         if (reply.optString("message") != "success") {
             val code = data.optInt("error_code", -1)
-            val message =
-                if (data.has("verify_center_decision_conf")) "红果要求完成滑块验证，请改用扫码登录"
-                else data.optString("description").ifBlank { "官网登录失败" }
-            throw PhoneLogin.Failure("$message（错误码 $code）", code, code == 1102)
+            val message = data.optString("description").ifBlank { "官网登录失败" }
+            throw IOException("$message（错误码 $code）")
         }
         return data
     }
@@ -162,45 +158,6 @@ class WebLogin(http: OkHttpClient) {
         throw IOException("登录确认跳转次数过多")
     }
 
-    fun send(number: String): PhoneLogin.Sent {
-        if (cookies.none { it.name == "passport_csrf_token" }) qr()
-        mobile = if (number.startsWith("+")) number else "+86 $number"
-        val data =
-            checked(
-                call(
-                    "/passport/web/send_code/",
-                    mapOf(
-                        "mobile" to mix(mobile),
-                        "type" to mix("24"),
-                        "mix_mode" to "1",
-                        "fixed_mix_mode" to "1",
-                    ),
-                )
-            )
-        sent = true
-        return PhoneLogin.Sent(
-            data.optString("mobile").ifBlank { "你的手机" },
-            data.optInt("retry_time", 60),
-        )
-    }
-
-    fun verify(code: String): AccountCredentials {
-        check(sent) { "请先发送验证码" }
-        checked(
-            call(
-                "/passport/web/sms_login/",
-                mapOf(
-                    "mobile" to mix(mobile),
-                    "code" to mix(code),
-                    "login_only" to "true",
-                    "mix_mode" to "1",
-                    "fixed_mix_mode" to "1",
-                ),
-            )
-        )
-        return credentials()
-    }
-
     private fun hasSession() =
         cookies.any {
             it.name in listOf("sessionid", "sessionid_ss") &&
@@ -224,10 +181,5 @@ class WebLogin(http: OkHttpClient) {
         const val BASE = "https://hongguoduanju.com"
         private const val UA =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-
-        internal fun mix(value: String) =
-            value.toByteArray(Charsets.UTF_8).joinToString("") {
-                ((it.toInt() and 255) xor 5).toString(16)
-            }
     }
 }

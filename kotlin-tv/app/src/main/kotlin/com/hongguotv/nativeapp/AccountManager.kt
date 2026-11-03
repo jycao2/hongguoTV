@@ -328,19 +328,56 @@ class AccountManager(private val context: Context, private val library: Library)
             toast("账号操作进行中，请稍候")
             return
         }
-        val choices = if (signedIn) arrayOf("刷新云端记录", "退出红果账号") else arrayOf("扫码登录", "手机号登录")
-        android.app.AlertDialog.Builder(activity)
-            .setTitle(profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号")
-            .setItems(choices) { _, index ->
+        val choices = if (signedIn) listOf("刷新云端记录", "退出红果账号") else listOf("扫码登录")
+        TvDialog.choose(
+            activity,
+            profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号",
+            choices,
+            onChoice = { index ->
                 if (!signedIn) {
-                    if (index == 0) qrLogin(activity) else phoneLogin(activity)
+                    qrLogin(activity)
                 } else when (index) {
                     0 -> refreshHistory()
                     1 -> logout()
                 }
-            }
-            .setNegativeButton("关闭", null)
-            .show()
+            },
+        ).show()
+    }
+
+    /** 双按钮结果弹窗：主按钮执行 action，次按钮返回账号页（可选）。 */
+    private fun actionDialog(
+        activity: android.app.Activity,
+        title: String,
+        message: String,
+        actionLabel: String,
+        onAction: () -> Unit,
+        backToAccount: Boolean = true,
+    ) {
+        val dp = { v: Int -> (v * activity.resources.displayMetrics.density).toInt() }
+        val content = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(TvDialog.title(activity, title))
+            addView(TvDialog.body(activity, message))
+        }
+        val buttons = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.END
+            setPadding(0, dp(14), 0, 0)
+        }
+        val dialog = android.app.AlertDialog.Builder(activity)
+            .setView(TvDialog.card(activity, content))
+            .create()
+        if (backToAccount) {
+            val back = TvDialog.capsuleButton(activity, "返回") {}
+            buttons.addView(back, android.widget.LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+            back.setOnClickListener { dialog.dismiss(); showLoginDialog(activity) }
+        }
+        val action = TvDialog.capsuleButton(activity, actionLabel) {}
+        buttons.addView(action)
+        content.addView(buttons)
+        TvDialog.styleWindow(activity, dialog) { action.requestFocus() }
+        action.setOnClickListener { dialog.dismiss(); onAction() }
+        dialog.show()
     }
 
     private fun qrLogin(activity: android.app.Activity) {
@@ -362,24 +399,35 @@ class AccountManager(private val context: Context, private val library: Library)
                         gravity = android.view.Gravity.CENTER_HORIZONTAL
                     }
                 }
+                val dp = { v: Int -> (v * activity.resources.displayMetrics.density).toInt() }
                 val panel = android.widget.LinearLayout(activity).apply {
                     orientation = android.widget.LinearLayout.VERTICAL
-                    setPadding(24, 16, 24, 16)
+                    addView(TvDialog.title(activity, "红果官方扫码登录"))
                     addView(image)
                     addView(
                         android.widget.TextView(activity).apply {
                             text = "用手机红果 App：我的 → 右上角菜单 → 扫一扫\n扫码后请在手机确认登录"
-                            textSize = 18f
+                            textSize = 15f
+                            setTextColor(TvStyle.muted)
                             gravity = android.view.Gravity.CENTER
-                            setPadding(0, 12, 0, 0)
+                            setLineSpacing(0f, 1.25f)
+                            setPadding(0, dp(14), 0, 0)
                         }
                     )
                 }
+                val buttons = android.widget.LinearLayout(activity).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.END
+                    setPadding(0, dp(14), 0, 0)
+                }
                 val dialog = android.app.AlertDialog.Builder(activity)
-                    .setTitle("红果官方扫码登录")
-                    .setView(panel)
-                    .setNegativeButton("取消", null)
-                    .show()
+                    .setView(TvDialog.card(activity, panel))
+                    .create()
+                val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
+                buttons.addView(cancel)
+                panel.addView(buttons)
+                TvDialog.styleWindow(activity, dialog) { cancel.requestFocus() }
+                dialog.show()
                 val token = generation
                 val deadline = android.os.SystemClock.elapsedRealtime() + qr.expiresIn.coerceIn(1, 300) * 1000L
                 var cancelled = false
@@ -408,12 +456,7 @@ class AccountManager(private val context: Context, private val library: Library)
                         closeQr()
                         status = "二维码已过期，请重新扫码"
                         changed()
-                        android.app.AlertDialog.Builder(activity)
-                            .setTitle("二维码已过期")
-                            .setMessage("请刷新二维码，再用手机红果 App 扫码确认。")
-                            .setPositiveButton("刷新二维码") { _, _ -> qrLogin(activity) }
-                            .setNegativeButton("取消", null)
-                            .show()
+                        actionDialog(activity, "二维码已过期", "请刷新二维码，再用手机红果 App 扫码确认。", "刷新二维码", { qrLogin(activity) }, backToAccount = false)
                         return
                     }
                     worker.execute {
@@ -432,12 +475,7 @@ class AccountManager(private val context: Context, private val library: Library)
                                             { store.save(account.first); account },
                                             { acceptAccount(it.first, it.second) },
                                             { failure ->
-                                                android.app.AlertDialog.Builder(activity)
-                                                    .setTitle("登录状态保存失败")
-                                                    .setMessage(safeError(failure))
-                                                    .setPositiveButton("重新扫码") { _, _ -> qrLogin(activity) }
-                                                    .setNegativeButton("返回") { _, _ -> showLoginDialog(activity) }
-                                                    .show()
+                                                actionDialog(activity, "登录状态保存失败", safeError(failure), "重新扫码", { qrLogin(activity) })
                                             },
                                         )
                                     } else main.postDelayed({ poll() }, 2000)
@@ -446,12 +484,7 @@ class AccountManager(private val context: Context, private val library: Library)
                                     closeQr()
                                     status = safeError(it)
                                     changed()
-                                    android.app.AlertDialog.Builder(activity)
-                                        .setTitle("扫码登录未完成")
-                                        .setMessage(status)
-                                        .setPositiveButton("重新扫码") { _, _ -> qrLogin(activity) }
-                                        .setNegativeButton("返回") { _, _ -> showLoginDialog(activity) }
-                                        .show()
+                                    actionDialog(activity, "扫码登录未完成", status, "重新扫码", { qrLogin(activity) })
                                 }
                         }
                     }
@@ -459,78 +492,6 @@ class AccountManager(private val context: Context, private val library: Library)
                 main.postDelayed({ poll() }, 1500)
             },
         )
-    }
-
-    private fun phoneLogin(activity: android.app.Activity) {
-        val field = android.widget.EditText(activity).apply {
-            isSingleLine = true
-            inputType = android.text.InputType.TYPE_CLASS_PHONE
-            hint = "手机号"
-        }
-        android.app.AlertDialog.Builder(activity)
-            .setTitle("手机号登录")
-            .setView(field)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("发送验证码") { _, _ ->
-                val raw = field.text.toString().trim()
-                if (raw.isBlank()) return@setPositiveButton
-                val mobile = runCatching { PhoneLogin.parse(raw) }.getOrElse {
-                    toast(safeError(it))
-                    return@setPositiveButton
-                }
-                val login = WebLogin(http)
-                task(
-                    { login.send(mobile) },
-                    { sent -> inputCode(activity, login, sent.maskedMobile) },
-                    { failure ->
-                        android.app.AlertDialog.Builder(activity)
-                            .setTitle("短信登录未完成")
-                            .setMessage(safeError(failure))
-                            .setPositiveButton("改用扫码") { _, _ -> qrLogin(activity) }
-                            .setNegativeButton("返回", null)
-                            .show()
-                    },
-                )
-            }
-            .show()
-    }
-
-    private fun inputCode(activity: android.app.Activity, login: WebLogin, masked: String, error: String? = null) {
-        val field = android.widget.EditText(activity).apply {
-            isSingleLine = true
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            hint = "验证码"
-        }
-        val builder = android.app.AlertDialog.Builder(activity)
-            .setTitle("输入发送至 $masked 的验证码")
-            .setView(field)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("确认", null)
-        if (error != null) builder.setMessage(error)
-        val dialog = builder.show()
-        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val value = field.text.toString().trim()
-            if (!value.matches(Regex("[0-9]{4,8}"))) {
-                inputCode(activity, login, masked, "请输入 4—8 位验证码")
-                dialog.dismiss()
-                return@setOnClickListener
-            }
-            dialog.dismiss()
-            task(
-                { validateAccount(login.verify(value)).also { store.save(it.first) } },
-                { (next, account) -> acceptAccount(next, account) },
-                { failure ->
-                    if (failure is PhoneLogin.Failure && !failure.canRetryCode) {
-                        android.app.AlertDialog.Builder(activity)
-                            .setTitle("登录未完成")
-                            .setMessage(safeError(failure))
-                            .setPositiveButton("返回账号页") { _, _ -> showLoginDialog(activity) }
-                            .setNeutralButton("改用扫码") { _, _ -> qrLogin(activity) }
-                            .show()
-                    } else inputCode(activity, login, masked, safeError(failure))
-                },
-            )
-        }
     }
 
     private fun validateAccount(web: AccountCredentials): Pair<AccountCredentials, CloudProfile> {
