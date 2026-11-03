@@ -682,10 +682,11 @@ class MainActivity: Activity() {
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
         brand.addView(text("v${BuildConfig.VERSION_NAME.substringBefore('+')}",12f,muted).apply { setPadding(dp(5),0,0,dp(9)) },lp(-2,-2).apply { gravity=Gravity.BOTTOM })
         top.addView(brand,lp(dp(172),dp(44)))
-        // 一级导航收为四个意图区：首页 / 发现 / 片源 / 我的；搜索与排行榜并入发现，收藏与历史并入我的
+        // 一级导航：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
         val homeButton=button("首页",tab==0) { switchTab(0) }
         val areaButtons=listOf(
-            Triple(1,"发现",listOf(1,2)),
+            Triple(1,"搜索",listOf(1)),
+            Triple(2,"排行榜",listOf(2)),
             Triple(6,"片源",listOf(6)),
             Triple(3,"我的",listOf(3,4))).map { entry ->
             lateinit var view: TextView
@@ -704,13 +705,13 @@ class MainActivity: Activity() {
         }.apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
         val settingsTool=button("设置",tab==5) { switchTab(5) }
             .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
-        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2]).forEach { item ->
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3]).forEach { item ->
             top.addView(item,lp(-2,-2).apply { rightMargin=dp(4) })
         }
         // 右上工具与首页内容类型一起，等类型按钮挂完后再按 类型 → 留白 → 工具 的顺序追加
-        // 保留 7 项索引语义：搜索/排行榜共用发现按钮，收藏/历史共用我的按钮，设置由右上工具承载
-        nav.addAll(listOf(homeButton,areaButtons[0],areaButtons[0],areaButtons[2],areaButtons[2],settingsTool,areaButtons[1]))
-        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],quickTool,settingsTool).let { chain ->
+        // 保留 7 项索引语义：搜索/排行榜/片源各占独立按钮，收藏/历史共用我的按钮，设置由右上工具承载
+        nav.addAll(listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[3],areaButtons[3],settingsTool,areaButtons[2]))
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3],quickTool,settingsTool).let { chain ->
             chain.forEachIndexed { index,item ->
                 item.nextFocusLeftId=chain.getOrNull(index-1)?.id ?: item.id
                 item.nextFocusRightId=chain.getOrNull(index+1)?.id ?: item.id
@@ -719,10 +720,10 @@ class MainActivity: Activity() {
         }
         container.addView(top)
         container.addView(View(this).apply { setBackgroundColor(TvStyle.outline) },lp(-1,dp(1)).apply { bottomMargin=dp(6) })
-        // 二级分段：发现（搜索/排行榜）与我的（收藏/最近观看）同层切换，隐藏的模块不占位
+        // 二级分段：我的（收藏/最近观看）同层切换，隐藏的模块不占位
         var segmentChips: List<TextView> =emptyList()
-        if(tab in 1..4) {
-            val options=if(tab<=2) listOf(1 to "搜索",2 to "排行榜") else listOf(3 to "收藏",4 to "最近观看")
+        if(tab in 3..4) {
+            val options=listOf(3 to "收藏",4 to "最近观看")
             val segRow=row().apply { setPadding(0,0,0,dp(8)) }
             segmentChips=options.filter { !navHiddenAt(it.first) }.map { (index,label) ->
                 chip(label,index==tab) { if(index!=tab) switchTab(index) }.apply {
@@ -1060,8 +1061,6 @@ class MainActivity: Activity() {
         // 分段与页面首个可操作控件互连：导航 ↓ 分段，分段 ↓ 内容，焦点从内容 ↑ 可回到分段
         if(segmentChips.isNotEmpty()) {
             val firstControl: View?=when(tab) {
-                1 -> if(advancedSearch) filterToggle ?: searchInput else searchInput
-                2 -> aiBack ?: aiGenreButton ?: aiEntry ?: rankSwitch ?: rankRefresh
                 3 -> if(favoriteManage) favoriteSelectAll else favoriteSortFirst ?: favoriteFilterFirst ?: favoriteCheck
                 else -> historyManage
             }
