@@ -161,17 +161,17 @@ class AccountManager(private val context: Context, private val library: Library)
     }
 
     /** 拉取云端历史，仅作只读展示：不合并不回写本机记录。 */
-    fun refreshHistory() {
-        val account = credentials ?: return
-        if (closed) return
+    fun refreshHistory(onDone: (() -> Unit)? = null) {
+        val account = credentials ?: run { onDone?.invoke(); return }
+        if (closed) { onDone?.invoke(); return }
         val token = generation
         status = "正在读取云端观看历史…"
         changed()
         worker.execute {
-            if (closed || token != generation) return@execute
+            if (closed || token != generation) { main.post { onDone?.invoke() }; return@execute }
             val result = runCatching { client.history(account) }
             main.post {
-                if (closed || token != generation) return@post
+                if (closed || token != generation) { onDone?.invoke(); return@post }
                 result
                     .onSuccess { rows ->
                         cloudHistory = rows.distinctBy { it.series.id }
@@ -184,6 +184,7 @@ class AccountManager(private val context: Context, private val library: Library)
                         status = "云端历史读取失败：${safeError(error)}"
                         changed()
                     }
+                onDone?.invoke()
             }
         }
     }

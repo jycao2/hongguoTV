@@ -533,7 +533,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private fun videoModel(id: String): JSONObject {
         val identity=playbackSession.profile(http)
         tabVideoModel(id,identity)?.let { return it }
-        val biz="""{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
+        // 旧接口与 video_tab 保持一致用 device_level=1：部分剧集在 3 下会把 360P–720P 全发成
+        // bytevc2（MP4 提取器读不出视频轨），只剩超出电视解码上限的 1080P bytevc1，降档无路可走。
+        val biz="""{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
         val single="""{"video_id":"$id","biz_param":$biz}""".toByteArray()
         val map="""{"biz_param":$biz,"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val routes=linkedMapOf(

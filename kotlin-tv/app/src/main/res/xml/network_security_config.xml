@@ -1,4 +1,5 @@
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false"/>
+    <!-- 局域网 NAS/WebDAV 与用户自添片源普遍是 http，清单里 usesCleartextTraffic 也是 true -->
+    <base-config cleartextTrafficPermitted="true"/>
     <domain-config cleartextTrafficPermitted="true"><domain includeSubdomains="true">douyinvod.com</domain><domain includeSubdomains="true">byteicdn.com</domain><domain includeSubdomains="true">byteimg.com</domain></domain-config>
 </network-security-config>

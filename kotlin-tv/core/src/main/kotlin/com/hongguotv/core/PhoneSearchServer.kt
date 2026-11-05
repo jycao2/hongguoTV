@@ -28,7 +28,9 @@ data class PhoneField(
     val label: String,
     val hint: String,
     val maxLength: Int = 80,
-    val required: Boolean = true
+    val required: Boolean = true,
+    /** 密码类输入：手机页渲染为 type=password，避免明文留在手机屏幕上。 */
+    val secret: Boolean = false
 )
 
 /** 手机填写页表单定义：搜索剧名、添加三方片源、导入配置等扫码场景共用同一套服务，只替换表单与文案。 */
@@ -157,6 +159,7 @@ class PhoneInputServer(
         form.fields.forEachIndexed { index, field ->
             append("<label for=\"field").append(index).append("\">").append(escapeHtml(field.label)).append("</label>")
             append("<input id=\"field").append(index).append("\" name=\"").append(field.key).append('"')
+            if(field.secret) append(" type=\"password\"")
             append(" maxlength=\"").append(field.maxLength.coerceIn(1,400)).append('"')
             append(" placeholder=\"").append(escapeHtml(field.hint)).append('"')
             if(field.required) append(" required")

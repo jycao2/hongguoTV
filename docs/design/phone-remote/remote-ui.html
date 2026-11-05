@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>红果TV 手机遥控 · 界面原型</title>
+<style>
+  :root{
+    --bg:#0B0F15;
+    --surface:#171E28;
+    --raised:#202A36;
+    --accent:#FF8964;
+    --gold:#FFC46B;
+    --text:#F3F4F6;
+    --muted:#93A0B2;
+    --outline:#2B3746;
+    --sel:#3D2722;
+    --badge:#1C1F27;
+    --danger:#FF6B6B;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:#07080A;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    color:var(--text);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:flex-start;
+    padding:32px 16px 56px;
+    gap:24px;
+  }
+
+  /* ---------- 设计稿控件（非产品 UI） ---------- */
+  .spec-bar{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;
+    padding:8px 10px;border-radius:14px;
+    background:#101216;border:1px solid #23262C;
+  }
+  .spec-bar .tag{
+    font-size:11px;letter-spacing:.08em;color:#6C737F;padding:0 8px 0 4px;
+    border-right:1px solid #23262C;margin-right:2px;
+  }
+  .spec-bar button{
+    appearance:none;border:1px solid #2A2E35;background:#15181D;color:#B9BFC9;
+    font-size:12.5px;padding:7px 14px;border-radius:9px;cursor:pointer;
+    font-family:inherit;transition:.15s;
+  }
+  .spec-bar button:hover{background:#1D2128;color:#E7EAEE}
+  .spec-bar button.on{background:var(--accent);border-color:var(--accent);color:#231208;font-weight:600}
+
+  /* ---------- 手机外壳 ---------- */
+  .phone{
+    width:392px;height:812px;flex:0 0 auto;
+    background:#000;border-radius:46px;
+    padding:11px;
+    box-shadow:0 0 0 1.5px #2C313A, 0 32px 70px -18px rgba(0,0,0,.9);
+    position:relative;
+  }
+  .phone::after{
+    content:"";position:absolute;left:50%;bottom:18px;transform:translateX(-50%);
+    width:118px;height:4.5px;border-radius:3px;background:#2A2E36;
+  }
+  .screen{
+    width:100%;height:100%;border-radius:36px;overflow:hidden;
+    background:var(--bg);
+    display:flex;flex-direction:column;position:relative;
+  }
+
+  /* 状态条 */
+  .statusbar{
+    display:flex;align-items:center;gap:8px;
+    padding:14px 18px 10px;font-size:11.5px;color:var(--muted);
+    flex:0 0 auto;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.6);flex:0 0 auto}
+  .dot.off{background:var(--danger);box-shadow:0 0 8px rgba(255,107,107,.55);animation:pulse 1.2s infinite}
+  .dot.warn{background:var(--gold);box-shadow:0 0 8px rgba(255,196,107,.5)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .statusbar .ip{font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .statusbar .spacer{flex:1}
+  .more{
+    width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    color:var(--muted);font-size:15px;letter-spacing:1px;cursor:pointer;
+    background:transparent;border:none;font-family:inherit;
+  }
+  .more:hover{background:var(--raised);color:var(--text)}
+  /* 顶栏 ··· 下拉菜单 */
+  #v-panel{position:relative}
+  .moremenu{
+    position:absolute;top:50px;right:14px;z-index:20;min-width:178px;padding:6px;
+    border-radius:13px;background:#1B222C;border:1px solid #2F3A48;
+    box-shadow:0 18px 44px -14px rgba(0,0,0,.9);
+    display:none;flex-direction:column;gap:2px;
+  }
+  .moremenu.on{display:flex}
+  .moremenu button{
+    appearance:none;border:none;background:transparent;color:#C9D2DE;font-family:inherit;
+    font-size:13px;text-align:left;padding:10px 12px;border-radius:9px;cursor:pointer;
+  }
+  .moremenu button:hover{background:#242E3A;color:#fff}
+  .moremenu .sep{height:1px;background:#26303C;margin:4px 8px}
+  .moremenu .addr{padding:8px 12px 5px;font-size:10.5px;color:#65707E;font-variant-numeric:tabular-nums}
+
+  /* 形态容器 */
+  .view{display:none;flex:1;min-height:0;flex-direction:column}
+  .view.on{display:flex}
+  /* 主面板与暂停态：内容纵向均分，避免中部出现大片空白 */
+  #v-panel.on,#v-paused.on{justify-content:space-between;padding-bottom:26px}
+  /* 底部安全区，避开手机 home 指示条 */
+  #v-episodes.on,#v-browse.on{padding-bottom:22px}
+
+  /* ---------- 遥控面板 ---------- */
+  .now{
+    padding:6px 20px 0;flex:0 0 auto;
+  }
+  .now .title{
+    font-size:20px;font-weight:650;letter-spacing:.01em;line-height:1.3;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .now .meta{margin-top:5px;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .pill{
+    display:inline-flex;align-items:center;gap:5px;
+    padding:3px 9px;border-radius:999px;font-size:11px;
+    background:var(--badge);color:var(--muted);border:1px solid var(--outline);
+  }
+  .pill.hot{background:var(--sel);border-color:#5A3128;color:var(--accent)}
+
+  /* 进度 */
+  .progress{position:relative;padding:22px 20px 0;flex:0 0 auto}
+  .track{position:relative;height:22px;display:flex;align-items:center;cursor:pointer}
+  .track .rail{position:absolute;left:0;right:0;height:4px;border-radius:2px;background:#2A3340}
+  .track .fill{position:absolute;left:0;height:4px;border-radius:2px;background:var(--accent);width:32%}
+  .track .knob{
+    position:absolute;left:32%;top:50%;transform:translate(-50%,-50%);
+    width:12px;height:12px;border-radius:50%;background:#fff;
+    box-shadow:0 0 0 4px rgba(255,137,100,.18);
+  }
+  .times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px}
+
+  /* 主控 */
+  .controls{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 26px 4px;flex:0 0 auto;
+  }
+  .ctrl{
+    appearance:none;border:none;background:transparent;color:var(--text);
+    display:grid;place-items:center;cursor:pointer;font-family:inherit;
+    transition:.14s;border-radius:16px;
+  }
+  .ctrl:hover{color:var(--accent)}
+  .ctrl:active{transform:scale(.92)}
+  .ctrl.small{width:46px;height:46px;font-size:13px;color:#C6CEDA;letter-spacing:.03em}
+  .ctrl.small span{display:block;line-height:1;font-size:15px;font-variant-numeric:tabular-nums}
+  .ctrl.small em{display:block;font-style:normal;font-size:9.5px;color:var(--muted);margin-top:3px;letter-spacing:.06em}
+  .ctrl.main{
+    width:68px;height:68px;border-radius:50%;
+    background:var(--accent);color:#1A0D06;
+    box-shadow:0 8px 26px -8px rgba(255,137,100,.75);
+  }
+  .ctrl.main:hover{background:#FF9B7C;color:#1A0D06}
+  .ctrl svg{width:24px;height:24px}
+  .ctrl.main svg{width:26px;height:26px}
+  .ctrl.edge svg{width:22px;height:22px}
+
+  /* 参数行 */
+  .params{
+    display:flex;gap:8px;padding:16px 20px 0;flex:0 0 auto;
+  }
+  .param{
+    flex:1;appearance:none;font-family:inherit;cursor:pointer;
+    background:var(--surface);border:1px solid var(--outline);border-radius:12px;
+    padding:9px 0;color:#C9D2DE;font-size:12.5px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;transition:.14s;
+  }
+  .param b{font-weight:600;font-size:13.5px;color:var(--text);letter-spacing:.02em}
+  .param small{font-size:10px;color:var(--muted);letter-spacing:.08em}
+  .param:hover{border-color:#3C4A5C;background:var(--raised)}
+  .param.on{border-color:#5A3128;background:var(--sel)}
+  .param.on b{color:var(--accent)}
+  .param.off b{color:#8E9AA8}
+
+  /* 搜索 */
+  .searchwrap{padding:16px 20px 0;flex:0 0 auto}
+  .searchbox{
+    display:flex;align-items:center;gap:10px;
+    background:var(--surface);border:1px solid var(--outline);border-radius:13px;
+    padding:0 12px;height:44px;
+  }
+  .searchbox:focus-within{border-color:#5A3128;box-shadow:0 0 0 3px rgba(255,137,100,.1)}
+  .searchbox input{
+    flex:1;background:transparent;border:none;outline:none;color:var(--text);
+    font-size:14px;font-family:inherit;min-width:0;
+  }
+  .searchbox input::placeholder{color:#707C8A}
+  .mic{
+    appearance:none;border:none;background:var(--raised);color:var(--accent);
+    width:30px;height:30px;border-radius:9px;display:grid;place-items:center;cursor:pointer;
+  }
+  .mic:hover{background:#2C3846}
+  .hint{
+    margin:8px 2px 0;font-size:10.5px;color:#6C7887;line-height:1.5;
+  }
+  .hint b{color:#95A2B2;font-weight:500}
+
+  /* 集数快捷条 */
+  .quick{
+    margin-top:0;padding:14px 20px 6px;flex:0 0 auto;
+  }
+  .quickrow{
+    display:flex;align-items:center;justify-content:space-between;gap:6px;
+  }
+  .qbtn{
+    appearance:none;font-family:inherit;cursor:pointer;
+    width:40px;height:40px;border-radius:50%;
+    background:var(--surface);border:1px solid var(--outline);
+    color:#C9D2DE;font-size:13px;display:grid;place-items:center;transition:.14s;
+    font-variant-numeric:tabular-nums;
+  }
+  .qbtn:hover{border-color:#3C4A5C;background:var(--raised)}
+  .qbtn.cur{
+    width:52px;height:52px;background:var(--sel);border-color:#5A3128;
+    color:var(--accent);font-weight:650;font-size:15px;
+  }
+  .openlist{
+    margin:12px 0 0;width:100%;appearance:none;font-family:inherit;cursor:pointer;
+    background:var(--surface);border:1px solid var(--outline);border-radius:12px;
+    padding:12px 14px;color:#C9D2DE;font-size:13px;
+    display:flex;align-items:center;justify-content:space-between;transition:.14s;
+  }
+  .openlist:hover{background:var(--raised);border-color:#3C4A5C}
+  .openlist span{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}
+
+  /* ---------- 选集抽屉 ---------- */
+  .drawer-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 20px 14px;flex:0 0 auto;
+  }
+  .drawer-head h2{margin:0;font-size:17px;font-weight:650;letter-spacing:.01em}
+  .x{
+    appearance:none;border:none;background:var(--raised);color:var(--muted);
+    width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:14px;font-family:inherit;
+  }
+  .x:hover{color:var(--text)}
+  .groups{
+    display:flex;gap:8px;padding:0 20px 16px;flex:0 0 auto;overflow-x:auto;
+  }
+  .gtab{
+    appearance:none;font-family:inherit;cursor:pointer;white-space:nowrap;
+    padding:8px 14px;border-radius:999px;font-size:12.5px;
+    background:var(--surface);border:1px solid var(--outline);color:#C0C9D5;transition:.14s;
+  }
+  .gtab:hover{background:var(--raised)}
+  .gtab.on{background:var(--accent);border-color:var(--accent);color:#1A0D06;font-weight:600}
+  .gtab small{opacity:.6;margin-left:4px;font-size:10.5px}
+  .grid{
+    flex:1;min-height:0;overflow-y:auto;
+    padding:0 20px 20px;
+    display:grid;grid-template-columns:repeat(5,1fr);gap:9px;align-content:start;
+  }
+  .ep{
+    appearance:none;font-family:inherit;cursor:pointer;
+    aspect-ratio:1;border-radius:11px;
+    background:var(--surface);border:1px solid var(--outline);
+    color:#C0C9D5;font-size:13.5px;font-variant-numeric:tabular-nums;
+    display:grid;place-items:center;transition:.12s;
+  }
+  .ep:hover{background:var(--raised);border-color:#3C4A5C;color:#fff}
+  .ep.cur{background:var(--sel);border-color:var(--accent);color:var(--accent);font-weight:650}
+
+  /* ---------- 浏览模式 ---------- */
+  .modebar{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    padding:0 20px 12px;flex:0 0 auto;
+  }
+  .seg{
+    display:flex;background:var(--surface);border:1px solid var(--outline);border-radius:11px;padding:3px;
+  }
+  .seg button{
+    appearance:none;border:none;background:transparent;color:var(--muted);
+    font-family:inherit;font-size:12.5px;padding:7px 16px;border-radius:8px;cursor:pointer;transition:.14s;
+  }
+  .seg button.on{background:var(--raised);color:var(--text);font-weight:600}
+
+  .padwrap{padding:6px 20px 0;flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:14px}
+  .pad{
+    width:236px;height:236px;border-radius:50%;
+    background:radial-gradient(circle at 50% 42%, #1C2431 0%, #151B24 62%, #11161D 100%);
+    border:1px solid #26303C;
+    display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+    place-items:center;position:relative;
+  }
+  .pad::before{
+    content:"";position:absolute;inset:26px;border-radius:50%;
+    border:1px dashed #252E3A;pointer-events:none;
+  }
+  .pad button{
+    appearance:none;border:none;background:transparent;color:#A9B4C2;
+    width:56px;height:56px;border-radius:50%;cursor:pointer;
+    display:grid;place-items:center;transition:.12s;font-family:inherit;
+  }
+  .pad button:hover{background:rgba(255,137,100,.1);color:var(--accent)}
+  .pad button:active{transform:scale(.9);background:rgba(255,137,100,.18)}
+  .pad .ok{
+    background:var(--raised);border:1px solid #2F3A48;color:var(--text);
+    font-size:12.5px;font-weight:600;letter-spacing:.06em;
+  }
+  .pad .ok:hover{background:var(--sel);border-color:#5A3128;color:var(--accent)}
+  .pad button svg{width:22px;height:22px}
+  .pad .ghost{visibility:hidden}
+  .keyrow{display:flex;gap:10px}
+  .keybtn{
+    appearance:none;font-family:inherit;cursor:pointer;
+    background:var(--surface);border:1px solid var(--outline);color:#C0C9D5;
+    padding:10px 26px;border-radius:11px;font-size:13px;transition:.14s;
+    min-width:92px;
+  }
+  .keybtn:hover{background:var(--raised);border-color:#3C4A5C;color:var(--text)}
+  .keybtn:active{transform:scale(.96)}
+  .keyhint{font-size:10.5px;color:#5D6875;letter-spacing:.04em;margin-top:-4px}
+
+  .sect-title{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:26px 20px 12px;font-size:13px;color:var(--muted);flex:0 0 auto;
+    margin-top:auto;
+  }
+  .sect-title b{color:var(--text);font-size:14px;font-weight:600}
+  .cards{display:flex;gap:11px;padding:0 20px;overflow-x:auto;flex:0 0 auto}
+  .card{width:96px;flex:0 0 auto;cursor:pointer}
+  .card .cover{
+    width:96px;height:132px;border-radius:11px;
+    background:linear-gradient(155deg,#2A3341,#1A212B);
+    border:1px solid #28323F;
+    display:grid;place-items:center;color:#4A5666;font-size:10.5px;letter-spacing:.1em;
+    transition:.14s;
+  }
+  .card:hover .cover{border-color:#4A3A33;transform:translateY(-2px)}
+  .card .nm{
+    margin-top:7px;font-size:11.5px;color:#C0C9D5;line-height:1.35;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  }
+  .card .ep-no{font-size:10px;color:#6C7887;margin-top:3px}
+
+  /* ---------- 异常态 ---------- */
+  .statewrap{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:0 34px;text-align:center;gap:0;
+  }
+  .icon-wrap{
+    width:64px;height:64px;border-radius:20px;display:grid;place-items:center;
+    margin-bottom:20px;
+  }
+  .icon-wrap.err{background:rgba(255,107,107,.1);color:var(--danger)}
+  .icon-wrap.warn{background:rgba(255,196,107,.1);color:var(--gold)}
+  .icon-wrap.info{background:rgba(147,160,178,.1);color:var(--muted)}
+  .icon-wrap svg{width:28px;height:28px}
+  .statewrap h3{margin:0 0 10px;font-size:17px;font-weight:600;letter-spacing:.01em}
+  .statewrap p{margin:0;font-size:13px;line-height:1.65;color:var(--muted)}
+  .statewrap .acts{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:26px}
+  .btn{
+    appearance:none;font-family:inherit;cursor:pointer;font-size:13.5px;
+    padding:13px 0;border-radius:12px;transition:.14s;width:100%;
+  }
+  .btn.primary{background:var(--accent);border:1px solid var(--accent);color:#1A0D06;font-weight:600}
+  .btn.primary:hover{background:#FF9B7C}
+  .btn.ghostbtn{background:transparent;border:1px solid var(--outline);color:#C0C9D5}
+  .btn.ghostbtn:hover{background:var(--surface)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .ipbox{
+    margin-top:18px;font-size:11px;color:#5D6875;font-variant-numeric:tabular-nums;
+    background:var(--surface);border:1px solid var(--outline);border-radius:9px;
+    padding:7px 14px;
+  }
+  .ipbox b{color:#93A0B2;font-weight:500}
+  .nw{white-space:nowrap}
+
+  /* 置灰（电视退后台：控件仍可见但不可操作） */
+  #v-paused .now,#v-paused .progress,#v-paused .controls,#v-paused .params,
+  #v-paused .searchwrap,#v-paused .quick{
+    opacity:.34;filter:saturate(.25);pointer-events:none;
+  }
+  .banner{
+    margin:0 20px 12px;padding:11px 14px;border-radius:11px;
+    background:rgba(255,196,107,.09);border:1px solid rgba(255,196,107,.24);
+    display:flex;align-items:flex-start;gap:9px;font-size:11.5px;color:#E7C68F;line-height:1.5;
+    flex:0 0 auto;
+  }
+  .banner svg{width:15px;height:15px;flex:0 0 auto;margin-top:1px;color:var(--gold)}
+  .banner b{color:var(--gold);font-weight:600}
+
+  .scroll-hint{font-size:10.5px;color:#4E5A68;text-align:center;padding:6px 0 2px;letter-spacing:.06em}
+  .note{
+    max-width:640px;font-size:12px;color:#5A626E;line-height:1.8;text-align:center;
+    border-top:1px solid #1B1F25;padding-top:18px;
+  }
+  .note b{color:#8A929E;font-weight:500}
+</style>
+</head>
+<body>
+
+<div class="spec-bar">
+  <span class="tag">设计稿 · 形态切换</span>
+  <button data-go="panel" class="on">遥控面板</button>
+  <button data-go="episodes">选集抽屉</button>
+  <button data-go="browse">浏览模式</button>
+  <button data-go="paused">电视已暂停</button>
+  <button data-go="lost">连接失败</button>
+  <button data-go="evicted">被接管</button>
+</div>
+
+<div class="phone">
+  <div class="screen" id="screen">
+
+    <!-- ============ 遥控面板 ============ -->
+    <section class="view on" id="v-panel">
+      <div class="statusbar">
+        <span class="dot" id="panel-dot"></span>
+        <span class="ip" id="panel-ip">192.168.1.23</span>
+        <span class="spacer"></span>
+        <button class="more" id="panel-more" title="更多">···</button>
+      </div>
+
+      <div class="moremenu" id="moremenu">
+        <button>退出播放（回详情页）</button>
+        <button>断开遥控</button>
+        <div class="sep"></div>
+        <div class="addr">电视地址 192.168.1.23:41287</div>
+      </div>
+
+      <div class="now">
+        <div class="title">总裁的替身新娘</div>
+        <div class="meta">
+          <span>第 12 集</span>
+          <span class="pill hot">正片</span>
+          <span class="pill">剩余 18:28</span>
+        </div>
+      </div>
+
+      <div class="progress">
+        <div class="track" id="track">
+          <div class="rail"></div>
+          <div class="fill" id="fill"></div>
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="times"><span id="t-cur">03:12</span><span id="t-all">21:40</span></div>
+      </div>
+
+      <div class="controls">
+        <button class="ctrl edge" title="上一集">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h2v14H7zM20 5.6v12.8L10.5 12z"/></svg>
+        </button>
+        <button class="ctrl small" title="快退 10 秒">
+          <span>↺ 10</span><em>快退</em>
+        </button>
+        <button class="ctrl main" id="playbtn" title="播放 / 暂停">
+          <svg id="playsvg" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6L19 12z"/></svg>
+        </button>
+        <button class="ctrl small" title="快进 10 秒">
+          <span>10 ↻</span><em>快进</em>
+        </button>
+        <button class="ctrl edge" title="下一集">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h2v14h-2zM4 5.6v12.8L13.5 12z"/></svg>
+        </button>
+      </div>
+
+      <div class="params">
+        <button class="param" id="p-speed"><b>1.0×</b><small>倍速</small></button>
+        <button class="param" id="p-mute"><b>有声</b><small>音量</small></button>
+        <button class="param on" id="p-dm"><b>开</b><small>弹幕</small></button>
+      </div>
+
+      <div class="searchwrap">
+        <div class="searchbox">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6C7887" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+          <input id="q" placeholder="说出或输入剧名" autocomplete="off">
+          <button class="mic" title="语音输入">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          </button>
+        </div>
+        <div class="hint">点输入框后，用<b>键盘上的麦克风</b>说出剧名。</div>
+      </div>
+
+      <div class="quick">
+        <div class="quickrow">
+          <button class="qbtn" title="上一集">11</button>
+          <button class="qbtn cur" title="当前集">12</button>
+          <button class="qbtn" title="下一集">13</button>
+        </div>
+        <button class="openlist" data-go="episodes">
+          选集 · 共 88 集
+          <span>全部剧集
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 5 7 7-7 7"/></svg>
+          </span>
+        </button>
+      </div>
+      <div class="scroll-hint">拖动进度条可精确跳转</div>
+    </section>
+
+    <!-- ============ 选集抽屉 ============ -->
+    <section class="view" id="v-episodes">
+      <div class="statusbar">
+        <span class="dot"></span>
+        <span class="ip">192.168.1.23</span>
+        <span class="spacer"></span>
+        <button class="more">···</button>
+      </div>
+      <div class="drawer-head">
+        <h2>选集</h2>
+        <button class="x" data-go="panel">✕</button>
+      </div>
+      <div class="groups">
+        <button class="gtab on">正片<small>88</small></button>
+        <button class="gtab">线路 2<small>88</small></button>
+        <button class="gtab">线路 3<small>64</small></button>
+      </div>
+      <div class="grid" id="epgrid"></div>
+      <div class="scroll-hint">共 88 集 · 已看 11 集</div>
+    </section>
+
+    <!-- ============ 浏览模式 ============ -->
+    <section class="view" id="v-browse">
+      <div class="statusbar">
+        <span class="dot"></span>
+        <span class="ip">192.168.1.23</span>
+        <span class="spacer"></span>
+        <button class="more">···</button>
+      </div>
+
+      <div class="modebar">
+        <div class="seg">
+          <button data-go="panel">遥控</button>
+          <button class="on">浏览</button>
+        </div>
+      </div>
+
+      <div class="padwrap">
+        <div class="pad">
+          <button class="ghost"></button>
+          <button title="上">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 6-6 6 6"/></svg>
+          </button>
+          <button class="ghost"></button>
+          <button title="左">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>
+          </button>
+          <button class="ok" title="确认">确认</button>
+          <button title="右">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"/></svg>
+          </button>
+          <button class="ghost"></button>
+          <button title="下">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 10 6 6 6-6"/></svg>
+          </button>
+          <button class="ghost"></button>
+        </div>
+        <div class="keyrow">
+          <button class="keybtn">返回</button>
+          <button class="keybtn" id="menukey">菜单</button>
+        </div>
+        <div class="keyhint">长按「菜单」呼出播放快捷面板</div>
+      </div>
+
+      <div class="sect-title">
+        <b>继续观看</b>
+        <span>点一下即在电视上播放</span>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <div class="cover">封面</div>
+          <div class="nm">总裁的替身新娘</div>
+          <div class="ep-no">12 集 · 03:12</div>
+        </div>
+        <div class="card">
+          <div class="cover">封面</div>
+          <div class="nm">重生之都市医仙</div>
+          <div class="ep-no">47 集 · 11:05</div>
+        </div>
+        <div class="card">
+          <div class="cover">封面</div>
+          <div class="nm">退婚后我成了首富</div>
+          <div class="ep-no">8 集 · 06:40</div>
+        </div>
+      </div>
+      <div class="scroll-hint" style="margin-top:14px">电视当前在首页，可用方向键浏览</div>
+    </section>
+
+    <!-- ============ 电视已暂停 ============ -->
+    <section class="view" id="v-paused">
+      <div class="statusbar">
+        <span class="dot warn"></span>
+        <span class="ip">192.168.1.23</span>
+        <span class="spacer"></span>
+        <button class="more">···</button>
+      </div>
+      <div class="banner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.2v.3"/></svg>
+        <div><b>电视已暂停。</b>请在电视上重新打开红果TV，回来后会自动恢复控制，不用重新扫码。</div>
+      </div>
+
+      <div class="now">
+        <div class="title">总裁的替身新娘</div>
+        <div class="meta"><span>第 12 集</span><span class="pill hot">正片</span></div>
+      </div>
+      <div class="progress">
+        <div class="track"><div class="rail"></div><div class="fill" style="width:32%"></div><div class="knob" style="left:32%"></div></div>
+        <div class="times"><span>03:12</span><span>21:40</span></div>
+      </div>
+      <div class="controls">
+        <button class="ctrl edge"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h2v14H7zM20 5.6v12.8L10.5 12z"/></svg></button>
+        <button class="ctrl small"><span>↺ 10</span><em>快退</em></button>
+        <button class="ctrl main"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6L19 12z"/></svg></button>
+        <button class="ctrl small"><span>10 ↻</span><em>快进</em></button>
+        <button class="ctrl edge"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h2v14h-2zM4 5.6v12.8L13.5 12z"/></svg></button>
+      </div>
+      <div class="params">
+        <button class="param"><b>1.0×</b><small>倍速</small></button>
+        <button class="param"><b>有声</b><small>音量</small></button>
+        <button class="param on"><b>开</b><small>弹幕</small></button>
+      </div>
+      <div class="searchwrap"><div class="searchbox">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6C7887" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+        <input placeholder="说出或输入剧名" disabled>
+        <button class="mic" disabled title="语音输入">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+      </div></div>
+      <div class="quick">
+        <div class="quickrow">
+          <button class="qbtn">11</button><button class="qbtn cur">12</button><button class="qbtn">13</button>
+        </div>
+        <button class="openlist" disabled>选集 · 共 88 集<span>全部剧集</span></button>
+      </div>
+      <div class="scroll-hint">控件已置灰，电视回到前台后恢复</div>
+    </section>
+
+    <!-- ============ 连接失败 ============ -->
+    <section class="view" id="v-lost">
+      <div class="statusbar">
+        <span class="dot off"></span>
+        <span class="ip">正在重试… 第 3 次</span>
+        <span class="spacer"></span>
+        <button class="more">···</button>
+      </div>
+      <div class="statewrap">
+        <div class="icon-wrap err">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l18 18"/><path d="M8.5 8.5a7 7 0 0 0-2.1 3.6"/><path d="M12 18.5v.2"/><path d="M15.6 12.2a7 7 0 0 0 1.9-3.9"/><path d="M5 5.2A9.9 9.9 0 0 1 12 2.5c2.6 0 5 .9 6.9 2.6"/></svg>
+        </div>
+        <h3>无法连接电视</h3>
+        <p>请确认手机与电视连在<b>同一个 WiFi</b>，且电视上的<span class="nw">红果TV</span> 正在运行。<br>访客网络或路由器的「AP 隔离」会导致连不上。</p>
+        <div class="ipbox">电视地址 · <b>192.168.1.23:41287</b></div>
+        <div class="acts">
+          <button class="btn primary">重新连接</button>
+          <button class="btn ghostbtn">重新扫码</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 被接管 ============ -->
+    <section class="view" id="v-evicted">
+      <div class="statusbar">
+        <span class="dot warn"></span>
+        <span class="ip">已断开</span>
+        <span class="spacer"></span>
+        <button class="more">···</button>
+      </div>
+      <div class="statewrap">
+        <div class="icon-wrap warn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="12" height="14" rx="2"/><path d="M14.5 9.5 20 12l-5.5 2.5z"/></svg>
+        </div>
+        <h3>控制权已转移到其他设备</h3>
+        <p>另一台手机接管了这台电视的遥控。<br>为避免互相干扰，这台设备已停止自动重连。</p>
+        <div class="acts">
+          <button class="btn primary">重新连接</button>
+          <button class="btn ghostbtn">结束</button>
+        </div>
+        <div class="ipbox">当前控制设备 · <b>…87</b></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="note">
+  <b>关于原型</b>：配色取自 <code>TvStyle</code> 的 NIGHT 主题（背景 #0B0F15 / 主色 #FF8964）。<br>
+  顶部按钮是设计稿的形态切换器，不属于产品 UI——真机上的形态由电视状态自动决定。
+</div>
+
+<script>
+(function () {
+  var views = {
+    panel: document.getElementById('v-panel'),
+    episodes: document.getElementById('v-episodes'),
+    browse: document.getElementById('v-browse'),
+    paused: document.getElementById('v-paused'),
+    lost: document.getElementById('v-lost'),
+    evicted: document.getElementById('v-evicted')
+  };
+
+  function go(name) {
+    Object.keys(views).forEach(function (k) {
+      views[k].classList.toggle('on', k === name);
+    });
+    document.querySelectorAll('.spec-bar button').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-go') === name);
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  document.querySelectorAll('[data-go]').forEach(function (el) {
+    el.addEventListener('click', function () { go(el.getAttribute('data-go')); });
+  });
+
+  // 进度条拖动
+  var track = document.getElementById('track');
+  var fill = document.getElementById('fill');
+  var knob = document.getElementById('knob');
+  var tCur = document.getElementById('t-cur');
+  var DURATION = 21 * 60 + 40;
+
+  function fmt(s) {
+    s = Math.max(0, Math.min(DURATION, Math.round(s)));
+    var m = Math.floor(s / 60), r = s % 60;
+    return String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0');
+  }
+
+  function setRatio(r) {
+    r = Math.max(0, Math.min(1, r));
+    fill.style.width = (r * 100) + '%';
+    knob.style.left = (r * 100) + '%';
+    tCur.textContent = fmt(r * DURATION);
+  }
+
+  var dragging = false;
+  function ratioFromEvent(e) {
+    var rect = track.getBoundingClientRect();
+    var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return x / rect.width;
+  }
+  track.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    track.setPointerCapture(e.pointerId);
+    setRatio(ratioFromEvent(e));
+  });
+  track.addEventListener('pointermove', function (e) {
+    if (dragging) setRatio(ratioFromEvent(e));
+  });
+  track.addEventListener('pointerup', function (e) {
+    dragging = false;
+    setRatio(ratioFromEvent(e));
+  });
+
+  // 播放 / 暂停
+  var playing = true;
+  var playbtn = document.getElementById('playbtn');
+  var playsvg = document.getElementById('playsvg');
+  playbtn.addEventListener('click', function () {
+    playing = !playing;
+    playsvg.innerHTML = playing
+      ? '<path d="M8 5.2v13.6L19 12z"/>'
+      : '<path d="M7.5 5h3v14h-3zM13.5 5h3v14h-3z"/>';
+  });
+
+  // 参数行循环
+  var speeds = [0.75, 1.0, 1.25, 1.5, 2.0];
+  var si = 1;
+  var pSpeed = document.getElementById('p-speed');
+  pSpeed.addEventListener('click', function () {
+    si = (si + 1) % speeds.length;
+    var v = speeds[si];
+    pSpeed.querySelector('b').textContent = (v < 1 ? v.toFixed(2) : v.toFixed(1)) + '×';
+    pSpeed.classList.toggle('on', v !== 1.0);
+  });
+
+  var pMute = document.getElementById('p-mute');
+  pMute.addEventListener('click', function () {
+    var muted = pMute.classList.toggle('on');
+    pMute.classList.toggle('off', !muted);
+    pMute.querySelector('b').textContent = muted ? '静音' : '有声';
+  });
+
+  var pDm = document.getElementById('p-dm');
+  pDm.addEventListener('click', function () {
+    var off = pDm.classList.toggle('off');
+    pDm.classList.toggle('on', !off);
+    pDm.querySelector('b').textContent = off ? '关' : '开';
+  });
+
+  // 集数网格
+  var grid = document.getElementById('epgrid');
+  for (var i = 1; i <= 88; i++) {
+    var b = document.createElement('button');
+    b.className = 'ep' + (i === 12 ? ' cur' : '');
+    b.textContent = i;
+    b.addEventListener('click', function () {
+      grid.querySelectorAll('.ep').forEach(function (x) { x.classList.remove('cur'); });
+      this.classList.add('cur');
+      go('panel');
+    });
+    grid.appendChild(b);
+  }
+
+  // 触摸板视觉反馈
+  document.querySelectorAll('.pad button:not(.ghost)').forEach(function (b) {
+    b.addEventListener('click', function () {
+      b.style.background = 'rgba(255,137,100,.22)';
+      setTimeout(function () { b.style.background = ''; }, 140);
+    });
+  });
+
+  // 顶栏 ··· 菜单
+  var moreBtn = document.getElementById('panel-more');
+  var moreMenu = document.getElementById('moremenu');
+  moreBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    moreMenu.classList.toggle('on');
+  });
+  moreMenu.addEventListener('click', function (e) { e.stopPropagation(); });
+  moreMenu.querySelectorAll('button').forEach(function (b) {
+    b.addEventListener('click', function () { moreMenu.classList.remove('on'); });
+  });
+  document.addEventListener('click', function () { moreMenu.classList.remove('on'); });
+
+  // 支持 #episodes / #browse 等直达链接
+  var initial = location.hash.replace('#', '');
+  if (initial && views[initial]) go(initial);
+})();
+</script>
+</body>
+</html>

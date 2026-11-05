@@ -65,10 +65,10 @@ class Library(context: Context) {
                 synchronized(retiredWrites) { retiredWrites.removeAll(retired.toSet()) }
                 val values = prefs.all
                 val loaded = LibraryDisk.decode(values)
-                // 0.19.7 片源入口默认隐藏：升级后首次加载放开一次，之后尊重用户在设置里的手动选择
-                if(!values.containsKey("sourceEntryShownV2")) {
-                    loaded.settings = loaded.settings.copy(sourceHidden = false)
-                    prefs.edit().putBoolean("sourceEntryShownV2", true).putBoolean("sourceHidden", false).apply()
+                // 片源入口默认隐藏：从未手动切换过开关的老用户，升级后也按默认隐藏处理
+                if(!values.containsKey("sourceHiddenChosen")) {
+                    loaded.settings = loaded.settings.copy(sourceHidden = true)
+                    prefs.edit().putBoolean("sourceHidden", true).putBoolean("sourceHiddenChosen", true).apply()
                 }
                 val now = System.currentTimeMillis()
                 val cached = mutableMapOf<ContentType, CatalogPage>()
@@ -217,10 +217,10 @@ class Library(context: Context) {
     var favoriteSort: String
         get() = prefs.getString("favoriteSort", null)?.takeIf { it in listOf("update", "watch", "name") } ?: "update"
         set(value) { prefs.edit().putString("favoriteSort", value).apply() }
-    /** 导航栏「片源」入口是否隐藏：默认显示，用户可在设置里单独隐藏；随备份一起恢复。 */
+    /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置里单独显示；随备份一起恢复。 */
     var sourceHidden: Boolean
         get() = state().settings.sourceHidden
-        set(value) { if (value != sourceHidden) { state().settings = state().settings.copy(sourceHidden = value); put("sourceHidden", value) } }
+        set(value) { if (value != sourceHidden) { state().settings = state().settings.copy(sourceHidden = value); put("sourceHidden", value); put("sourceHiddenChosen", true) } }
     /** 导航栏其余模块（搜索/排行榜/收藏/最近观看）的显隐：首页与设置始终显示，默认全部显示；随备份一起恢复。 */
     fun navHidden(key: String): Boolean = key in state().settings.navHidden
     fun setNavHidden(key: String, hidden: Boolean) {
@@ -270,8 +270,10 @@ class Library(context: Context) {
             "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
             "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }, "showClock" to { merged.settings.showClock },
             "sourceHidden" to { merged.settings.sourceHidden },
+            "sourceHiddenChosen" to { true },
             "navHidden.search" to { "search" in merged.settings.navHidden },
             "navHidden.rank" to { "rank" in merged.settings.navHidden },
+            "navHidden.nas" to { "nas" in merged.settings.navHidden },
             "navHidden.favorite" to { "favorite" in merged.settings.navHidden },
             "navHidden.history" to { "history" in merged.settings.navHidden }))
         scheduleLocalBackup()

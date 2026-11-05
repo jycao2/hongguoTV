@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>红果TV · 本地库 UI 设计稿</title>
+<style>
+  :root{
+    --bg:#0B0F15; --surface:#171E28; --raised:#202A36; --outline:#2B3746;
+    --accent:#FF8964; --gold:#FFC46B; --text:#F3F4F6; --muted:#93A0B2;
+    --selected:#3D2722;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#05070A;color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    display:flex;flex-direction:column;align-items:center;gap:22px;padding:28px 0 48px;
+  }
+  /* ---------- 评审工具条 ---------- */
+  .tabs{display:flex;gap:10px}
+  .tab{
+    background:var(--surface);color:var(--muted);border:1px solid var(--outline);
+    border-radius:999px;padding:9px 22px;font-size:14px;cursor:pointer;transition:.18s;
+  }
+  .tab.on{background:var(--selected);color:var(--text);border-color:var(--accent);font-weight:700}
+  .hint{color:#5b6675;font-size:13px}
+
+  /* ---------- TV 画布 1920x1080 ---------- */
+  .tv{
+    width:1280px;height:720px;background:var(--bg);border-radius:10px;overflow:hidden;
+    position:relative;box-shadow:0 30px 80px rgba(0,0,0,.6), 0 0 0 1px #1a1f28;
+    display:flex;flex-direction:column;
+  }
+  .screen{display:none;flex:1;flex-direction:column;min-height:0}
+  .screen.on{display:flex}
+
+  /* ---------- 顶栏（1:1 对应现有 pillNav 文字形态） ---------- */
+  .top{display:flex;align-items:center;padding:22px 40px 0;gap:26px}
+  .brand{display:flex;align-items:flex-end;gap:10px;margin-right:14px}
+  .brand b{font-size:27px;color:var(--accent);letter-spacing:2px}
+  .brand span{font-size:12px;color:var(--muted);padding-bottom:3px}
+  .nav{display:flex;gap:22px;align-items:center}
+  .nav a{
+    font-size:18px;color:var(--muted);padding:6px 14px;border-radius:8px;
+    border:2px solid transparent;text-decoration:none;
+  }
+  .nav a.sel{color:var(--accent);font-weight:800;border-color:var(--accent);background:rgba(255,137,100,.06)}
+  .nav a.focus{color:var(--text);background:var(--raised);border-color:var(--accent)}
+  .clock{margin-left:auto;font-size:15px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  /* ---------- 内容区 ---------- */
+  .body{flex:1;padding:20px 40px 0;display:flex;flex-direction:column;min-height:0}
+  .h1{font-size:26px;font-weight:700;display:flex;align-items:center;gap:14px}
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;background:var(--surface);
+    border:1px solid var(--outline);border-radius:999px;padding:5px 14px;
+    font-size:13px;color:var(--muted);
+  }
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:#5CC98B}
+  .btn{
+    border:2px solid var(--outline);background:var(--surface);color:var(--text);
+    border-radius:10px;padding:9px 18px;font-size:14px;cursor:pointer;
+  }
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#22120C;font-weight:700}
+  .btn:focus,.btn.focus{outline:none;border-color:var(--accent);background:var(--raised);color:#fff;box-shadow:0 0 0 3px rgba(255,137,100,.18)}
+  .row{display:flex;align-items:center;gap:10px}
+  .grow{flex:1}
+
+  /* 分类胶囊 */
+  .seg{margin-top:14px;display:flex;gap:8px}
+  .seg span{
+    font-size:13px;color:var(--muted);padding:6px 14px;border-radius:999px;
+    background:var(--surface);border:1px solid var(--outline);
+  }
+  .seg span.on{background:var(--selected);border-color:var(--accent);color:var(--text);font-weight:700}
+
+  /* 海报网格：6 列 / 7:10 */
+  .grid{
+    margin-top:18px;flex:1;display:grid;grid-template-columns:repeat(6,1fr);
+    gap:16px 14px;align-content:start;overflow:hidden;
+  }
+  .card{border:3px solid transparent;border-radius:12px;padding:6px;transition:.15s}
+  .card.focus{border-color:var(--accent);background:var(--raised)}
+  .poster{
+    aspect-ratio:7/10;border-radius:9px;position:relative;overflow:hidden;
+    background:linear-gradient(150deg,#2A3444,#141A23);
+    display:flex;align-items:flex-end;padding:12px;
+  }
+  .poster::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(5,8,12,.85),transparent 55%)}
+  .poster .t{position:relative;z-index:1;font-size:14px;font-weight:700;line-height:1.3}
+  .badge{
+    position:absolute;top:8px;left:8px;z-index:1;background:rgba(5,8,12,.7);
+    border:1px solid var(--outline);border-radius:6px;padding:2px 7px;font-size:11px;color:var(--muted);
+  }
+  .badge.nas{color:var(--gold);border-color:rgba(255,196,107,.4)}
+  .meta{display:flex;justify-content:space-between;margin-top:7px;font-size:12px;color:var(--muted)}
+  .card.focus .meta{color:#cfd6e0}
+
+  /* ---------- 底部提示条 ---------- */
+  .foot{
+    padding:12px 40px 18px;color:#6d7887;font-size:12.5px;display:flex;gap:18px;
+  }
+  .foot b{color:#9AA6B5;font-weight:600}
+
+  /* ---------- 空态 ---------- */
+  .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding-bottom:40px}
+  .empty .ico{
+    width:84px;height:84px;border-radius:22px;background:var(--surface);border:1px solid var(--outline);
+    display:grid;place-items:center;font-size:34px;
+  }
+  .empty h2{font-size:23px;font-weight:700}
+  .empty p{color:var(--muted);font-size:14px;line-height:1.9;text-align:center;max-width:620px}
+  .empty.narrow p{max-width:520px}
+
+  /* ---------- 对话框（添加连接） ---------- */
+  .overlay{
+    position:absolute;inset:0;background:rgba(4,6,9,.72);display:flex;align-items:center;justify-content:center;
+  }
+  .dialog{
+    width:660px;background:linear-gradient(180deg,#1C232D,#151A22);
+    border:1px solid var(--outline);border-radius:18px;padding:26px 28px;box-shadow:0 24px 60px rgba(0,0,0,.55);
+  }
+  .dialog h3{font-size:20px;margin-bottom:6px}
+  .dialog .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .field{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .field label{width:74px;color:var(--muted);font-size:13px;text-align:right}
+  .input{
+    flex:1;height:40px;border-radius:9px;background:#0E131A;border:2px solid var(--outline);
+    display:flex;align-items:center;padding:0 14px;font-size:14px;color:#DDE3EB;
+  }
+  .input.focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,137,100,.15)}
+  .input .ph{color:#5A6575}
+  .proto{display:flex;gap:8px}
+  .proto .p{
+    padding:8px 18px;border-radius:9px;font-size:13px;border:2px solid var(--outline);color:var(--muted);
+  }
+  .proto .p.on{border-color:var(--accent);background:var(--selected);color:var(--text);font-weight:700}
+  .proto .p.off{opacity:.45}
+  .drow{display:flex;gap:10px;justify-content:flex-end;margin-top:22px}
+  .tips{font-size:12px;color:#6d7887;line-height:1.8;margin-top:14px;border-top:1px dashed var(--outline);padding-top:12px}
+
+  /* ---------- 详情页 ---------- */
+  .detail{display:flex;gap:28px;margin-top:8px}
+  .dposter{
+    width:214px;aspect-ratio:7/10;border-radius:12px;border:3px solid var(--accent);
+    background:linear-gradient(150deg,#33404F,#131922);display:flex;align-items:flex-end;padding:14px;
+    font-size:16px;font-weight:700;
+  }
+  .dinfo{flex:1;min-width:0}
+  .dinfo .title{font-size:28px;font-weight:800}
+  .dinfo .tags{display:flex;gap:8px;margin:12px 0 14px}
+  .dinfo .desc{color:var(--muted);font-size:13.5px;line-height:1.95;max-width:640px}
+  .acts{display:flex;gap:10px;margin:20px 0 18px}
+  .eps{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;max-width:640px}
+  .ep{
+    height:38px;border-radius:8px;border:2px solid var(--outline);background:var(--surface);
+    display:grid;place-items:center;font-size:13px;color:var(--muted);
+  }
+  .ep.on{border-color:var(--accent);background:var(--selected);color:#fff;font-weight:700}
+  .ep.seen{color:#7C8797}
+
+  .caption{font-size:12.5px;color:#5b6675;margin-top:8px}
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <button class="tab on" data-s="s1">① 空态 · 未接入</button>
+  <button class="tab" data-s="s2">② 添加连接</button>
+  <button class="tab" data-s="s3">③ 剧集库</button>
+  <button class="tab" data-s="s4">④ 详情 · 选集</button>
+</div>
+<div class="hint">1920×1080 电视画布 · 深夜影院主题 · 遥控器焦点态用珊瑚色描边表示</div>
+
+<div class="tv">
+
+  <!-- ========== ① 空态 ========== -->
+  <div class="screen on" id="s1">
+    <div class="top">
+      <div class="brand"><b>红果</b><span>v0.26.0</span></div>
+      <div class="nav">
+        <a>首页</a><a>搜索</a><a>排行榜</a><a class="sel">本地库</a><a>片源</a><a>我的</a>
+      </div>
+      <div class="clock">21:04</div>
+    </div>
+    <div class="body">
+      <div class="empty">
+        <div class="ico">▤</div>
+        <h2>还没有连接本地库</h2>
+        <p>接入家里同一网络下的 NAS（群晖、威联通、TrueNAS 等），即可直接播放里面存放的影片。<br>连接信息与播放记录只保存在本机，卸载重装后需重新填写。</p>
+        <div class="row" style="margin-top:8px">
+          <div class="btn pri focus">添加连接</div>
+          <div class="btn">查看支持的 NAS</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><b>确认</b> 添加连接　<b>返回</b> 回首页</div>
+  </div>
+
+  <!-- ========== ② 添加连接 ========== -->
+  <div class="screen" id="s2">
+    <div class="top">
+      <div class="brand"><b>红果</b><span>v0.26.0</span></div>
+      <div class="nav">
+        <a>首页</a><a>搜索</a><a>排行榜</a><a class="sel">本地库</a><a>片源</a><a>我的</a>
+      </div>
+      <div class="clock">21:05</div>
+    </div>
+    <div class="body">
+      <div class="h1">本地库</div>
+      <div class="grid" style="opacity:.25;filter:blur(1px)">
+        <div class="card"><div class="poster"><div class="badge">12</div><div class="t">剧集海报</div></div><div class="meta"><span>剧情</span><span>1080p</span></div></div>
+        <div class="card"><div class="poster"><div class="badge">24</div><div class="t">剧集海报</div></div><div class="meta"><span>剧情</span><span>1080p</span></div></div>
+        <div class="card"><div class="poster"><div class="badge">8</div><div class="t">剧集海报</div></div><div class="meta"><span>动画</span><span>4K</span></div></div>
+        <div class="card"><div class="poster"><div class="badge">1</div><div class="t">剧集海报</div></div><div class="meta"><span>电影</span><span>4K</span></div></div>
+        <div class="card"><div class="poster"><div class="badge">16</div><div class="t">剧集海报</div></div><div class="meta"><span>剧情</span><span>1080p</span></div></div>
+        <div class="card"><div class="poster"><div class="badge">30</div><div class="t">剧集海报</div></div><div class="meta"><span>动画</span><span>1080p</span></div></div>
+      </div>
+    </div>
+    <div class="overlay">
+      <div class="dialog">
+        <h3>添加连接</h3>
+        <div class="sub">填写 NAS 的 WebDAV 地址与账号，保存后自动扫描目录</div>
+
+        <div class="field">
+          <label>协议</label>
+          <div class="proto">
+            <div class="p on">WebDAV</div>
+            <div class="p off">SMB（敬请期待）</div>
+            <div class="p off">DLNA（敬请期待）</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>地址</label>
+          <div class="input focus">http://192.168.1.20:5005<span class="ph" style="margin-left:auto">如群晖 WebDAV 端口 5005</span></div>
+        </div>
+        <div class="field">
+          <label>目录</label>
+          <div class="input">/video/影视<span class="ph" style="margin-left:auto">留空为根目录</span></div>
+        </div>
+        <div class="field">
+          <label>账号</label>
+          <div class="input">nas_user</div>
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <div class="input">••••••••<span class="ph" style="margin-left:auto">也可用手机扫码输入</span></div>
+        </div>
+
+        <div class="drow">
+          <div class="btn">测试连接</div>
+          <div class="btn">取消</div>
+          <div class="btn pri focus">保存并扫描</div>
+        </div>
+        <div class="tips">只支持同一局域网内访问；账号密码保存在本机，不随本地备份导出。首次扫描会在后台进行，可随时退出。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== ③ 剧集库 ========== -->
+  <div class="screen" id="s3">
+    <div class="top">
+      <div class="brand"><b>红果</b><span>v0.26.0</span></div>
+      <div class="nav">
+        <a>首页</a><a>搜索</a><a>排行榜</a><a class="sel">本地库</a><a>片源</a><a>我的</a>
+      </div>
+      <div class="clock">21:07</div>
+    </div>
+    <div class="body">
+      <div class="h1">
+        本地库
+        <span class="chip"><span class="dot"></span>书房 NAS · 已连接</span>
+        <span class="chip">124 部剧 · 3217 个文件</span>
+        <span class="grow"></span>
+        <span class="btn">重新扫描</span>
+        <span class="btn">管理连接</span>
+      </div>
+      <div class="seg">
+        <span class="on">全部</span><span>剧集</span><span>电影</span><span>动画</span><span>纪录片</span>
+      </div>
+
+      <div class="grid">
+        <div class="card focus">
+          <div class="poster"><div class="badge nas">24 集</div><div class="t">都市之最强律师</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>看到第 6 集</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">12 集</div><div class="t">山海故人</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">4K</div><div class="t">深海纪元</div></div>
+          <div class="meta"><span>电影 · 2160p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">36 集</div><div class="t">灵剑尊 第二季</div></div>
+          <div class="meta"><span>动画 · 1080p</span><span>看到第 18 集</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">16 集</div><div class="t">无声证词</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>看完</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">1 集</div><div class="t">极地纪录·冰川</div></div>
+          <div class="meta"><span>纪录片 · 4K</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">20 集</div><div class="t">长夜将明</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">8 集</div><div class="t">猫町物语</div></div>
+          <div class="meta"><span>动画 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">30 集</div><div class="t">归途列车</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">6 集</div><div class="t">雾中灯塔</div></div>
+          <div class="meta"><span>剧集 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">1 集</div><div class="t">城市边缘</div></div>
+          <div class="meta"><span>电影 · 1080p</span><span>未观看</span></div>
+        </div>
+        <div class="card">
+          <div class="poster"><div class="badge nas">18 集</div><div class="t">少年白马行</div></div>
+          <div class="meta"><span>动画 · 1080p</span><span>未观看</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <b>方向键</b> 移动　<b>确认</b> 进入详情　<b>菜单键</b> 切换按文件夹浏览　<b>返回</b> 回首页
+    </div>
+  </div>
+
+  <!-- ========== ④ 详情 · 选集 ========== -->
+  <div class="screen" id="s4">
+    <div class="top">
+      <div class="brand"><b>红果</b><span>v0.26.0</span></div>
+      <div class="nav">
+        <a>首页</a><a>搜索</a><a>排行榜</a><a class="sel">本地库</a><a>片源</a><a>我的</a>
+      </div>
+      <div class="clock">21:09</div>
+    </div>
+    <div class="body">
+      <div class="detail">
+        <div class="dposter">都市之最强律师</div>
+        <div class="dinfo">
+          <div class="title">都市之最强律师</div>
+          <div class="tags">
+            <span class="chip">本地库 · 书房 NAS</span>
+            <span class="chip">24 集</span>
+            <span class="chip">1080p</span>
+            <span class="chip">12.4 GB</span>
+          </div>
+          <div class="desc">目录：/video/影视/都市之最强律师 · 文件按「第 NN 集」命名自动排序。集数与文件数不一致时会标出缺失集。</div>
+          <div class="acts">
+            <div class="btn pri focus">继续观看 第 6 集</div>
+            <div class="btn">从头播放</div>
+            <div class="btn">文件列表</div>
+          </div>
+          <div class="eps">
+            <div class="ep seen">01</div><div class="ep seen">02</div><div class="ep seen">03</div><div class="ep seen">04</div><div class="ep seen">05</div>
+            <div class="ep on">06</div><div class="ep">07</div><div class="ep">08</div><div class="ep">09</div><div class="ep">10</div>
+            <div class="ep">11</div><div class="ep">12</div><div class="ep">13</div><div class="ep">14</div><div class="ep">15</div>
+            <div class="ep">16</div><div class="ep">17</div><div class="ep">18</div><div class="ep">19</div><div class="ep">20</div>
+            <div class="ep">21</div><div class="ep">22</div><div class="ep">23</div><div class="ep">24</div><div class="ep" style="opacity:.35">续</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><b>方向键</b> 选集　<b>确认</b> 播放　<b>返回</b> 回本地库</div>
+  </div>
+
+</div>
+
+<div class="caption">设计要点：本地库是独立一级导航（不并入「片源」）；连接状态与扫描结果常驻标题行；卡片右上角「集数」角标沿用云端记录角标样式；空态与添加连接共用同一套深色玻璃对话框。</div>
+
+<script>
+  const tabs=[...document.querySelectorAll('.tab')];
+  tabs.forEach(t=>t.onclick=()=>{
+    tabs.forEach(x=>x.classList.remove('on'));
+    t.classList.add('on');
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+    document.getElementById(t.dataset.s).classList.add('on');
+  });
+  // 演示：方向键在网格里移动焦点
+  document.addEventListener('keydown',e=>{
+    const screen=[...document.querySelectorAll('.screen.on')][0];
+    if(!screen)return;
+    const cards=[...screen.querySelectorAll('.card, .ep, .btn')];
+    if(!cards.length)return;
+    let i=cards.findIndex(c=>c.classList.contains('focus'));
+    if(i<0)i=0; else cards[i].classList.remove('focus');
+    const cols=6;
+    if(e.key==='ArrowRight')i+=1;
+    if(e.key==='ArrowLeft')i-=1;
+    if(e.key==='ArrowDown')i+=cols;
+    if(e.key==='ArrowUp')i-=cols;
+    i=Math.max(0,Math.min(cards.length-1,i));
+    cards[i].classList.add('focus');
+    e.preventDefault();
+  });
+</script>
+</body>
+</html>

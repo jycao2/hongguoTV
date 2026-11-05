@@ -104,6 +104,9 @@ class MainActivity: Activity() {
     private val waterfallMaxPages=10
     private var catalogRecycler: RecyclerView?=null
     private var catalogAdapter: CatalogAdapter?=null
+    private var catalogFocusPos=RecyclerView.NO_POSITION
+    /** 焦点当前是否在网格卡片内：用于在 Activity 层拦截下键，即使焦点被回收清空也按记住的位置继续下移 */
+    private var gridFocusOwned=false
     private var loadingMore=false
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
@@ -263,6 +266,7 @@ class MainActivity: Activity() {
     private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
     private var historySync: View?=null
+    private var historyRefresh: View?=null
     /** 云端记录卡片点击后的续播进度：只用于起播，落地仍由播放中的 saveProgress 写本机。 */
     private var pendingCloudResume: CloudProgress?=null
     /** 设置页重建后要恢复焦点的设置项标签前缀。 */
@@ -606,7 +610,7 @@ class MainActivity: Activity() {
         nav.clear(); segmentFirst=null; typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
-        historyManage=null; historySync=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
+        historyManage=null; historySync=null; historyRefresh=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; favoriteFilterFirst=null; favoriteFilterButtons=emptyList(); homeUpdates=null; resumeCards.clear()
         favoriteSortFirst=null; favoriteSortButtons=emptyList(); favoriteSelectAll=null; favoriteRemove=null; favoriteManageButton=null
         filterToggle=null; filterSummary=null; filterPanel=null; filterGroupsScroll=null; filterChips=linkedMapOf(); filterRows=mutableListOf()
@@ -646,6 +650,7 @@ class MainActivity: Activity() {
         3 -> library.navHidden("favorite")
         4 -> library.navHidden("history")
         6 -> library.sourceHidden
+        7 -> library.navHidden("nas")
         else -> false
     }
     private fun switchTab(next: Int) {
@@ -729,9 +734,10 @@ class MainActivity: Activity() {
         val areaButtons=listOf(
             Triple(1,"搜索",listOf(1)),
             Triple(2,"排行榜",listOf(2)),
+            Triple(7,"本地库",listOf(7)),
             Triple(6,"片源",listOf(6)),
             Triple(3,"我的",listOf(4,3))).mapIndexed { index,entry ->
-            val iconRes=when(index) { 0->com.hongguotv.nativeapp.R.drawable.ic_nav_search; 1->com.hongguotv.nativeapp.R.drawable.ic_nav_rank; 2->com.hongguotv.nativeapp.R.drawable.ic_nav_source; else->com.hongguotv.nativeapp.R.drawable.ic_nav_mine }
+            val iconRes=when(index) { 0->com.hongguotv.nativeapp.R.drawable.ic_nav_search; 1->com.hongguotv.nativeapp.R.drawable.ic_nav_rank; 2->com.hongguotv.nativeapp.R.drawable.ic_nav_nas; 3->com.hongguotv.nativeapp.R.drawable.ic_nav_source; else->com.hongguotv.nativeapp.R.drawable.ic_nav_mine }
             lateinit var view: TextView
             view=pillNav(iconRes,entry.second,tab==entry.first || tab in entry.third,{
                 val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
@@ -748,13 +754,13 @@ class MainActivity: Activity() {
         }.apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
         val settingsTool=button("设置",tab==5) { switchTab(5) }
             .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
-        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3]).forEach { item ->
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3],areaButtons[4]).forEach { item ->
             top.addView(item,lp(-2,-2).apply { rightMargin=navMargin })
         }
         // 右上工具与首页内容类型一起，等类型按钮挂完后再按 类型 → 留白 → 工具 的顺序追加
-        // 保留 7 项索引语义：搜索/排行榜/片源各占独立按钮，收藏/历史共用我的按钮，设置由右上工具承载
-        nav.addAll(listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[3],areaButtons[3],settingsTool,areaButtons[2]))
-        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3],quickTool,settingsTool).let { chain ->
+        // 索引语义：0=首页 1=搜索 2=排行榜 3=收藏 4=历史 5=设置 6=片源 7=本地库
+        nav.addAll(listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[4],areaButtons[4],settingsTool,areaButtons[3],areaButtons[2]))
+        listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3],areaButtons[4],quickTool,settingsTool).let { chain ->
             chain.forEachIndexed { index,item ->
                 item.nextFocusLeftId=chain.getOrNull(index-1)?.id ?: item.id
                 item.nextFocusRightId=chain.getOrNull(index+1)?.id ?: item.id
@@ -776,6 +782,13 @@ class MainActivity: Activity() {
             segmentChips.forEach { segRow.addView(it,lp(-2,-2).apply { rightMargin=dp(6) }) }
             segmentFirst=segmentChips.firstOrNull()
             if(segmentChips.isNotEmpty()) container.addView(segRow)
+        }
+        if(tab==7) {
+            val ns = NasScreen(this, tvTools)
+            ns.show(container)
+            nav.forEach { it.nextFocusDownId = ns.topFocusId }
+            if(ns.topFocusId != View.NO_ID) container.findViewById<View>(ns.topFocusId)?.requestFocus() else nav[tab].requestFocus()
+            return
         }
         if(tab==6) {
             val instance=third ?: ThirdSourceScreen(this, { showCatalog() }, { library.requestBackup() }).also { third=it }
@@ -1054,6 +1067,21 @@ class MainActivity: Activity() {
                 addButton(heading,"退出管理") { favoriteManage=false; favoriteSelected.clear(); showCatalog() }.apply { nextFocusUpId=nav[tab].id }
             }
             if(tab==4 && accountManager.signedIn) {
+                // 手动刷新：只重新拉取云端记录，不写本机；云端记录只读，本机记录用右侧按钮上传
+                historyRefresh=addButton(heading,"刷新云端记录") {
+                    if(accountManager.isBusy) Toast.makeText(this,"账号操作进行中，请稍候",Toast.LENGTH_SHORT).show()
+                    else {
+                        Toast.makeText(this,"正在刷新云端记录…",Toast.LENGTH_SHORT).show()
+                        accountManager.refreshHistory {
+                            historyRefresh?.takeIf { it.isAttachedToWindow }?.requestFocus()
+                        }
+                        main.postDelayed({ historyRefresh?.takeIf { it.isAttachedToWindow }?.requestFocus() }, 600)
+                    }
+                }.apply {
+                    id=View.generateViewId()
+                    nextFocusUpId=nav[tab].id
+                    if(accountManager.isBusy) { isEnabled=false; alpha=.4f }
+                }
                 // 手动同步：本机记录推到云端；云端记录只读，不在这里提供删除
                 historySync=addButton(heading,"同步到云端") {
                     accountManager.syncLocalToCloud { pushed,skipped,failed ->
@@ -1122,7 +1150,7 @@ class MainActivity: Activity() {
         if(segmentChips.isNotEmpty()) {
             val firstControl: View?=when(tab) {
                 3 -> if(favoriteManage) favoriteSelectAll else favoriteSortFirst ?: favoriteFilterFirst ?: favoriteCheck
-                else -> historySync ?: historyManage
+                else -> historyRefresh ?: historySync ?: historyManage
             }
             segmentChips.forEachIndexed { index,item ->
                 item.nextFocusUpId=nav[tab].id
@@ -1255,23 +1283,17 @@ class MainActivity: Activity() {
             // Focus entering the grid lands on the first visible card, keeping the user's place.
             isFocusable=true; isFocusableInTouchMode=true
             setOnFocusChangeListener { _,focused -> if(focused) { val first=grid.findFirstVisibleItemPosition().coerceAtLeast(0); post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() } } }
-            // 长按下键到达最后一行后拦截焦点搜索，避免 GridLayoutManager 在尾行不满 cols 时跳出 recycler 跑到顶部导航栏形成循环
-            setOnKeyListener { _,keyCode,event ->
-                if(keyCode==KeyEvent.KEYCODE_DPAD_DOWN && event.action==KeyEvent.ACTION_DOWN) {
-                    val focusedChild=focusedChild
-                    if(focusedChild!=null) {
-                        val pos=getChildAdapterPosition(focusedChild)
-                        if(pos>=0) {
-                            val cols=(layoutManager as? GridLayoutManager)?.spanCount ?: 1
-                            val lastRowFirst=((adapter.itemCount-1)/cols)*cols
-                            if(pos>=lastRowFirst) return@setOnKeyListener true
-                        }
-                    }
-                }
-                false
-            }
+            // 下键统一在 MainActivity.dispatchKeyEvent 里处理：网格重排/分页时 View 层收不到按键
         }
-        catalogRecycler=recycler; catalogAdapter=adapter
+        catalogRecycler=recycler; catalogAdapter=adapter; catalogFocusPos=RecyclerView.NO_POSITION; gridFocusOwned=false
+        recycler.viewTreeObserver.addOnGlobalFocusChangeListener { o,n ->
+            if(n!=null && inCatalogGrid(n,recycler)) {
+                val pos=recycler.getChildAdapterPosition(n)
+                if(pos!=RecyclerView.NO_POSITION) { catalogFocusPos=pos; gridFocusOwned=true }
+            } else if(o!=null && inCatalogGrid(o,recycler)) gridFocusOwned=false
+            // 旧焦点为 null：焦点卡在重排中被回收，立刻补回网格，别停在顶栏「首页」
+            else if(o==null && gridFocusOwned) restoreCatalogFocus()
+        }
         adapter.footer=when {
             localCatalog() -> if(collection=="hot" && collectionReturn?.hasMore==true) FOOTER_MORE_HOT else FOOTER_NONE
             hasMore -> FOOTER_NONE
@@ -1282,13 +1304,15 @@ class MainActivity: Activity() {
             it.nextFocusDownId=segmentFirst?.id ?: when {
                 tab==2 -> (if(aiCatalog) aiBack ?: aiGenreButton ?: rankRefresh else aiEntry ?: rankSwitch ?: rankRefresh)?.id ?: recycler.id
                 tab<=1 -> (if(tab==1) filterToggle else typeButtons[library.contentType])?.id ?: recycler.id
-                else -> favoriteCheck?.id ?: historySync?.id ?: historyManage?.id ?: recycler.id
+                else -> favoriteCheck?.id ?: historyRefresh?.id ?: historySync?.id ?: historyManage?.id ?: recycler.id
             }
         }
         rankSwitch?.nextFocusDownId=recycler.id; rankRefresh?.nextFocusDownId=recycler.id; historyManage?.nextFocusDownId=recycler.id
-        historySync?.nextFocusDownId=recycler.id
+        historyRefresh?.nextFocusDownId=recycler.id; historySync?.nextFocusDownId=recycler.id
+        historyRefresh?.nextFocusRightId=historySync?.id ?: historyManage?.id ?: View.NO_ID
+        historySync?.nextFocusLeftId=historyRefresh?.id ?: View.NO_ID
         historySync?.nextFocusRightId=historyManage?.id ?: View.NO_ID
-        historyManage?.nextFocusLeftId=historySync?.id ?: View.NO_ID
+        historyManage?.nextFocusLeftId=historySync?.id ?: historyRefresh?.id ?: View.NO_ID
         // 收藏页头部按钮行：检查更新/管理左右互连，↓ 回排序行；管理模式按钮 ↓ 直接进网格
         favoriteCheck?.nextFocusDownId=favoriteSortFirst?.id ?: favoriteFilterFirst?.id ?: recycler.id
         favoriteCheck?.nextFocusRightId=favoriteManageButton?.id ?: View.NO_ID
@@ -1316,15 +1340,81 @@ class MainActivity: Activity() {
             recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(targetAdapter)?.itemView?.requestFocus() }
         }
     }
+    private fun inCatalogGrid(view: View,recycler: RecyclerView): Boolean {
+        var cur: View?=view
+        while(cur!=null) { if(cur===recycler) return true; cur=cur.parent as? View }
+        return false
+    }
+    /**
+     * 网格内的下键统一在这里处理：算下一行同列格子并直接 requestFocus。
+     * 交给框架 focusSearch 时，分页/重排会把被聚焦卡回收，焦点被静默清空后回落到窗口第一个可聚焦项（顶栏「首页」），
+     * 表现为「首页 ↔ 卡片」来回跳。按记住的位置下移则焦点始终留在网格里。
+     */
+    private fun handleCatalogDown(event: KeyEvent): Boolean {
+        if(event.action==KeyEvent.ACTION_DOWN && event.keyCode==KeyEvent.KEYCODE_DPAD_DOWN && screen=="catalog" && gridFocusOwned
+            && randomDialog?.isShowing!=true && exitDialog?.isShowing!=true) {
+            val recycler=catalogRecycler; val adapter=catalogAdapter
+            if(recycler!=null && adapter!=null) {
+                val focused=recycler.focusedChild
+                var pos=if(focused!=null) recycler.getChildAdapterPosition(focused) else RecyclerView.NO_POSITION
+                if(pos==RecyclerView.NO_POSITION) pos=catalogFocusPos
+                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
+                    val index=adapter.displayedIndex(pos)
+                    if(index in 0 until adapter.displayed.size) {
+                        val cols=(recycler.layoutManager as? GridLayoutManager)?.spanCount ?: 1
+                        val target=index+cols
+                        if(target<=adapter.displayed.size-1) moveGridFocus(adapter.adapterPosition(target))
+                        return true
+                    }
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+    /** 把焦点移到网格内指定 adapter 位置：已布局直接移，未布局先滚动再补焦点 */
+    private fun moveGridFocus(pos: Int) {
+        val recycler=catalogRecycler ?: return
+        val holder=recycler.findViewHolderForAdapterPosition(pos)
+        if(holder!=null) { holder.itemView.requestFocus(); return }
+        // 目标在屏幕外：只按一行高度滚动。用 scrollToPosition 会把目标整行锚到顶部，
+        // 当前焦点卡瞬间被滚出屏幕并回收，焦点被清空后框架直接回落到顶栏「首页」。
+        val focused=recycler.focusedChild
+        if(focused!=null) {
+            val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
+            recycler.scrollBy(0,focused.height+margin)
+        } else recycler.scrollToPosition(pos)
+        recycler.post {
+            if(screen!="catalog" || recycler!==catalogRecycler) return@post
+            recycler.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus()
+        }
+    }
+    /** 记住当前焦点卡位置，供列表结构变更（footer 插入/移除、分页插入）后补回焦点，避免掉到顶栏首页 */
+    private fun rememberCatalogFocus() {
+        val recycler=catalogRecycler ?: return
+        recycler.focusedChild?.let { catalogFocusPos=recycler.getChildAdapterPosition(it) }
+    }
+    private fun restoreCatalogFocus() {
+        val recycler=catalogRecycler ?: return
+        val pos=catalogFocusPos
+        if(pos==RecyclerView.NO_POSITION) return
+        recycler.post {
+            if(screen!="catalog" || recycler!==catalogRecycler || recycler.focusedChild!=null) return@post
+            val view=recycler.findViewHolderForAdapterPosition(pos)?.itemView
+            if(view!=null) view.requestFocus() else {
+                recycler.scrollToPosition(pos)
+                recycler.post { recycler.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus() }
+            }
+        }
+    }
     private fun maybeLoadMore() {
         val adapter=catalogAdapter ?: return
         if(randomDialog?.isShowing==true || loadingMore || !hasMore || localCatalog() || screen!="catalog") return
         if(tab==1 && advancedSearch) { loadMoreDiscovery(adapter); return }
-        if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
+        if(page>=waterfallMaxPages || catalog.size>=waterfallMaxPages*20) { hasMore=false; rememberCatalogFocus(); adapter.updateFooter(FOOTER_END); restoreCatalogFocus(); return }
         val requestTab=tab; val requestPage=page+1; val requestQuery=query; val requestType=library.contentType
         val requestBoard=rankBoard; val requestGenre=if(requestTab==0) genre else null
         val requestAi=if(requestTab==2) aiCatalog else false; val requestAiGenre=if(requestAi) aiGenre else null
-        loadingMore=true; adapter.updateFooter(FOOTER_LOADING)
+        loadingMore=true; rememberCatalogFocus(); adapter.updateFooter(FOOTER_LOADING); restoreCatalogFocus()
         work({
             when(requestTab) {
                 0 -> repository.home(requestPage,requestType,requestGenre)
@@ -1347,6 +1437,7 @@ class MainActivity: Activity() {
                 current.displayed.addAll(visible)
                 if(visible.isNotEmpty()) current.notifyItemRangeInserted(insertAt,visible.size)
                 current.updateFooter(if(hasMore && page<waterfallMaxPages && catalog.size<waterfallMaxPages*20) FOOTER_NONE else FOOTER_END)
+                restoreCatalogFocus()
             }
         }, { problem ->
             loadingMore=false
@@ -1357,6 +1448,7 @@ class MainActivity: Activity() {
             } else {
                 Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
                 catalogAdapter?.updateFooter(FOOTER_ERROR)
+                restoreCatalogFocus()
             }
         })
     }
@@ -1500,8 +1592,7 @@ class MainActivity: Activity() {
                 else -> if(tab==2) "已展示全部 ${displayed.size} 部" else "已加载全部，试试搜索"
             }
             val hint=text(label,14f,muted).apply {
-                gravity=Gravity.CENTER; setPadding(0,dp(8),0,dp(8)); isFocusable=true; isFocusableInTouchMode=true
-                setOnFocusChangeListener { _,focused -> setTextColor(if(focused) white else muted) }
+                gravity=Gravity.CENTER; setPadding(0,dp(8),0,dp(8))
             }
             frame.addView(hint,FrameLayout.LayoutParams(-1,-2))
         }
@@ -2248,9 +2339,9 @@ class MainActivity: Activity() {
     }
     private fun loadMoreDiscovery(adapter: CatalogAdapter) {
         val cursor=discoveryCursor ?: return
-        if(page>=waterfallMaxPages) { hasMore=false; adapter.updateFooter(FOOTER_END); return }
+        if(page>=waterfallMaxPages) { hasMore=false; rememberCatalogFocus(); adapter.updateFooter(FOOTER_END); restoreCatalogFocus(); return }
         val selection=discoverySelection
-        loadingMore=true; adapter.updateFooter(FOOTER_LOADING)
+        loadingMore=true; rememberCatalogFocus(); adapter.updateFooter(FOOTER_LOADING); restoreCatalogFocus()
         work({ repository.filteredDiscovery(selection,cursor) }, { result ->
             loadingMore=false; page+=1
             hasMore=result.next!=null; discoveryCursor=result.next
@@ -2263,11 +2354,13 @@ class MainActivity: Activity() {
                 current.displayed.addAll(fresh)
                 if(fresh.isNotEmpty()) current.notifyItemRangeInserted(insertAt,fresh.size)
                 current.updateFooter(if(hasMore && page<waterfallMaxPages) FOOTER_NONE else FOOTER_END)
+                restoreCatalogFocus()
             }
         }, { _ ->
             loadingMore=false
             Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
             catalogAdapter?.updateFooter(FOOTER_ERROR)
+            restoreCatalogFocus()
         })
     }
     private fun showRandomPicks() {
@@ -3496,9 +3589,10 @@ class MainActivity: Activity() {
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show(); list.setSelection(selected); list.requestFocus()
     }
-    /** 顶部导航栏模块：与实际顶栏对齐——搜索/排行榜/片源/我的；收藏与最近观看是"我的"的子 tab，不单独列。 */
-    private fun navModuleNames()=listOf("search" to "搜索","rank" to "排行榜","source" to "片源","mine" to "我的")
+    /** 顶部导航栏模块：与实际顶栏对齐——搜索/排行榜/本地库/片源/我的；收藏与最近观看是"我的"的子 tab，不单独列。 */
+    private fun navModuleNames()=listOf("search" to "搜索","rank" to "排行榜","nas" to "本地库","source" to "片源","mine" to "我的")
     private fun navModuleHidden(key: String): Boolean = when(key) {
+        "nas" -> library.navHidden("nas")
         "source" -> library.sourceHidden
         "mine" -> library.navHidden("favorite") && library.navHidden("history")
         else -> library.navHidden(key)
@@ -3736,6 +3830,7 @@ class MainActivity: Activity() {
     override fun onBackPressed()=goBack()
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if(tab==6 && third?.onKey(event)==true) return true
+        if(handleCatalogDown(event)) return true
         // 收藏页：菜单键循环切换排序（卡片上的快捷菜单改用长按确认键，与设计稿按键表一致）
         if(screen=="catalog" && tab==3 && collection==null && event.keyCode==KeyEvent.KEYCODE_MENU) {
             if(event.action==KeyEvent.ACTION_UP && !favoriteManage) {

@@ -47,21 +47,21 @@ class LibraryBackupTest {
         assertTrue(LibraryBackup.decode(legacy.toString()).settings.showClock)
         assertTrue(LibraryBackup.merge(data(),on,true).settings.showClock)
     }
-    @Test fun `source entry defaults to shown and hidden setting round trips`() {
-        assertFalse(BackupSettings().sourceHidden)
-        val hidden=data().copy(settings=BackupSettings().copy(sourceHidden=true))
-        assertEquals(hidden,LibraryBackup.decode(LibraryBackup.encode(hidden)))
+    @Test fun `source entry defaults to hidden and setting round trips`() {
+        assertTrue(BackupSettings().sourceHidden)
+        val shown=data().copy(settings=BackupSettings().copy(sourceHidden=false))
+        assertEquals(shown,LibraryBackup.decode(LibraryBackup.encode(shown)))
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("sourceHidden")
-        assertFalse(LibraryBackup.decode(legacy.toString()).settings.sourceHidden)
-        assertTrue(LibraryBackup.merge(data(),hidden,true).settings.sourceHidden)
+        assertTrue(LibraryBackup.decode(legacy.toString()).settings.sourceHidden)
+        assertFalse(LibraryBackup.merge(data(),shown,true).settings.sourceHidden)
     }
-    @Test fun `nav module visibility round trips and legacy backups show all modules`() {
-        assertTrue(BackupSettings().navHidden.isEmpty())
-        val hidden=data().copy(settings=BackupSettings().copy(navHidden=setOf("search","history")))
+    @Test fun `nav module visibility round trips and legacy backups hide local library`() {
+        assertEquals(setOf("nas"),BackupSettings().navHidden)
+        val hidden=data().copy(settings=BackupSettings().copy(navHidden=setOf("nas","search","history")))
         assertEquals(hidden,LibraryBackup.decode(LibraryBackup.encode(hidden)))
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.getJSONObject("settings").remove("navHidden")
-        assertTrue(LibraryBackup.decode(legacy.toString()).settings.navHidden.isEmpty())
-        assertEquals(setOf("search","history"),LibraryBackup.merge(data(),hidden,true).settings.navHidden)
+        assertEquals(setOf("nas"),LibraryBackup.decode(legacy.toString()).settings.navHidden)
+        assertEquals(setOf("nas","search","history"),LibraryBackup.merge(data(),hidden,true).settings.navHidden)
         // 未知模块键一律忽略，避免旧版本以外的值破坏导航
         val unknown=JSONObject(LibraryBackup.encode(data()))
         unknown.getJSONObject("settings").put("navHidden",JSONArray().put("search").put("home").put("settings").put(1))

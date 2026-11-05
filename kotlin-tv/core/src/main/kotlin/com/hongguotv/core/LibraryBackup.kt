@@ -10,7 +10,7 @@ data class BackupProgress(val series: Series,val episodeId: String,val episodeIn
 }
 data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val autoSeason: Boolean=true,val danmaku: Boolean=true,
     val danmakuOpacity: Int=DanmakuPrefs.OPACITY_DEFAULT,val danmakuFont: Int=DanmakuPrefs.FONT_DEFAULT,val danmakuSpeed: Int=DanmakuPrefs.SPEED_DEFAULT,val danmakuRows: Int=DanmakuPrefs.ROWS_DEFAULT,
-    val showClock: Boolean=true,val sourceHidden: Boolean=false,val navHidden: Set<String> = emptySet()) {
+    val showClock: Boolean=true,val sourceHidden: Boolean=true,val navHidden: Set<String> = setOf("nas")) {
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock).put("sourceHidden",sourceHidden)
         .put("navHidden",JSONArray(navHidden.filter { it in LibraryBackup.NAV_KEYS }.sorted()))
@@ -43,10 +43,10 @@ data class BackupThirdHistory(
 
 object LibraryBackup {
     const val MAX_BYTES=2*1024*1024
-    /** 顶部导航栏模块的隐藏键：搜索、排行榜、收藏、最近观看。
+    /** 顶部导航栏模块的隐藏键：搜索、排行榜、本地库、收藏、最近观看。
      *  UI 上「收藏」和「最近观看」是「我的」的子 tab，设置里的「我的」开关会同时设置这两个 key。
-     *  首页与设置始终显示，片源独立用 sourceHidden 字段。 */
-    val NAV_KEYS=setOf("search","rank","favorite","history")
+     *  首页与设置始终显示；本地库与片源默认隐藏，片源独立用 sourceHidden 字段。 */
+    val NAV_KEYS=setOf("search","rank","nas","favorite","history")
     const val MAX_THIRD_HISTORY=100
     const val MAX_THIRD_FAVORITES=100
     private val idPattern=Regex("[0-9]{1,30}")
@@ -148,14 +148,14 @@ object LibraryBackup {
         val danmakuSpeed=DanmakuPrefs.speed(settings.optInt("danmakuSpeed",DanmakuPrefs.SPEED_DEFAULT))
         val danmakuRows=DanmakuPrefs.rows(settings.optInt("danmakuRows",DanmakuPrefs.ROWS_DEFAULT))
         val showClock=settings.optBoolean("showClock",true)
-        // 旧备份没有该字段时按默认「显示」处理
-        val sourceHidden=settings.optBoolean("sourceHidden",false)
-        // 导航模块显隐：只认已知模块键，未知值忽略
+        // 旧备份没有该字段时按默认「隐藏」处理（片源与本地库默认隐藏）
+        val sourceHidden=settings.optBoolean("sourceHidden",true)
+        // 导航模块显隐：只认已知模块键，未知值忽略；旧备份没有该字段时默认隐藏本地库
         val navHidden=runCatching {
             settings.optJSONArray("navHidden")?.let { rows ->
                 (0 until rows.length()).mapNotNull { rows.optString(it).takeIf { key -> key in NAV_KEYS } }.toSet()
-            } ?: emptySet()
-        }.getOrDefault(emptySet())
+            } ?: setOf("nas")
+        }.getOrDefault(setOf("nas"))
         // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复
         val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
             val api=runCatching { row.string("api",500) }.getOrNull() ?: return@mapNotNull null
