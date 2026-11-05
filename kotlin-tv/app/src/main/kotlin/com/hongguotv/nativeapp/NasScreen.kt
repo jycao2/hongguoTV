@@ -34,6 +34,7 @@ import com.hongguotv.core.PhoneField
 import com.hongguotv.core.PhoneForm
 
 /** 本地库（NAS/WebDAV）浏览与播放。空态 → 添加连接 → 剧集列表 → 详情/起播。 */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
     private val store = NasStore(activity)
     private val main = Handler(Looper.getMainLooper())
