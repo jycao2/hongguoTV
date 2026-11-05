@@ -8,6 +8,7 @@
 - APK 不含 JNI 库，可由 Android 在 ARM32、ARM64、x86、x86_64 上运行；视频解码能力依赖设备。
 - 源码分支：`main`，推送即触发发布构建。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
+- 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
 ## 0.25.0 新增
 
