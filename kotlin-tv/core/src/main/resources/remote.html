@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>红果TV 遥控</title>
+<style>
+  :root{
+    --bg:#0E1116;--surface:#171B22;--raised:#1D222B;--outline:#262D38;
+    --text:#E7EAEE;--muted:#8695A8;--dim:#5D6875;--accent:#FF8964;--accent-bg:#3A2119;
+    --ok:#4CC38A;--warn:#F0B450;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:15px/1.45 -apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+    overscroll-behavior:none;user-select:none}
+  body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  button{appearance:none;font-family:inherit;cursor:pointer}
+
+  .bar{display:flex;align-items:center;gap:8px;padding:12px 18px 8px;flex:0 0 auto}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
+  .dot.off{background:var(--dim)}
+  .ip{font-size:12px;color:var(--muted);letter-spacing:.02em}
+  .spacer{flex:1}
+  .more{background:transparent;border:0;color:var(--muted);font-size:18px;padding:4px 8px;border-radius:8px}
+  .more:active{background:var(--raised)}
+
+  .menu{position:absolute;right:14px;top:46px;z-index:40;min-width:190px;
+    background:var(--raised);border:1px solid var(--outline);border-radius:12px;padding:6px;
+    box-shadow:0 12px 28px rgba(0,0,0,.5);display:none}
+  .menu.on{display:block}
+  .menu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text);
+    font-size:14px;padding:11px 12px;border-radius:8px}
+  .menu button:active{background:var(--surface)}
+  .menu .addr{font-size:11px;color:var(--dim);padding:8px 12px 4px;border-top:1px solid var(--outline);margin-top:4px}
+
+  .view{display:none;flex:1;min-height:0;flex-direction:column}
+  .view.on{display:flex}
+
+  .now{padding:6px 20px 0;flex:0 0 auto}
+  .title{font-size:19px;font-weight:650;margin:0;letter-spacing:.01em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .meta{font-size:12.5px;color:var(--muted);margin-top:5px}
+  .meta b{color:var(--text);font-weight:600}
+  .meta.warn{color:var(--warn)}
+
+  .prog{padding:22px 20px 0;flex:0 0 auto}
+  .track{position:relative;height:4px;background:#2A323E;border-radius:2px;touch-action:none}
+  .track::before{content:"";position:absolute;inset:-14px 0}
+  .fill{position:absolute;left:0;top:0;height:100%;background:var(--accent);border-radius:2px}
+  .knob{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;background:#fff;
+    transform:translate(-50%,-50%);box-shadow:0 1px 5px rgba(0,0,0,.5)}
+  .times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:9px;font-variant-numeric:tabular-nums}
+
+  .ctrl{display:flex;align-items:center;justify-content:space-between;padding:20px 16px 0;flex:0 0 auto}
+  .ctrl button{background:transparent;border:0;color:#C9D2DE;display:flex;flex-direction:column;
+    align-items:center;gap:5px;padding:6px;border-radius:12px;min-width:56px}
+  .ctrl button:active{background:#1A1F27}
+  .ctrl svg{width:24px;height:24px}
+  .ctrl .num{font-size:10.5px;color:var(--dim);letter-spacing:.04em}
+  .ctrl .main{width:64px;height:64px;border-radius:50%;background:var(--accent);color:#1B0D07;
+    justify-content:center;gap:0;min-width:0}
+  .ctrl .main svg{width:27px;height:27px;fill:currentColor;stroke:none}
+  .ctrl .main:active{background:#FFA184}
+
+  .params{display:flex;gap:10px;padding:20px 20px 0;flex:0 0 auto}
+  .param{flex:1;background:var(--surface);border:1px solid var(--outline);border-radius:12px;
+    padding:11px 0;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text)}
+  .param b{font-size:14px;font-weight:600}
+  .param small{font-size:10.5px;color:var(--dim);letter-spacing:.04em}
+  .param.on{border-color:#5A3626;background:var(--accent-bg)}
+  .param.on b{color:var(--accent)}
+  .param:active{background:var(--raised)}
+  .param:disabled{opacity:.38}
+
+  .searchwrap{padding:18px 20px 0;flex:0 0 auto}
+  .searchbox{display:flex;gap:8px;background:var(--surface);border:1px solid var(--outline);
+    border-radius:12px;padding:4px 4px 4px 14px;align-items:center}
+  .searchbox input{flex:1;background:transparent;border:0;outline:0;color:var(--text);
+    font:15px inherit;padding:10px 0;min-width:0}
+  .searchbox input::placeholder{color:var(--dim)}
+  .searchbox button{background:var(--raised);border:0;color:var(--text);font-size:13px;
+    padding:9px 15px;border-radius:9px;flex:0 0 auto}
+  .searchhint{font-size:10.5px;color:var(--dim);padding:7px 2px 0;line-height:1.5}
+
+  .quick{display:flex;align-items:center;justify-content:center;gap:12px;padding:18px 20px 0;flex:0 0 auto}
+  .ep{width:52px;height:52px;border-radius:50%;background:var(--surface);border:1px solid var(--outline);
+    color:var(--muted);font-size:15px;display:flex;align-items:center;justify-content:center}
+  .ep.cur{width:60px;height:60px;background:var(--accent-bg);border-color:var(--accent);color:var(--accent);
+    font-weight:650;font-size:18px}
+  .ep:active{background:var(--raised)}
+  .ep:disabled{opacity:.3}
+
+  .openlist{margin:16px 20px 14px;background:transparent;border:1px solid var(--outline);
+    color:var(--muted);font-size:13px;padding:12px;border-radius:11px;flex:0 0 auto}
+  .openlist:active{background:var(--surface)}
+  /* 底部说明吃掉剩余高度，避免大屏手机上留下一块光秃秃的空白 */
+  .panelnote{margin-top:auto;padding:18px 20px 16px;text-align:center;
+    font-size:10.5px;color:var(--dim);line-height:1.6}
+
+  /* 选集抽屉 */
+  .drawer{position:fixed;inset:0;z-index:50;background:rgba(8,10,14,.72);display:none}
+  .drawer.on{display:flex;flex-direction:column;justify-content:flex-end}
+  .sheet{background:var(--bg);border-top-left-radius:18px;border-top-right-radius:18px;
+    max-height:82vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
+  .sheet header{display:flex;align-items:center;padding:16px 20px 10px}
+  .sheet h2{margin:0;font-size:16px;font-weight:650}
+  .sheet .x{margin-left:auto;background:transparent;border:0;color:var(--muted);font-size:20px;padding:2px 8px}
+  .groups{display:flex;gap:8px;padding:0 20px 12px;overflow-x:auto;flex:0 0 auto;scrollbar-width:none}
+  .groups::-webkit-scrollbar{display:none}
+  .groups button{flex:0 0 auto;background:var(--surface);border:1px solid var(--outline);
+    color:var(--muted);font-size:12.5px;padding:7px 14px;border-radius:9px}
+  .groups button.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;padding:0 20px 24px;
+    overflow-y:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain}
+  .grid button{aspect-ratio:1;background:var(--surface);border:1px solid var(--outline);
+    color:var(--text);font-size:14px;border-radius:10px;display:flex;align-items:center;justify-content:center}
+  .grid button.cur{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:650}
+  .grid button:disabled{opacity:.35}
+
+  /* 浏览模式 */
+  .modebar{display:flex;justify-content:center;padding:4px 20px 0;flex:0 0 auto}
+  .seg{display:flex;background:var(--surface);border:1px solid var(--outline);border-radius:11px;padding:3px}
+  .seg button{background:transparent;border:0;color:var(--muted);font-size:12.5px;padding:7px 18px;border-radius:8px}
+  .seg button.on{background:var(--raised);color:var(--text);font-weight:600}
+  .seg button.off{color:#3C4653}
+  .modehint{font-size:11px;color:var(--muted);text-align:center;padding:8px 20px 0;min-height:22px}
+  .modehint.warn{color:var(--warn)}
+
+  .padwrap{padding:14px 20px 0;display:flex;flex-direction:column;align-items:center;gap:14px;flex:0 0 auto}
+  .pad{width:212px;height:212px;border-radius:50%;border:1px solid #26303C;
+    background:radial-gradient(circle at 50% 42%,#1C2431 0%,#151B24 62%,#11161D 100%);
+    display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);place-items:center}
+  .pad button{background:transparent;border:0;color:#98A6B8;display:flex;align-items:center;justify-content:center;
+    width:52px;height:52px;border-radius:50%}
+  .pad button:active{background:rgba(255,137,100,.2);color:var(--accent)}
+  .pad svg{width:22px;height:22px}
+  .pad .ok{background:#232B36;color:#C9D2DE;font-size:13px;font-weight:600;width:58px;height:58px}
+  .pad .ok:active{background:var(--accent-bg);color:var(--accent)}
+  .keys{display:flex;gap:12px}
+  .keys button{background:var(--surface);border:1px solid var(--outline);color:#C0C9D5;
+    font-size:13px;padding:10px 26px;border-radius:11px}
+  .keys button:active{background:var(--raised)}
+  /* 电视没在播放时选集无处可选，置灰而不是隐藏：位置固定，手指不用重新找 */
+  .keys button.off{color:#49525F;border-color:#232830;background:transparent}
+  .keyhint{font-size:10.5px;color:var(--dim);letter-spacing:.03em}
+
+  .resume{flex:1;min-height:0;overflow-y:auto;padding:22px 20px 20px}
+  .resume h2{font-size:13px;color:var(--muted);font-weight:600;margin:0 0 12px}
+  .cards{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+  .cards::-webkit-scrollbar{display:none}
+  .card{flex:0 0 116px;background:transparent;border:0;padding:0;text-align:left;color:var(--text)}
+  .card .cover{height:150px;border-radius:10px;background:linear-gradient(160deg,#222A36,#171C24);
+    border:1px solid var(--outline);display:flex;align-items:center;justify-content:center;
+    color:#3E4855;font-size:11px;overflow:hidden;position:relative}
+  .card .cover img{width:100%;height:100%;object-fit:cover;display:block}
+  /* 云端记录角标：贴在海报左上角，来源一目了然（电视同步过来的云端进度） */
+  .card .ctag{position:absolute;top:6px;left:6px;background:rgba(14,17,22,.78);color:var(--accent);
+    border:1px solid var(--accent);border-radius:6px;font-size:10px;line-height:1;padding:3px 5px;font-weight:600}
+  .card .ct{font-size:12.5px;margin-top:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card .cc{font-size:11px;color:var(--dim);margin-top:2px}
+  .empty{font-size:12px;color:var(--dim);padding:8px 0}
+  /* 继续观看标题行：右侧「更多」打开全量记录弹层 */
+  .rhead{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 12px}
+  .rhead h2{margin:0}
+  .rmore{background:transparent;border:0;color:var(--accent);font-size:12.5px;padding:2px 4px;font-weight:600}
+  .rmore:active{color:var(--text)}
+  /* 全量记录弹层：固定两列大卡片 + 滑到底部自动续渲染下一批 */
+  .allgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;overflow-y:auto;
+    padding:4px 20px 24px;flex:1;min-height:0}
+  .allgrid .card{flex:none;width:auto}
+  .allgrid .cover{height:auto;aspect-ratio:3/4}
+  /* 标题固定两行：不足两行的也占满两行高度，上下卡片标题起始位置对齐 */
+  .allgrid .ct{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    white-space:normal;line-height:18px;height:36px;margin-top:8px}
+
+  /* 覆盖层 */
+  .banner{background:#3A2E14;color:var(--warn);font-size:12.5px;line-height:1.5;
+    padding:10px 18px;display:none;align-items:center;gap:8px;flex:0 0 auto}
+  .banner.on{display:flex}
+  /* 置灰但仍可辨认：完全看不清等于「坏了」，用户需要知道原来在播什么 */
+  .frozen .now,.frozen .prog,.frozen .ctrl,.frozen .params,.frozen .searchwrap,.frozen .quick,.frozen .openlist{
+    opacity:.45;filter:saturate(.5);pointer-events:none}
+
+  .full{position:fixed;inset:0;z-index:60;background:var(--bg);display:none;flex-direction:column;
+    align-items:center;justify-content:center;text-align:center;padding:32px}
+  .full.on{display:flex}
+  .full .icon{width:52px;height:52px;border-radius:50%;background:var(--raised);
+    display:flex;align-items:center;justify-content:center;margin-bottom:18px;color:var(--muted)}
+  .full h2{font-size:17px;margin:0 0 10px;font-weight:650}
+  .full p{font-size:13px;color:var(--muted);line-height:1.7;margin:0 0 6px;max-width:300px}
+  .full p b{color:var(--text);font-weight:600}
+  .full .addr{margin:14px 0 22px;font-size:11.5px;color:var(--dim);
+    background:var(--surface);border:1px solid var(--outline);border-radius:8px;padding:8px 14px;letter-spacing:.02em}
+  .full .addr b{color:#93A0B2;font-weight:500}
+  .full .actions{display:flex;gap:10px;margin-top:8px}
+  .full button.primary{background:var(--accent);border:0;color:#1B0D07;font-size:14px;font-weight:600;
+    padding:12px 26px;border-radius:11px}
+  .full button.ghost{background:transparent;border:1px solid var(--outline);color:var(--muted);
+    font-size:14px;padding:12px 22px;border-radius:11px}
+  .full .foot{position:absolute;bottom:34px;font-size:11px;color:var(--dim)}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="dot" id="dot"></span>
+  <span class="ip" id="ip">正在连接…</span>
+  <span class="spacer"></span>
+  <button class="more" id="more">···</button>
+</div>
+<div class="banner" id="banner">电视已暂停。请在电视上重新打开红果TV，回来后会接着遥控。</div>
+<div class="menu" id="menu">
+  <button id="m-exit">返回上一级（退回详情或收起菜单）</button>
+  <button id="m-detach">断开遥控</button>
+  <div class="addr" id="m-addr"></div>
+</div>
+
+<!-- 形态切换：两个形态都要能点到，否则播放中就无法切到浏览、也就没有方向键可用 -->
+<div class="modebar">
+  <div class="seg">
+    <button id="seg-remote" class="off">遥控</button>
+    <button id="seg-browse" class="on">浏览</button>
+  </div>
+</div>
+
+<!-- 遥控面板 -->
+<section class="view" id="v-panel">
+  <div class="now">
+    <h1 class="title" id="title">—</h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div class="prog">
+    <div class="track" id="track"><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
+    <div class="times"><span id="cur">00:00</span><span id="dur">00:00</span></div>
+  </div>
+  <div class="ctrl">
+    <button id="b-prev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 20 9 12l10-8v16Z"/><path d="M5 19V5"/></svg><span class="num">上一集</span></button>
+    <button id="b-back10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg><span class="num">10 秒</span></button>
+    <button class="main" id="b-play"><svg id="playicon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+    <button id="b-fwd10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg><span class="num">10 秒</span></button>
+    <button id="b-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4Z"/><path d="M19 5v14"/></svg><span class="num">下一集</span></button>
+  </div>
+  <div class="params">
+    <button class="param" id="p-speed"><b>1.0×</b><small>倍速</small></button>
+    <button class="param" id="p-mute"><b>有声</b><small>音量</small></button>
+    <button class="param" id="p-dmk"><b>开</b><small>弹幕</small></button>
+  </div>
+  <div class="searchwrap">
+    <div class="searchbox">
+      <input id="q" placeholder="说出或输入剧名" maxlength="80" autocomplete="off" enterkeyhint="search">
+      <button id="go">搜索</button>
+    </div>
+    <div class="searchhint">点输入框后，用键盘上的麦克风说出剧名，识别结果会发到电视。</div>
+  </div>
+  <div class="quick" id="quick"></div>
+  <button class="openlist" id="openlist">选集 · 加载中</button>
+  <div class="panelnote">遥控在电视打开红果TV 期间一直有效 · 手机锁屏后会自动重连</div>
+</section>
+
+  <!-- 浏览模式 -->
+  <section class="view" id="v-browse">
+    <div class="modehint" id="bhint"></div>
+    <div class="padwrap">
+      <div class="pad">
+        <span></span>
+        <button data-key="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 6-6 6 6"/></svg></button>
+        <span></span>
+        <button data-key="left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg></button>
+        <button class="ok" data-key="center">确认</button>
+        <button data-key="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"/></svg></button>
+        <span></span>
+        <button data-key="down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 10 6 6 6-6"/></svg></button>
+        <span></span>
+      </div>
+      <div class="keys"><button id="k-back">返回</button><button id="k-list">选集</button><button id="k-menu">菜单</button></div>
+      <div class="keyhint">「选集」「菜单」播放时可使用 · 长按菜单呼出快捷面板</div>
+    </div>
+    <!-- 浏览形态同样要能搜：电视正在播时切过来找下一部，不用先切回遥控面板 -->
+    <div class="searchwrap">
+      <div class="searchbox">
+        <input id="qb" placeholder="说出或输入剧名" maxlength="80" autocomplete="off" enterkeyhint="search">
+        <button id="gob">搜索</button>
+      </div>
+      <div class="searchhint">点输入框后，用键盘上的麦克风说出剧名，识别结果会发到电视。</div>
+    </div>
+    <div class="resume">
+      <div class="rhead">
+        <h2 id="rtitle">继续观看</h2>
+        <button id="rmore" class="rmore" type="button">更多 ›</button>
+      </div>
+      <div class="cards" id="rlist"><span class="empty">正在连接电视…</span></div>
+    </div>
+  </section>
+
+<div class="drawer" id="rdrawer">
+  <div class="sheet">
+    <header><h2>全部观看记录</h2><button class="x" id="rdrawer-rx">✕</button></header>
+    <div class="allgrid" id="rall"></div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <div class="sheet">
+    <header><h2>选集</h2><button class="x" id="drawer-x">✕</button></header>
+    <div class="groups" id="groups"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+</div>
+
+<div class="full" id="f-lost">
+  <div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.8a15 15 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M12 20h.01"/></svg></div>
+  <h2>无法连接电视</h2>
+  <p>请确认手机与电视连在<b>同一个 WiFi</b>，且电视上的红果TV 正在打开。</p>
+  <p>访客网络或路由器的「AP 隔离」会让两台设备互相看不见。</p>
+  <p>如果电视上的手机遥控窗口已经关掉，回到电视上重新打开并扫码即可。</p>
+  <div class="addr">电视地址 <b id="lost-addr"></b></div>
+  <div class="actions"><button class="primary" id="lost-retry">重试</button></div>
+  <div class="foot" id="lost-count"></div>
+</div>
+
+<div class="full" id="f-evicted">
+  <div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg></div>
+  <h2>控制权已转移到其他设备</h2>
+  <p>另一台手机接管了这台电视的遥控。<br>为避免互相干扰，本机已停止自动重连。</p>
+  <div class="actions"><button class="primary" id="evicted-back">重新连接</button></div>
+</div>
+
+<div class="full" id="f-detached">
+  <div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7a5 5 0 0 1 0-10h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M4 4l16 16"/></svg></div>
+  <h2>已断开遥控</h2>
+  <p>电视端的遥控会话仍然保留，随时可以重新连回来。</p>
+  <div class="actions"><button class="primary" id="detached-back">重新连接</button></div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var token = location.pathname.split("/").filter(Boolean)[0] || "";
+  // 每次加载生成一个会话标识。被顶替的旧页面如果还在发命令，服务端靠它对上号直接丢弃，
+  // 否则旧页面的大 seq 会把新页面的水位线抬高，新手机之后每条命令都被判成过期。
+  var sid = (Math.random().toString(36) + Math.random().toString(36)).replace(/[^a-z0-9]/g, "").slice(0, 16);
+  var seq = 0, snap = null, es = null, fails = 0, lost = false;
+  var evicted = false, detached = false;
+  var userMode = null;          // null=跟随电视，'browse'=用户主动留在浏览
+  var expectPlay = false;       // 用户点了继续观看，下一次开播必须跟过去
+  var dragging = false, dragRatio = 0, pendingSeek = null;
+  var SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+  var lastEpisodes = null, activeGroup = 0;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var views = { panel: $("v-panel"), browse: $("v-browse") };
+
+  function fmt(ms){
+    ms = Math.max(0, Math.round(ms / 1000));
+    var m = Math.floor(ms / 60), s = ms % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function send(obj){
+    obj.seq = ++seq;
+    obj.sid = sid;
+    return fetch("/" + token + "/cmd", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(obj)
+    }).catch(function(){});
+  }
+
+  // ------------------------------------------------------------ 连接
+
+  function connect(){
+    if(es) es.close();
+    es = new EventSource("/" + token + "/events?sid=" + sid);
+    es.addEventListener("snap", function(e){
+      fails = 0;
+      if(lost){ lost = false; $("f-lost").classList.remove("on"); }
+      setConn(true);
+      try { applySnapshot(JSON.parse(e.data)); } catch(_) {}
+    });
+    es.addEventListener("evicted", function(){
+      evicted = true;
+      es.close();
+      $("f-evicted").classList.add("on");
+      setConn(false);
+    });
+    es.onopen = function(){ fails = 0; setConn(true); };
+    es.onerror = function(){
+      if(evicted || detached) return;
+      setConn(false);
+      fails++;
+      if(fails >= 3 && !lost){
+        lost = true;
+        es.close();
+        $("lost-addr").textContent = location.host;
+        $("lost-count").textContent = "已重试 " + fails + " 次";
+        $("f-lost").classList.add("on");
+      }
+    };
+  }
+
+  function setConn(on){
+    $("dot").classList.toggle("off", !on);
+    $("ip").textContent = on ? location.host : "连接中断，正在重连…";
+    $("m-addr").textContent = "电视地址 " + location.host;
+  }
+
+  // ------------------------------------------------------------ 快照
+
+  function applySnapshot(s){
+    var prev = snap;
+    snap = s;
+    // 换剧或换播放器后旧的集列表就作废了，否则选集抽屉会显示上一部片
+    if(!prev || prev.title !== s.title || prev.source !== s.source) lastEpisodes = null;
+    if(expectPlay && s.source !== "NONE"){
+      expectPlay = false;
+      userMode = null;
+    }
+    renderPanel();
+    renderMode();
+  }
+
+  function renderMode(){
+    var controllable = !!snap && snap.source !== "NONE";
+    var browse = !controllable || userMode === "browse";
+    views.panel.classList.toggle("on", !browse);
+    views.browse.classList.toggle("on", browse);
+    // 只在形态真的切换时收抽屉。播放中位置变化每 400ms 推一帧快照，
+    // 无条件关会让选集抽屉刚打开就被下一帧关掉，看起来像「点了没反应」。
+    if(showingBrowse !== null && showingBrowse !== browse) closeDrawer();
+    showingBrowse = browse;
+    $("k-list").classList.toggle("off", !controllable);
+    $("k-menu").classList.toggle("off", !controllable);
+
+    // 还没收到第一帧快照：顶部横幅兼作「正在连接」，同时把控制区置灰
+    var banner = $("banner");
+    if(!snap){
+      banner.textContent = "正在连接电视…";
+      banner.classList.add("on");
+      document.body.classList.add("frozen");
+    } else {
+      banner.textContent = "电视已暂停。请在电视上重新打开红果TV，回来后会接着遥控。";
+      banner.classList.toggle("on", !snap.tv.foreground);
+      document.body.classList.toggle("frozen", !snap.tv.foreground);
+    }
+
+    var segRemote = $("seg-remote");
+    segRemote.classList.toggle("on", !browse);
+    // 电视没有播放器时「遥控」无处可去；除此之外两个分段都可点
+    segRemote.classList.toggle("off", browse && !controllable);
+    $("seg-browse").classList.toggle("on", browse);
+    $("bhint").classList.remove("warn");
+    $("bhint").textContent = !controllable
+      ? (snap ? "电视当前不在播放，可用方向键浏览" : "正在连接电视…")
+      : (browse ? "正在浏览电视画面，点「遥控」切回播放控制" : "电视正在播放，可随时切到浏览");
+    // 片源是独立模块：电视停在片源页时，「继续观看」要换成片源的观看记录。
+    // 电视侧的 /resume 接口按 tab 自动切换内容，这里跟踪上下文，变了就重拉。
+    var ctx = resumeContext();
+    $("rtitle").textContent = ctx === "third" ? "片源 · 继续观看" : "继续观看";
+    if(browse && (!resumeLoaded || resumeCtx !== ctx)){ resumeLoaded = true; resumeCtx = ctx; refreshResume(); }
+    if(!browse) resumeLoaded = false;
+    previousMode = browse ? "browse" : "panel";
+  }
+  var previousMode = null;
+  // 上一次渲染时的形态。用来区分「形态切换」和「又收到一帧快照」——抽屉只在切换时收。
+  var showingBrowse = null;
+  // 「继续观看」只在进入浏览形态时拉一次。不能用 previousMode 判断：
+  // 首帧快照到达之前 renderMode 已经跑过一次，形态其实没变，列表就永远停在「正在连接电视…」。
+  var resumeLoaded = false;
+  var resumeCtx = null;
+  function resumeContext(){ return !!snap && snap.screen === "third" ? "third" : "main"; }
+
+  function renderPanel(){
+    if(!snap) return;
+    var s = snap;
+    $("title").textContent = s.title || "未在播放";
+    // 当前线路以电视为准；activeGroup 只是选集抽屉里正在浏览的标签
+    var active = s.group || 0;
+    var groupName = (s.groups && s.groups[active]) ? s.groups[active].name : "正片";
+    var total = (s.groups && s.groups[active]) ? s.groups[active].count : 0;
+    $("meta").innerHTML = "";
+    $("meta").classList.toggle("warn", !!s.error);
+    if(s.error){
+      // 播放出错时集数信息没有意义，直接告诉用户电视上出了什么问题
+      $("meta").textContent = s.error;
+    } else if(s.source !== "NONE"){
+      $("meta").appendChild(document.createTextNode("第 " + (s.episode + 1) + " 集  "));
+      var tag = document.createElement("b");
+      tag.textContent = groupName;
+      $("meta").appendChild(tag);
+      if(s.durationMs > 0){
+        $("meta").appendChild(document.createTextNode("  剩余 " + fmt(s.durationMs - s.positionMs)));
+      }
+    } else {
+      $("meta").textContent = s.error || "用下面的方向键在电视上浏览";
+    }
+
+    var dur = s.durationMs || 0;
+    var pos = pendingSeek != null ? pendingSeek : s.positionMs;
+    var ratio = dur > 0 ? Math.min(1, pos / dur) : 0;
+    $("fill").style.width = (ratio * 100) + "%";
+    $("knob").style.left = (ratio * 100) + "%";
+    $("cur").textContent = fmt(pos);
+    $("dur").textContent = fmt(dur);
+
+    var playing = s.playing && !s.buffering;
+    $("playicon").innerHTML = playing
+      ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>'
+      : '<path d="M8 5v14l11-7z"/>';
+
+    $("p-speed").querySelector("b").textContent = s.speed.toFixed(2).replace(/0$/,"").replace(/\.$/,".0") + "×";
+    $("p-speed").classList.toggle("on", Math.abs(s.speed - 1) > 0.01);
+    $("p-mute").querySelector("b").textContent = s.muted ? "静音" : "有声";
+    $("p-mute").classList.toggle("on", !!s.muted);
+    // 三方片源没有弹幕：显示成「不支持」并禁用，比永远显示「关」而点了没反应诚实
+    var dmkOk = !s.caps || s.caps.danmaku !== false;
+    $("p-dmk").disabled = !dmkOk;
+    $("p-dmk").querySelector("b").textContent = dmkOk ? (s.danmaku ? "开" : "关") : "无";
+    $("p-dmk").classList.toggle("on", dmkOk && !s.danmaku);
+
+    $("openlist").textContent = "选集 · 共 " + total + " 集";
+    renderQuick(total);
+  }
+
+  function renderQuick(total){
+    var box = $("quick");
+    box.innerHTML = "";
+    if(!snap || snap.source === "NONE" || total <= 0) return;
+    var cur = snap.episode, group = snap.group || 0;
+    [cur - 1, cur, cur + 1].forEach(function(index){
+      if(index < 0 || index >= total) return;
+      var b = document.createElement("button");
+      b.className = "ep" + (index === cur ? " cur" : "");
+      b.textContent = index + 1;
+      b.onclick = function(){ if(index !== cur) send({ cmd: "episode", group: group, index: index }); };
+      box.appendChild(b);
+    });
+  }
+
+  // ------------------------------------------------------------ 面板交互
+
+  $("b-play").onclick = function(){
+    if(!snap) return;
+    send({ cmd: "play", on: !snap.playing });
+  };
+  $("b-back10").onclick = function(){ send({ cmd: "step", by: -10000 }); };
+  $("b-fwd10").onclick = function(){ send({ cmd: "step", by: 10000 }); };
+  $("b-prev").onclick = function(){
+    if(!snap || snap.episode <= 0) return;
+    send({ cmd: "episode", group: snap.group || 0, index: snap.episode - 1 });
+  };
+  $("b-next").onclick = function(){
+    var group = snap && snap.groups[snap.group || 0] ? snap.groups[snap.group || 0] : null;
+    if(!snap || !group || snap.episode >= group.count - 1) return;
+    send({ cmd: "episode", group: snap.group || 0, index: snap.episode + 1 });
+  };
+
+  $("p-speed").onclick = function(){
+    if(!snap) return;
+    var index = SPEEDS.indexOf(snap.speed);
+    if(index < 0) index = SPEEDS.indexOf(1);
+    send({ cmd: "speed", value: SPEEDS[(index + 1) % SPEEDS.length] });
+  };
+  $("p-mute").onclick = function(){ if(snap) send({ cmd: "muted", on: !snap.muted }); };
+  $("p-dmk").onclick = function(){ if(snap && !$("p-dmk").disabled) send({ cmd: "danmaku", on: !snap.danmaku }); };
+
+  // 拖动期间不套服务端位置，否则电视重播报的旧位置会把手上的进度弹回去
+  var track = $("track");
+  function ratioAt(e){
+    var rect = track.getBoundingClientRect();
+    var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return Math.min(1, Math.max(0, x / rect.width));
+  }
+  function beginDrag(e){ if(!snap || snap.durationMs <= 0) return; dragging = true; dragRatio = ratioAt(e); drawDrag(); }
+  function moveDrag(e){ if(!dragging) return; dragRatio = ratioAt(e); drawDrag(); e.preventDefault(); }
+  function drawDrag(){
+    $("fill").style.width = (dragRatio * 100) + "%";
+    $("knob").style.left = (dragRatio * 100) + "%";
+    $("cur").textContent = fmt(dragRatio * snap.durationMs);
+  }
+  function endDrag(){
+    if(!dragging || !snap) return;
+    dragging = false;
+    pendingSeek = Math.round(dragRatio * snap.durationMs);
+    send({ cmd: "seek", to: pendingSeek });
+    setTimeout(function(){ pendingSeek = null; }, 1200);
+  }
+  track.addEventListener("touchstart", beginDrag, { passive: true });
+  track.addEventListener("touchmove", moveDrag, { passive: false });
+  track.addEventListener("touchend", endDrag);
+  track.addEventListener("mousedown", function(e){ beginDrag(e); });
+  window.addEventListener("mousemove", moveDrag);
+  window.addEventListener("mouseup", endDrag);
+
+  // 搜索：一次输入法语音 → 纯文本 → 发到电视。遥控面板与浏览形态各有一个输入框，共用提交逻辑
+  function submitSearch(value){
+    value = (value || "").trim();
+    if(!value) return;
+    send({ cmd: "search", query: value });
+    ["q","qb"].forEach(function(id){
+      $(id).value = "";
+      $(id).blur();
+    });
+    pendingSeek = null;
+  }
+  $("go").onclick = function(){ submitSearch($("q").value); };
+  $("gob").onclick = function(){ submitSearch($("qb").value); };
+  [["q","go"],["qb","gob"]].forEach(function(pair){
+    $(pair[0]).addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); submitSearch($(pair[0]).value); }
+    });
+  });
+
+  // ------------------------------------------------------------ 浏览模式
+
+  function dpad(key, hold){
+    var command = { cmd: "dpad", key: key };
+    if(hold) command.hold = hold;
+    send(command);
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".pad button"), function(b){
+    var key = b.getAttribute("data-key");
+    // 只发一次。之前长按 700ms 会补发一条 hold 命令，服务端把它当成第二次按键，
+    // 按住下键会直接跳过一格；3× 快进改用下面的 10 秒按钮与拖动，不再假装支持长按。
+    b.addEventListener("touchstart", function(e){
+      e.preventDefault();
+      dpad(key, 0);
+    }, { passive: false });
+    b.addEventListener("click", function(){ if(!("ontouchstart" in window)) dpad(key, 0); });
+  });
+
+  $("k-back").onclick = function(){ send({ cmd: "back" }); };
+  // 菜单双语义，与电视实体遥控器一致：单击走「菜单键行为」设置的动作，长按 500ms 呼出快捷面板。
+  // 触摸端用 touchstart 计时并 preventDefault（阻止浏览器补发 click 造成双发）；
+  // 桌面端没有 touch 事件，click 兜底。电视没在播放时按钮已置灰，不发无效命令。
+  var menuHold = null, menuLongFired = false;
+  function menuShort(){ if(snap && snap.source !== "NONE") send({ cmd: "menu", long: false }); }
+  $("k-menu").addEventListener("touchstart", function(e){
+    e.preventDefault();
+    if(!snap || snap.source === "NONE") return;
+    menuLongFired = false;
+    menuHold = setTimeout(function(){ menuHold = null; menuLongFired = true; send({ cmd: "menu", long: true }); }, 500);
+  }, { passive: false });
+  $("k-menu").addEventListener("touchend", function(){
+    if(menuHold){ clearTimeout(menuHold); menuHold = null; menuShort(); }
+  });
+  $("k-menu").addEventListener("touchcancel", function(){
+    if(menuHold){ clearTimeout(menuHold); menuHold = null; }
+  });
+  $("k-menu").onclick = function(){ if(!("ontouchstart" in window)) menuShort(); };
+
+  // 续播卡片：主列表和「更多」弹层共用。云端记录（id 带 cloud: 前缀）在海报上挂角标
+  function resumeCard(item){
+    var card = document.createElement("button");
+    card.className = "card";
+    var cover = document.createElement("div");
+    cover.className = "cover";
+    // 云端续播记录的 id 带 cloud: 前缀（电视端续播时也靠它分流），这里顺手当来源标记用
+    if(item.id.indexOf("cloud:") === 0){
+      var tag = document.createElement("span");
+      tag.className = "ctag";
+      tag.textContent = "云端";
+      cover.appendChild(tag);
+    }
+    // 封面走电视代取：手机直接加载原始地址会被部分 CDN 的 Referer/UA 校验拦下。
+    if(item.cover){
+      var img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "";
+      // 服务端用 URLDecoder 解，它会把 + 当成空格；encodeURIComponent 又不转义 +，
+      // 所以这里手动补一刀，否则带加号的封面地址会被解坏。
+      img.src = "/" + token + "/cover?u=" + encodeURIComponent(item.cover).replace(/\+/g, "%2B");
+      img.onerror = function(){ img.remove(); if(!cover.textContent) cover.textContent = "封面"; };
+      cover.appendChild(img);
+    } else {
+      cover.textContent = "封面";
+    }
+    var title = document.createElement("div");
+    title.className = "ct";
+    title.textContent = item.title;
+    var cap = document.createElement("div");
+    cap.className = "cc";
+    cap.textContent = item.caption;
+    card.appendChild(cover); card.appendChild(title); card.appendChild(cap);
+    card.onclick = function(){
+      closeRmore();
+      expectPlay = true;
+      send({ cmd: "resume", id: item.id });
+    };
+    return card;
+  }
+
+  function refreshResume(){
+    fetch("/" + token + "/resume").then(function(r){ return r.json(); }).then(function(data){
+      var box = $("rlist");
+      box.innerHTML = "";
+      var items = (data && data.items) || [];
+      if(!items.length){
+        // 电视停在片源页时列表是片源自己的观看记录，提示语也要跟上
+        box.innerHTML = '<span class="empty">' + (resumeContext() === "third" ? "片源里还没有观看记录" : "电视上还没有观看记录") + '</span>';
+        return;
+      }
+      items.forEach(function(item){ box.appendChild(resumeCard(item)); });
+    }).catch(function(){
+      $("rlist").innerHTML = '<span class="empty">读取失败，稍后重试</span>';
+    });
+  }
+
+  // ---- 「更多」全量记录弹层：上滑出现，滑到底部自动续渲染下一批 ----
+  var rallItems = null, rallCtx = null, rallShown = 0;
+  var RALL_BATCH = 24;
+  function openRmore(){
+    $("rdrawer").classList.add("on");
+    var ctx = resumeContext();
+    if(rallItems === null || rallCtx !== ctx){
+      rallCtx = ctx; rallItems = []; rallShown = 0;
+      $("rall").innerHTML = '<span class="empty">正在读取…</span>';
+      fetch("/" + token + "/resume/all").then(function(r){ return r.json(); }).then(function(data){
+        rallItems = (data && data.items) || [];
+        $("rall").innerHTML = "";
+        rallShown = 0;
+        renderRallBatch();
+        if(!rallItems.length) $("rall").innerHTML = '<span class="empty">还没有观看记录</span>';
+      }).catch(function(){
+        $("rall").innerHTML = '<span class="empty">读取失败，稍后重试</span>';
+      });
+    }
+  }
+  function renderRallBatch(){
+    var box = $("rall");
+    var end = Math.min(rallShown + RALL_BATCH, rallItems.length);
+    for(var i = rallShown; i < end; i++) box.appendChild(resumeCard(rallItems[i]));
+    rallShown = end;
+  }
+  function closeRmore(){ $("rdrawer").classList.remove("on"); }
+  $("rmore").onclick = openRmore;
+  $("rdrawer-rx").onclick = closeRmore;
+  $("rdrawer").addEventListener("click", function(e){ if(e.target === $("rdrawer")) closeRmore(); });
+  // 滑到底部前 200px 就开始续渲染，手感上是无缝加载
+  $("rall").addEventListener("scroll", function(){
+    if(rallItems === null || rallShown >= rallItems.length) return;
+    var box = $("rall");
+    if(box.scrollTop + box.clientHeight >= box.scrollHeight - 200) renderRallBatch();
+  });
+  $("seg-remote").onclick = function(){
+    if(!snap || snap.source === "NONE"){
+      $("bhint").textContent = "电视当前没有在播放，没有可控制的播放器";
+      $("bhint").classList.add("warn");
+      return;
+    }
+    userMode = null;
+    renderMode();
+  };
+  $("seg-browse").onclick = function(){
+    // 电视没在播放时本来就是浏览形态，不必记偏好；否则电视一开播就回不到面板
+    if(!snap || snap.source === "NONE") return;
+    userMode = "browse";
+    renderMode();
+  };
+
+  // ------------------------------------------------------------ 选集
+
+  function openDrawer(){
+    // 打开时默认停在电视当前所在线路
+    if(snap) activeGroup = snap.group || 0;
+    $("drawer").classList.add("on");
+    loadEpisodes();
+  }
+  function closeDrawer(){ $("drawer").classList.remove("on"); }
+  $("openlist").onclick = openDrawer;
+  // 浏览形态的按键行也给一个选集入口：那边只有方向键和菜单时，想换集得先切回遥控面板
+  $("k-list").onclick = function(){
+    if(!snap || snap.source === "NONE") return;
+    openDrawer();
+  };
+  $("drawer-x").onclick = closeDrawer;
+  $("drawer").addEventListener("click", function(e){ if(e.target === $("drawer")) closeDrawer(); });
+
+  function loadEpisodes(){
+    if(lastEpisodes){ paintDrawer(); return; }
+    $("grid").innerHTML = '<span class="empty" style="grid-column:1/-1">正在读取剧集…</span>';
+    fetch("/" + token + "/episodes").then(function(r){ return r.json(); }).then(function(data){
+      lastEpisodes = (data && data.groups) || [];
+      if(snap) activeGroup = Math.min(activeGroup, Math.max(0, lastEpisodes.length - 1));
+      paintDrawer();
+    }).catch(function(){
+      $("grid").innerHTML = '<span class="empty" style="grid-column:1/-1">读取失败，请关掉重开</span>';
+    });
+  }
+
+  function paintDrawer(){
+    var groups = lastEpisodes || [];
+    var bar = $("groups");
+    bar.innerHTML = "";
+    bar.style.display = groups.length > 1 ? "flex" : "none";
+    groups.forEach(function(group, index){
+      var b = document.createElement("button");
+      b.textContent = group.name;
+      b.className = index === activeGroup ? "on" : "";
+      b.onclick = function(){ activeGroup = index; paintDrawer(); };
+      bar.appendChild(b);
+    });
+    var grid = $("grid");
+    grid.innerHTML = "";
+    var episodes = (groups[activeGroup] && groups[activeGroup].episodes) || [];
+    if(!episodes.length){ grid.innerHTML = '<span class="empty" style="grid-column:1/-1">没有可选的剧集</span>'; return; }
+    var current = snap ? snap.episode : -1;
+    episodes.forEach(function(item){
+      var b = document.createElement("button");
+      b.textContent = item.index + 1;
+      if(item.index === current && activeGroup === (snap ? snap.group : 0)) b.className = "cur";
+      b.onclick = function(){
+        send({ cmd: "episode", group: activeGroup, index: item.index });
+        closeDrawer();
+      };
+      grid.appendChild(b);
+    });
+  }
+
+  // ------------------------------------------------------------ 菜单与退出
+
+  $("more").onclick = function(e){ e.stopPropagation(); $("menu").classList.toggle("on"); };
+  document.addEventListener("click", function(){ $("menu").classList.remove("on"); });
+  $("m-exit").onclick = function(){
+    send({ cmd: "back" });
+    $("menu").classList.remove("on");
+  };
+  $("m-detach").onclick = function(){
+    detached = true;
+    if(es) es.close();
+    send({ cmd: "detach" });
+    $("menu").classList.remove("on");
+    $("f-detached").classList.add("on");
+  };
+  $("lost-retry").onclick = function(){
+    $("f-lost").classList.remove("on");
+    fails = 0; lost = false;
+    connect();
+  };
+  $("evicted-back").onclick = function(){ location.reload(); };
+  $("detached-back").onclick = function(){ location.reload(); };
+
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "visible" && !detached && !evicted && fails >= 3) $("lost-retry").click();
+  });
+
+  renderMode();
+  connect();
+})();
+</script>
+</body>
+</html>

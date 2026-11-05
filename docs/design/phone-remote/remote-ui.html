@@ -283,6 +283,12 @@
     font-family:inherit;font-size:12.5px;padding:7px 16px;border-radius:8px;cursor:pointer;transition:.14s;
   }
   .seg button.on{background:var(--raised);color:var(--text);font-weight:600}
+  .seg button.off{color:#3C4653;cursor:not-allowed}
+  .modehint{
+    font-size:11px;color:#7A8697;text-align:center;letter-spacing:.02em;
+    margin-top:-4px;min-height:15px;transition:.18s;
+  }
+  .modehint.warn{color:#F0B450}
 
   .padwrap{padding:6px 20px 0;flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:14px}
   .pad{
@@ -405,6 +411,7 @@
   <button data-go="panel" class="on">遥控面板</button>
   <button data-go="episodes">选集抽屉</button>
   <button data-go="browse">浏览模式</button>
+  <button data-go="browse-play">播放中切浏览</button>
   <button data-go="paused">电视已暂停</button>
   <button data-go="lost">连接失败</button>
   <button data-go="evicted">被接管</button>
@@ -530,10 +537,11 @@
 
       <div class="modebar">
         <div class="seg">
-          <button data-go="panel">遥控</button>
+          <button class="off" id="segremote" title="电视未在播放">遥控</button>
           <button class="on">浏览</button>
         </div>
       </div>
+      <div class="modehint" id="modehint"></div>
 
       <div class="padwrap">
         <div class="pad">
@@ -583,7 +591,7 @@
           <div class="ep-no">8 集 · 06:40</div>
         </div>
       </div>
-      <div class="scroll-hint" style="margin-top:14px">电视当前在首页，可用方向键浏览</div>
+      <div class="scroll-hint" id="browsefoot" style="margin-top:14px">电视当前在首页，可用方向键浏览</div>
     </section>
 
     <!-- ============ 电视已暂停 ============ -->
@@ -698,15 +706,47 @@
     evicted: document.getElementById('v-evicted')
   };
 
+  var segRemote = document.getElementById('segremote');
+  var modeHint = document.getElementById('modehint');
+  var browseFoot = document.getElementById('browsefoot');
+
+  // playing = 电视正在播放。只有这时「遥控」才是可达的
+  function setRemoteAvailable(playing) {
+    segRemote.classList.toggle('off', !playing);
+    segRemote.title = playing ? '回到遥控面板' : '电视未在播放';
+    modeHint.classList.remove('warn');
+    modeHint.textContent = playing ? '电视正在播放，可随时切回遥控面板' : '';
+    browseFoot.textContent = playing
+      ? '继续播放后会自动切回遥控面板'
+      : '电视当前在首页，可用方向键浏览';
+  }
+
   function go(name) {
+    var playing = name === 'browse-play';
+    var view = playing ? 'browse' : name;
     Object.keys(views).forEach(function (k) {
-      views[k].classList.toggle('on', k === name);
+      views[k].classList.toggle('on', k === view);
     });
     document.querySelectorAll('.spec-bar button').forEach(function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === name);
     });
+    if (view === 'browse') setRemoteAvailable(playing);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  segRemote.addEventListener('click', function () {
+    if (segRemote.classList.contains('off')) {
+      modeHint.textContent = '电视当前没有在播放，没有可控制的播放器';
+      modeHint.classList.add('warn');
+      clearTimeout(segRemote._t);
+      segRemote._t = setTimeout(function () {
+        modeHint.classList.remove('warn');
+        modeHint.textContent = '';
+      }, 2600);
+      return;
+    }
+    go('panel');
+  });
 
   document.querySelectorAll('[data-go]').forEach(function (el) {
     el.addEventListener('click', function () { go(el.getAttribute('data-go')); });
@@ -822,9 +862,9 @@
   });
   document.addEventListener('click', function () { moreMenu.classList.remove('on'); });
 
-  // 支持 #episodes / #browse 等直达链接
+  // 支持 #episodes / #browse / #browse-play 等直达链接
   var initial = location.hash.replace('#', '');
-  if (initial && views[initial]) go(initial);
+  if (initial === 'browse-play' || (initial && views[initial])) go(initial);
 })();
 </script>
 </body>

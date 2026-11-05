@@ -37,9 +37,15 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.hongguotv.core.EpisodeEntry
+import com.hongguotv.core.EpisodeGroup
+import com.hongguotv.core.EpisodeGroupDetail
 import com.hongguotv.core.PhoneField
 import com.hongguotv.core.PhoneForm
+import com.hongguotv.core.PlaybackSnapshot
+import com.hongguotv.core.PlaybackSource
 import com.hongguotv.core.PlaybackSpeed
+import com.hongguotv.core.RemoteCommand
 import com.hongguotv.core.ThirdSourceConfig
 import java.util.concurrent.Executors
 
@@ -257,10 +263,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
-    /** 播放期间保持屏幕常亮，避免电视空闲十几分钟后弹出系统屏保；暂停/结束/退出即释放。 */
+    /**
+     * 播放期间保持屏幕常亮，避免电视空闲十几分钟后弹出系统屏保；暂停/结束/退出即释放。
+     *
+     * 交给 MainActivity 统一决策，不再直接 add/clear 这个 flag：遥控要求「已暂停但手机上
+     * 还有人连着」时依然常亮，两处各自开关会互相覆盖。
+     */
     private fun keepScreenOn(on: Boolean) {
-        if(on) activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        else activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        (activity as? MainActivity)?.onThirdWantsScreenOn(on)
     }
 
     /** 缓冲提示文案：已知带宽时附上实时网速，让用户直观判断是源慢还是本地网络问题。 */
@@ -1236,7 +1246,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
         // 末行按 ↓ 落到「取消」，避免焦点困在网格里
         buttons.forEach { button -> if(button.nextFocusDownId == button.id) button.nextFocusDownId = cancel.id }
-        TvDialog.styleWindow(activity, dialog, widthFraction = 0.68f, maxWidthDp = 900) {
+        TvDialog.styleWindow(activity, dialog, widthDp = 680) {
             val currentIndex = options.indexOfFirst { it.id.ifEmpty { null } == categoryId }.coerceAtLeast(0)
             scroll.post {
                 buttons.getOrNull(currentIndex)?.let { button ->
@@ -2702,14 +2712,127 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         main.removeCallbacks(hideOverlayRun)
     }
 
+    // ================= 遥控适配 =================
+    // 与实物遥控共用同一套播放器，不新开控制面。唯一刻意绕开的是 seek(delta)：
+    // 那里有 120ms 限流，手机拖动的最后一次手势会被吞掉，松手后位置对不上，
+    // 所以绝对定位自己调 seekTo。
+
+    /** 主线程调用。不在播放态就返回 null，遥控据此切到浏览模式。 */
+    fun remoteSnapshot(): PlaybackSnapshot? {
+        if(mode != Mode.PLAY) return null
+        val data = detail ?: return null
+        val instance = player ?: return null
+        val duration = instance.duration.takeIf { it > 0 } ?: 0L
+        return PlaybackSnapshot(
+            source = PlaybackSource.THIRD,
+            title = data.video.name,
+            groups = data.groups.map { EpisodeGroup(it.first, it.second.size) },
+            group = playGroup,
+            episode = playEpisode,
+            positionMs = instance.currentPosition.coerceAtLeast(0),
+            durationMs = duration,
+            playing = instance.isPlaying,
+            buffering = instance.playbackState == Player.STATE_BUFFERING,
+            speed = instance.playbackParameters.speed,
+            muted = instance.volume <= 0f,
+            danmaku = false,
+            danmakuAvailable = false,
+            error = playErrorText?.takeIf { it.visibility == View.VISIBLE }?.text?.toString(),
+            screen = "third"
+        )
+    }
+
+    /** 主线程调用。返回 false 表示当前不接受这条命令（遥控侧据此保留意图）。 */
+    fun remoteApply(cmd: RemoteCommand): Boolean {
+        if(mode != Mode.PLAY) return false
+        val instance = player ?: return false
+        return when(cmd) {
+            is RemoteCommand.Play -> {
+                if(cmd.on) instance.play() else instance.pause()
+                remoteKeepAlive()
+                true
+            }
+            is RemoteCommand.Seek -> {
+                val max = (instance.duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
+                instance.seekTo(cmd.toMs.coerceIn(0L, max))
+                remoteKeepAlive()
+                true
+            }
+            is RemoteCommand.Step -> { seek(cmd.byMs); true }
+            is RemoteCommand.Episode -> {
+                // 先查边界再发，否则跳集会弹「已是第一集」打断电视端观看
+                val count = detail?.groups?.getOrNull(cmd.group)?.second?.size ?: return false
+                if(cmd.index !in 0 until count) return false
+                playEpisode(cmd.group, cmd.index)
+                true
+            }
+            is RemoteCommand.Speed -> { instance.setPlaybackSpeed(cmd.value); true }
+            is RemoteCommand.Muted -> { instance.volume = if(cmd.on) 0f else 1f; true }
+            // 三方片源没有弹幕，这条命令不接
+            is RemoteCommand.Danmaku -> false
+            else -> false
+        }
+    }
+
+    fun remoteEpisodes(): List<EpisodeGroupDetail> =
+        detail?.groups?.map { (name, list) ->
+            EpisodeGroupDetail(name, list.mapIndexed { index, item -> EpisodeEntry(index, item.label) })
+        } ?: emptyList()
+
+    /** 手机遥控搜索：正在播就先收播放器，再按当前源提交搜索。没配源时返回 false，让主站搜索兜底。 */
+    fun remoteSearch(word: String): Boolean {
+        if(currentSource() == null) return false
+        if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
+        submitSearch(word)
+        return true
+    }
+
+    /** 手机遥控续播：按观看记录直接起播，源被删时返回 false（电视端列表不该给出不可续播的卡片）。 */
+    fun remoteResume(entry: ThirdHistoryEntry): Boolean {
+        val source = sources.firstOrNull { it.api == entry.sourceApi } ?: return false
+        if(source.id != currentId) { currentId = source.id; store.setCurrent(source.id); resetBrowseState() }
+        if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
+        // 已看完的记录不再从片尾续播，与历史页点击行为一致
+        if(entry.completed) store.clearProgress(source.id, entry.videoId)
+        val gen = generation
+        executor.execute {
+            val result = client.detail(source.api, entry.videoId)
+            main.post {
+                if(gen != generation) return@post
+                val data = result ?: run {
+                    Toast.makeText(activity, "「${entry.title}」暂时打不开，可在片源里重新搜索", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                val progress = store.progress(source.id, entry.videoId)
+                val group = progress?.group?.takeIf { data.groups.getOrNull(it) != null } ?: ThirdCms.defaultGroupIndex(data.groups)
+                detailReturnMode = Mode.HISTORY
+                detail = data; detailSource = source
+                playEpisode(group, progress?.episode ?: 0, progress?.positionMs ?: 0L)
+            }
+        }
+        return true
+    }
+
+    /** 手机遥控菜单键：对齐实体遥控的播放屏行为，呼出底部操作条。非播放态不接受。 */
+    fun remoteMenu(): Boolean {
+        if(mode != Mode.PLAY || player == null) return false
+        showOverlay()
+        return true
+    }
+
+    private fun remoteKeepAlive() {
+        if(!overlayVisible) return
+        main.removeCallbacks(hideOverlayRun)
+        main.postDelayed(hideOverlayRun, 10_000L)
+    }
+
     private fun togglePlay() {
         val instance = player ?: return
         if(instance.isPlaying) instance.pause() else instance.play()
         if(overlayVisible) { main.removeCallbacks(hideOverlayRun); main.postDelayed(hideOverlayRun, 10_000L) }
     }
 
-    private fun seek(deltaMs: Long) {
-        val instance = player ?: return
+    private fun seek(deltaMs: Long) {        val instance = player ?: return
         // 按住连发会每秒产生多次按键：限制定位频率，避免大量 seek 把播放器拖死
         val now = android.os.SystemClock.uptimeMillis()
         if(now - lastSeekAt < 120L) return

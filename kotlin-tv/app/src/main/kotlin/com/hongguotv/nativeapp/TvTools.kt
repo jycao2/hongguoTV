@@ -50,7 +50,7 @@ class TvTools(private val activity: Activity) {
     private var phone: java.io.Closeable?=null
     private fun dp(value: Int)=(value*activity.resources.displayMetrics.density).toInt()
     /** 当前可用的局域网 IPv4：只认 Wi-Fi / 有线，手机必须和电视在同一网段才能扫码。 */
-    private fun lanAddress(): String? {
+    fun lanAddress(): String? {
         val connectivity=activity.getSystemService(ConnectivityManager::class.java)
         val network=connectivity.activeNetwork ?: return null
         val capabilities=connectivity.getNetworkCapabilities(network) ?: return null
@@ -74,8 +74,9 @@ class TvTools(private val activity: Activity) {
     fun confirm(title: String,message: String,anchor: View?,action: ()->Unit) {
         open(TvDialog.confirm(activity,title,message,action),anchor)
     }
-    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,onExtra: ()->Unit={}) {
-        val next=TvDialog.choose(activity,title,labels,onChoice,extra,onExtra)
+    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,onExtra: ()->Unit={},focusIndex: Int=-1,anchorToButton: Boolean=false) {
+        // anchorToButton：弹窗悬浮到 anchor 按钮左侧（题材这类筛选器）；默认仍屏幕居中
+        val next=TvDialog.choose(activity,title,labels,onChoice,extra,onExtra,focusIndex,anchorView=if(anchorToButton) anchor else null)
         open(next,anchor)
     }
     fun episodePicker(count: Int,current: Int,anchor: View?,select: (Int)->Unit) {
@@ -404,7 +405,7 @@ class TvTools(private val activity: Activity) {
         actions.addView(set,LinearLayout.LayoutParams(-2,-2))
         content.addView(actions)
         next=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,next,0.8f,560)
+        TvDialog.styleWindow(activity,next,widthDp=560)
         open(next,anchor)
         close.post { if(this@TvTools.dialog===next) close.requestFocus() }
         worker.execute {
@@ -425,7 +426,7 @@ class TvTools(private val activity: Activity) {
         content.addView(view,LinearLayout.LayoutParams(-1,dp(380)))
         content.addView(status)
         val next=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,next,0.9f,620)
+        TvDialog.styleWindow(activity,next,widthDp=620)
         val player=ExoPlayer.Builder(activity).build()
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
         player.prepare(); player.playWhenReady=true
@@ -454,7 +455,7 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,"快传文件"))
         val status=label("正在读取…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog,0.6f,560)
+        TvDialog.styleWindow(activity,dialog,widthDp=520)
         open(dialog,anchor,onClose)
         val directories=quickDirectories()
         worker.execute {

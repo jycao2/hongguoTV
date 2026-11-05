@@ -57,7 +57,8 @@ class ArtworkLoader(context: Context) {
     private val cache = object : LruCache<Key, Bitmap>(cacheBytes) {
         override fun sizeOf(key: Key, value: Bitmap) = value.allocationByteCount
     }
-    private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v1"))
+    // v2：代取链路现在落盘的是转码后的 JPEG（v1 缓存里可能存着手机解不了的 HEIC 原始字节），升版本作废旧缓存
+    private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v2"))
     // This client owns its dispatcher and pool; cancelling artwork never cancels video or catalog calls.
     private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
@@ -238,6 +239,61 @@ class ArtworkLoader(context: Context) {
         bindings.values.toList().filter { binding ->
             binding.applied != binding.key && binding.failed != binding.key && binding.view.get()?.getGlobalVisibleRect(visible) == true
         }.sortedBy { it.priority }.take(MAX_PENDING).forEach(::request)
+    }
+
+    /**
+     * 给手机遥控代取封面。手机那头过不了部分 CDN 的 Referer/UA 校验，也不该自己去猜地址，
+     * 所以统一由电视转发：磁盘里已经有就直接回，没有才同步下一次网并回填缓存。
+     * 会阻塞，只在 Hub 的请求线程里调用。
+     */
+    fun bytes(url: String): ByteArray? {
+        disk.get(url)?.let { return it }
+        // 上限 1024 与 Hub 的 /cover 路由一致：云端签名封面地址偏长，卡太紧会被整段拒掉
+        if(url.length > 1024 || !(url.startsWith("http://") || url.startsWith("https://"))) return null
+        return runCatching {
+            http.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                val body = response.body ?: return null
+                if(!response.isSuccessful || body.contentLength() > MAX_BYTES) return null
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                body.byteStream().use { input ->
+                    while(true) {
+                        val count = input.read(buffer)
+                        if(count < 0) break
+                        if(out.size() + count > MAX_BYTES) return null
+                        out.write(buffer, 0, count)
+                    }
+                }
+                val data = toBrowserFormat(out.toByteArray().takeIf { it.isNotEmpty() } ?: return null)
+                disk.put(url, data)
+                data
+            }
+        }.getOrNull()
+    }
+
+    /** 浏览器 <img> 能直出的格式魔数：JPEG / PNG / GIF / WebP。 */
+    private fun browserSafe(b: ByteArray): Boolean = when {
+        b.size >= 3 && b[0]==0xFF.toByte() && b[1]==0xD8.toByte() && b[2]==0xFF.toByte() -> true
+        b.size >= 4 && b[0]==0x89.toByte() && b[1]==0x50.toByte() && b[2]==0x4E.toByte() && b[3]==0x47.toByte() -> true
+        b.size >= 3 && b[0]==0x47.toByte() && b[1]==0x49.toByte() && b[2]==0x46.toByte() -> true
+        b.size >= 12 && b[0]==0x52.toByte() && b[1]==0x49.toByte() && b[2]==0x46.toByte() &&
+            b[8]==0x57.toByte() && b[9]==0x45.toByte() && b[10]==0x42.toByte() && b[11]==0x50.toByte() -> true
+        else -> false
+    }
+
+    /**
+     * 红果云端的封面 CDN 返回 HEIC（`~tplv-noop.heic`），换扩展名要 JPEG 会被签名 403——
+     * 而手机浏览器（Chrome/安卓 WebView）解不了 HEIC，海报必然全挂。安卓本机（API 28+）
+     * 自带 HEIF 解码，电视侧显示一直正常；这里在代取链路上把非浏览器格式转码成 JPEG，
+     * 磁盘缓存里也就直接存 JPEG，后续请求零开销。解码失败就原样返回，不比现在更差。
+     */
+    private fun toBrowserFormat(bytes: ByteArray): ByteArray {
+        if(browserSafe(bytes)) return bytes
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out)
+        bitmap.recycle()
+        return out.toByteArray().takeIf { it.isNotEmpty() } ?: bytes
     }
 
     private fun fetch(job: Job): Bitmap? {

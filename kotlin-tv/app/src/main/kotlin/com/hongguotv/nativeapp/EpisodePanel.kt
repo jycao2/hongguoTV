@@ -38,6 +38,8 @@ class EpisodePanel(
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.setOnDismissListener { closed() }
         render(); dialog.show()
+        // 选集面板是独立 Dialog 窗口（非 AlertDialog），必须显式登记，手机遥控才能操作宫格
+        TvDialog.register(dialog)
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
             setGravity(Gravity.END or Gravity.CENTER_VERTICAL)

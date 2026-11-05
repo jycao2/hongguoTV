@@ -91,17 +91,19 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
 
     private fun showAddDialog(parent: LinearLayout, existing: NasConnection? = null) {
         val editing = existing != null
-        val content = bodyColumn(null, widthLimit = dp(560))
+        // 内容撑满卡片：卡片内边距 28dp 就是全部边距，输入框/按钮与卡片边缘保持一致
+        val content = bodyColumn(null)
         content.addView(label(if (editing) "编辑连接" else "添加连接", 18f, TvStyle.text, true)
             .apply { setPadding(0, 0, 0, dp(8)) })
         content.addView(label("填写 NAS 的 WebDAV 地址与账号，保存后自动扫描目录", 12f, TvStyle.muted)
             .apply { setPadding(0, 0, 0, dp(16)) })
 
-        val nameInput = field("名称（可留空）", existing?.name ?: "", "例如：家里的 NAS")
+        // 「可留空」说明放进输入框的 hint：占着列标签既宽又重复
+        val nameInput = field("名称", existing?.name ?: "", "可留空 · 例如：家里的 NAS")
         val urlInput = field("地址", existing?.url ?: "", "http://192.168.1.20:5005")
-        val pathInput = field("目录（可留空）", existing?.mountPath ?: "", "例如：/video")
-        val userInput = field("账号（可留空）", existing?.user ?: "", "WebDAV 账号")
-        val passInput = field("密码（可留空）", existing?.pass ?: "", "WebDAV 密码").apply {
+        val pathInput = field("目录", existing?.mountPath ?: "", "可留空 · 例如：/video")
+        val userInput = field("账号", existing?.user ?: "", "可留空 · WebDAV 账号")
+        val passInput = field("密码", existing?.pass ?: "", "可留空 · WebDAV 密码").apply {
             (this.valueView as EditText).setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance())
         }
 
@@ -120,8 +122,8 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
             .apply { setPadding(0, dp(8), 0, 0); gravity = Gravity.START })
 
         val dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
-        // 窗口要比内容宽：内容限宽 560dp + 卡片左右各 28dp 内边距
-        TvDialog.styleWindow(activity, dialog, 0.92f, 620)
+        // 窗口 560dp：卡片内宽 504dp，输入框约 380dp（原 438dp），比旧版收窄一截
+        TvDialog.styleWindow(activity, dialog, widthDp = 560)
 
         // 自定义底部按钮
         val actionRow = LinearLayout(activity).apply {
@@ -180,7 +182,70 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         // 按钮放进内容卡片：show 之前 window decor 里拿不到 content 容器，会静默丢失
         actionRow.setPadding(0, dp(10), 0, 0)
         content.addView(actionRow)
-        if (editing) dialog.setTitle("编辑连接")
+        // 标题只保留卡片内那颗：自定义视图弹窗上 setTitle 会显示在卡片外面，造成双标题
+        dialog.show()
+    }
+
+    /** 管理连接：列出全部连接，可进入编辑或删除（删除有二次确认）。 */
+    private var manageDialog: AlertDialog? = null
+    private fun showManageDialog(parent: LinearLayout) {
+        val content = column()
+        content.addView(TvDialog.title(activity, "管理连接"))
+        content.addView(label("选择连接进行编辑，或将其从本机删除。", 12f, TvStyle.muted)
+            .apply { setPadding(0, 0, 0, dp(12)) })
+        val conns = store.connections()
+        val listHost = column()
+        conns.forEach { conn ->
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = TvStyle.shape(activity, TvStyle.surface, TvStyle.outline, 12)
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+            }
+            val info = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+            info.addView(label(conn.name, 13.5f, TvStyle.text, true))
+            info.addView(label(conn.url, 11.5f, TvStyle.muted))
+            row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(button("编辑", false) {
+                manageDialog?.dismiss(); showAddDialog(parent, conn)
+            }.apply { textSize = 12f; minHeight = dp(32); setPadding(dp(12), dp(5), dp(12), dp(5)) })
+            val deleteBtn = button("删除", false) {}.apply {
+                textSize = 12f; minHeight = dp(32); setPadding(dp(12), dp(5), dp(12), dp(5))
+                (layoutParams as? LinearLayout.LayoutParams)?.leftMargin = dp(8)
+            }
+            deleteBtn.setOnClickListener {
+                // 二次确认走全局 TvDialog.confirm：和系统其他弹窗同一套风格
+                tvTools.confirm("删除连接", "确定删除「${conn.name}」？本机保存的地址、账号与扫描缓存会一并清除。", deleteBtn) {
+                    store.remove(conn.id)
+                    if (store.currentId == conn.id) {
+                        store.currentId = conns.firstOrNull { it.id != conn.id }?.id
+                    }
+                    manageDialog?.dismiss()
+                    show(parent)
+                }
+            }
+            row.addView(deleteBtn)
+            listHost.addView(row)
+        }
+        if (conns.isEmpty()) listHost.addView(label("还没有连接。", 13f, TvStyle.muted))
+        // 连接多时列表可滚，标题和说明保持可见
+        val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
+        scroll.addView(listHost, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        TvDialog.capHeight(activity, scroll)
+        content.addView(scroll)
+        content.addView(button("关闭", false) { manageDialog?.dismiss() }.apply {
+            (layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(10)
+        })
+        val dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        manageDialog = dialog
+        TvDialog.styleWindow(activity, dialog, widthDp = 560) {
+            (listHost.getChildAt(0) as? ViewGroup)?.let { row ->
+                for (i in 0 until row.childCount) {
+                    val child = row.getChildAt(i)
+                    if (child.isFocusable) { child.requestFocus(); break }
+                }
+            }
+        }
         dialog.show()
     }
 
@@ -247,7 +312,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
             textSize = 12.5f; minHeight = dp(34); setPadding(dp(14), dp(6), dp(14), dp(6))
             (layoutParams as? LinearLayout.LayoutParams)?.leftMargin = dp(8)
         })
-        chips.addView(button("管理连接", false) { showAddDialog(currentContainer!!, conn) }.apply {
+        chips.addView(button("管理连接", false) { showManageDialog(currentContainer!!) }.apply {
             textSize = 12.5f; minHeight = dp(34); setPadding(dp(14), dp(6), dp(14), dp(6))
         })
         row.addView(chips)
@@ -459,7 +524,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         }
 
         val dialog = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
-        TvDialog.styleWindow(activity, dialog, 0.85f, 660)
+        TvDialog.styleWindow(activity, dialog, widthDp = 660)
         dialog.show()
     }
 
@@ -724,6 +789,9 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         playerView.player = player
         loadEpisode(index)
         dialog.show()
+        // 全屏播放器弹窗不走 styleWindow（自己管窗口样式），但要登记进遥控范围，
+        // 否则手机遥控的确认/方向键对它全部落空
+        TvDialog.register(dialog)
         dialog.window?.let { w ->
             w.setDimAmount(0f); w.decorView.setPadding(0, 0, 0, 0)
             // 清掉 AlertDialog 默认圆角阴影背景：它会露在播放器四周、透出底下详情页的
@@ -801,7 +869,8 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         }
 
     private fun alert(msg: String) {
-        AlertDialog.Builder(activity).setMessage(msg).setPositiveButton("好", null).show()
+        // 不能用原生 AlertDialog：没登记进 TvDialog，手机遥控按不动，观感也和全局不一致
+        TvDialog.info(activity, "提示", msg).show()
     }
 
     private fun dp(v: Int): Int = (v * activity.resources.displayMetrics.density).toInt()

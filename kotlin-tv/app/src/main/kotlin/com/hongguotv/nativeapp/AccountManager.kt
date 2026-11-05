@@ -97,6 +97,9 @@ class AccountManager(private val context: Context, private val library: Library)
     var onAccountChanged: (() -> Unit)? = null
 
     val signedIn get() = credentials != null && profile != null
+
+    /** 云端历史是否已成功拉取过；手机遥控等外部只读方用它判断要不要顺手触发一次 refreshHistory。 */
+    val cloudHistoryLoaded get() = historyLoaded
     val accountLabel: String get() {
         val p = profile
         return when {
@@ -380,7 +383,7 @@ class AccountManager(private val context: Context, private val library: Library)
                 val cancel = TvDialog.capsuleButton(activity, "取消") { dialog.dismiss() }
                 buttons.addView(cancel)
                 panel.addView(buttons)
-                TvDialog.styleWindow(activity, dialog, widthFraction = 0.42f, maxWidthDp = 460) { cancel.requestFocus() }
+                TvDialog.styleWindow(activity, dialog, widthDp = 400) { cancel.requestFocus() }
                 dialog.show()
                 val token = generation
                 val deadline = android.os.SystemClock.elapsedRealtime() + qr.expiresIn.coerceIn(1, 300) * 1000L
