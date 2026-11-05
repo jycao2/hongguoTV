@@ -66,7 +66,7 @@ class PlaybackDeviceSession(
                     ),
                 device.cookies
                     .filterKeys {
-                        it in setOf("install_id", "ttreq", "store-region", "store-region-src")
+                        it in setOf("install_id", "ttreq", "store-region", "store-region-src", "ttwid", "msToken")
                     }
                     .entries
                     .joinToString("; ") { (name, value) -> "$name=$value" },

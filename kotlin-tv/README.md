@@ -10,6 +10,12 @@
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.26.1 修复
+
+- **修复剧集无法播放**：平台要求播放接口携带完整签名，缺签名的请求一律返回空响应；已补齐播放请求签名，恢复正常取流与播放。
+- **修复更新弹窗按钮被挤出屏幕**：更新说明过长时说明区限高并可滚动，「稍后 / 下载新版」按钮始终可见。
+- **更新说明更易读**：去掉说明里的 Markdown 标记，电视上直接显示纯文本。
+
 ## 0.26.0 新增
 
 - **新增本地库**：接入 WebDAV/NAS，扫描目录、缓存剧集，点击即全屏播放；连接支持手机扫码填写，连接信息仅存本机、不随备份导出。本地库入口默认隐藏，需要时可在「设置 → 外观与界面 → 导航模块」中打开。
@@ -339,7 +345,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.25.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.26.1-android8.apk
 ```
 
 ## 工程结构

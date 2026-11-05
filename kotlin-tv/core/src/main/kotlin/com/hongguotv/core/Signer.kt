@@ -109,16 +109,15 @@ internal class Signer(private val clock: () -> Long = System::currentTimeMillis,
         encoded[0] = ((encoded[0] xor encoded[1]) + encoded.drop(1).sum()) and 255
         return encoded.map { it.toByte() }.toByteArray()
     }
-    fun medusa(url: String, body: ByteArray?, ts: Int): String {
+    fun medusa(url: String, body: ByteArray?, ts: Int, deviceId: String = VendorConstants.device.getValue("device_id"), versionName: String = VendorConstants.device.getValue("version_name")): String {
         val bodyMd5 = body?.let { digest("MD5",it) } ?: ByteArray(16)
         val query = url.substringAfter('?').toByteArray(); val querySm3 = sm3(query)
         val queryBodyTs = hashF13(querySm3,bodyMd5,ts)
         val nested = proto(f(1,111,"sint"),f(2,10,"sint"),f(3,694367,"sint"),f(5,586952199,"sint"))
         val messageRand = unsigned(rand()); val envLaunch = (random()*21).toInt()+100; val envPid = (random()*2000).toInt()+10001
-        val version = VendorConstants.device.getValue("version_name")
-        val env = proto(f(1,envLaunch,"sint"),f(2,146331399,"sint"),f(3,146331396,"sint"),f(5,7,"sint"),f(6,"v04.06.04.03-bugfix"),f(7,envPid,"sint"),f(12,deviceProto()),f(13,proto(f(1,clock()/1000,"sint"),f(2,-2,"sint"),f(4,200,"sint"))),f(14,version))
+        val env = proto(f(1,envLaunch,"sint"),f(2,146331399,"sint"),f(3,146331396,"sint"),f(5,7,"sint"),f(6,"v04.06.04.03-bugfix"),f(7,envPid,"sint"),f(12,deviceProto()),f(13,proto(f(1,clock()/1000,"sint"),f(2,-2,"sint"),f(4,200,"sint"))),f(14,versionName))
         val queryHash = sm3(query+bodyMd5+"none".toByteArray())
-        val message = proto(f(1,hex("f7e85ffad7d7dc3bd62ac87057cf6118")),f(2,3,"sint"),f(3,messageRand,"sint"),f(4,"8662"),f(5,VendorConstants.device.getValue("device_id")),f(6,"1588093228"),f(7,version),f(8,"v04.06.04-ml-android"),f(9,67503104,"sint"),f(10,hex("4001000000000000")),f(12,ts,"sint"),f(13,queryBodyTs),f(14,querySm3.copyOf(6)),f(15,nested),f(16,"AXYQOS6n2m60x1fVZHIrH3iol"),f(17,ts,"sint"),f(19,queryHash),f(20,"none"),f(21,312,"sint"),f(23,env),f(24,"""{"cmr":16777216,"cmr2":16777216,"un_h":1879194040,"vpn":0,"kd":0,"fkd":3672518972,"pd":-1872573247,"dyn":"","do":0,"tk":true}"""))
+        val message = proto(f(1,hex("f7e85ffad7d7dc3bd62ac87057cf6118")),f(2,3,"sint"),f(3,messageRand,"sint"),f(4,"8662"),f(5,deviceId),f(6,"1588093228"),f(7,versionName),f(8,"v04.06.04-ml-android"),f(9,67503104,"sint"),f(10,hex("4001000000000000")),f(12,ts,"sint"),f(13,queryBodyTs),f(14,querySm3.copyOf(6)),f(15,nested),f(16,"AXYQOS6n2m60x1fVZHIrH3iol"),f(17,ts,"sint"),f(19,queryHash),f(20,"none"),f(21,312,"sint"),f(23,env),f(24,"""{"cmr":16777216,"cmr2":16777216,"un_h":1879194040,"vpn":0,"kd":0,"fkd":3672518972,"pd":-1872573247,"dyn":"","do":0,"tk":true}"""))
         val r = rand(); val signKey = hex("8ebdfa3806ecc5cee79423e6029ed82540bc2218bb7eaef71cb691f7aa8aa2f5")
         val hash = sm3(signKey+le32(r)+signKey); val d1 = (r shr 16) and 255
         val seed = le32((((d1 shl 11) or (r ushr 24)) xor (d1 shr 5) xor d1).inv())
@@ -164,6 +163,43 @@ internal class Signer(private val clock: () -> Long = System::currentTimeMillis,
             }
         }
         error("无法生成请求签名")
+    }
+    /**
+     * 播放接口签名（2026-11-05 平台变更）。播放接口现在要求完整的六头签名，只带 UA + Cookie 的
+     * 请求一律回 HTTP 200 + 0 字节；比 [sign] 少一个 `ts` 查询参数（播放接口不接受），
+     * 且 medusa 必须绑定查询串里的 device_id / version_name，否则风控回 110001。
+     */
+    fun signPlayback(base: String, values: Map<String,String>, body: ByteArray?, userAgent: String): Request {
+        val now = clock(); val ts = (now / 1000).toInt()
+        var ticket = now
+        for (offset in 0..127) {
+            ticket = now + offset
+            val query = encode(values + mapOf("_rticket" to ticket.toString()))
+            if (branch(query, body, ts) != 0) continue
+            val url = "$base?$query"
+            val random = (random()*65536).toInt()
+            val headers = linkedMapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "application/json; charset=utf-8,application/x-protobuf",
+                "x-ss-req-ticket" to ticket.toString(),
+                "sdk-version" to "2",
+                "x-xs-from-web" to "0",
+                "x-khronos" to ts.toString(),
+                "x-ladon" to be32(ts).base64(),
+                "x-argus" to le32(ts).base64(),
+                "x-gorgon" to gorgon(query,body,ts,random),
+                "x-helios" to helios(ts),
+                "x-medusa" to medusa(url,body,ts,
+                    deviceId = values["device_id"] ?: VendorConstants.device.getValue("device_id"),
+                    versionName = values["version_name"] ?: VendorConstants.device.getValue("version_name")),
+            )
+            if (body != null) {
+                headers["Content-Type"]="application/json; charset=utf-8"
+                headers["x-ss-stub"]=digest("MD5",body).hex().uppercase()
+            }
+            return Request(url,headers,body)
+        }
+        error("无法生成播放签名")
     }
     companion object {
         fun encode(values: Map<String,String>) = values.entries.joinToString("&") { (k,v) -> "${encode(k)}=${encode(v)}" }

@@ -481,13 +481,22 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
     }
+    /** 2026-11-05 起播放接口必须带完整六头签名；查询串里的客户端版本同步到签名实测可用的 7.3.9.32。 */
+    private fun playbackValues(identity: PlaybackDeviceSession.Profile) = identity.values + mapOf(
+        "version_code" to "73932",
+        "manifest_version_code" to "73932",
+        "update_version_code" to "73932",
+        "pv_player" to "73932",
+        "version_name" to "7.3.9.32",
+    )
+    private fun signedBuilder(signed: Signer.Request, identity: PlaybackDeviceSession.Profile): Request.Builder =
+        Request.Builder().url(signed.url).apply {
+            signed.headers.forEach { (key,value) -> header(key,value) }
+            if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie)
+        }
     private fun playerRequest(path: String,payload: ByteArray,identity: PlaybackDeviceSession.Profile): Request {
-        val query=Signer.encode(identity.values+("_rticket" to clock().toString()))
-        return Request.Builder()
-            .url("https://api5-normal-sinfonlineb.fqnovel.com$path?$query")
-            .header("User-Agent",PLAYBACK_UA)
-            .header("Accept","application/json; charset=utf-8,application/x-protobuf")
-            .apply { if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie) }
+        val signed=signer.signPlayback("https://api5-normal-sinfonlineb.fqnovel.com$path",playbackValues(identity),payload,PLAYBACK_UA)
+        return signedBuilder(signed,identity)
             .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
     }
@@ -497,34 +506,40 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  参数取自官方 `GetVideoModelRequest` 的 snake_case 字段，缺任一字段会回 `100103`。
      *  失败一律返回 null，由调用方回退旧接口，不改变旧的空响应与身份轮换语义。 */
     private fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile): JSONObject? {
-        val extra="&video_id=$id&video_id_type=0&device_level=1&need_all_video_definition=1"+
-            "&need_mp4_align=0&use_os_player=0&video_platform=1024&source=0&from_video_id="
-        val query=Signer.encode(identity.values+("_rticket" to clock().toString()))
-        val request=Request.Builder()
-            .url("https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/?$query$extra")
-            .header("User-Agent",PLAYBACK_UA)
-            .header("Accept","application/json; charset=utf-8")
-            .apply { if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie) }
-            .get()
-            .build()
-        val body=try {
-            RequestScope.execute(http.newCall(request)) { response ->
-                if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
-                response.body?.string().orEmpty()
+        val extra=linkedMapOf(
+            "video_id" to id, "video_id_type" to "0", "device_level" to "1",
+            "need_all_video_definition" to "1", "need_mp4_align" to "0",
+            "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
+            "from_video_id" to "",
+        )
+        val hosts=listOf(
+            "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/",
+            "https://reading.snssdk.com/reading/bookapi/video_tab/multi_video_model/v1/",
+        )
+        for(base in hosts) {
+            val signed=signer.signPlayback(base,playbackValues(identity)+extra,null,PLAYBACK_UA)
+            val request=signedBuilder(signed,identity).get().build()
+            val body=try {
+                RequestScope.execute(http.newCall(request)) { response ->
+                    if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
+                    response.body?.string().orEmpty()
+                }
+            } catch (problem: java.io.InterruptedIOException) {
+                throw problem
+            } catch (problem: IOException) {
+                continue
+            } catch (problem: RuntimeException) {
+                continue
             }
-        } catch (problem: IOException) {
-            if(Thread.currentThread().isInterrupted) throw problem
-            return null
-        } catch (problem: RuntimeException) {
-            return null
+            val root=runCatching { JSONObject(body) }.getOrNull() ?: continue
+            if(root.optInt("code",root.optInt("Code",-1))!=0) continue
+            val data=root.optJSONObject("data") ?: continue
+            val rows=data.optJSONObject("video_model_data") ?: data
+            val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: continue
+            val model=modelOf(row.opt("video_model")) ?: continue
+            return model
         }
-        val root=runCatching { JSONObject(body) }.getOrNull() ?: return null
-        if(root.optInt("code",root.optInt("Code",-1))!=0) return null
-        val data=root.optJSONObject("data") ?: return null
-        val rows=data.optJSONObject("video_model_data") ?: data
-        val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: return null
-        val model=modelOf(row.opt("video_model")) ?: return null
-        return model
+        return null
     }
     /** 播放模型：官方现行的 `video_tab` 接口优先，失败再走旧 `/novel/player/` 多路由兜底。
      *  旧接口按「旧路径 → 新路径 → 带场景段」依次尝试，第一个能取到 `video_model` 的用；

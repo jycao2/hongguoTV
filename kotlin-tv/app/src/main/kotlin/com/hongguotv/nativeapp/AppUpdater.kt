@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.View
+import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -42,6 +43,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     private var dialog: AlertDialog? = null
     val showing get() = dialog?.isShowing == true
     private var statusView: TextView? = null
+    private var statusScroll: ScrollView? = null
     private var anchor: View? = null
     private var actionButton: android.widget.Button? = null
     private var status = "当前版本 ${BuildConfig.VERSION_NAME}"
@@ -90,7 +92,25 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         // TLS socket close may send close_notify; it must not run on Android's main thread.
         Thread({ repository.close() }, "hongguotv-update-cleanup").start()
     }
-    private fun updateStatus(text: String) { status = text; statusView?.text = text }
+    /** Release 说明是 Markdown：去掉标题井号与加粗标记，行首 `-` 换成居中点，避免电视上直接显示 `**`。 */
+    private fun notesText(raw: String): String = raw.replace("\r\n", "\n")
+        .replace(Regex("(?m)^#{1,6}\\s*"), "")
+        .replace("**", "")
+        .replace(Regex("(?m)^- "), "· ")
+        .trim()
+    private fun updateStatus(text: String) { status = text; statusView?.text = text; fitStatus() }
+    /** 更新说明可能很长：限制正文高度并允许滚动，避免把「立即安装」按钮挤出屏幕。 */
+    private fun fitStatus() {
+        val scroll = statusScroll ?: return
+        val text = statusView ?: return
+        scroll.post {
+            if (scroll !== statusScroll) return@post
+            val max = (activity.resources.displayMetrics.heightPixels * 0.42f).toInt()
+            val target = if (text.height > max) max else ViewGroup.LayoutParams.WRAP_CONTENT
+            val lp = scroll.layoutParams ?: return@post
+            if (lp.height != target) { lp.height = target; scroll.layoutParams = lp }
+        }
+    }
     private fun renderActions() {
         actionButton?.apply {
             text = when { busy -> "处理中…"; ready -> "立即安装"; available != null -> "下载新版"; else -> "检查更新" }
@@ -109,7 +129,11 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding((24*dp).toInt(), (12*dp).toInt(), (24*dp).toInt(), 0) }
         body.addView(TvDialog.title(activity,"版本与更新 · ${BuildConfig.VERSION_NAME}"))
         statusView = TextView(activity).apply { text = status; textSize = 17f; setTextColor(TvStyle.text) }
-        body.addView(statusView)
+        statusScroll = ScrollView(activity).apply {
+            isFillViewport = false
+            addView(statusView, ViewGroup.LayoutParams(-1, -2))
+        }
+        body.addView(statusScroll)
         if (!updatePending) {
             body.addView(CheckBox(activity).apply {
                 text = "自动检查并下载更新"; isChecked = auto; setTextColor(TvStyle.text)
@@ -139,13 +163,14 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         TvDialog.styleWindow(activity,next)
         dialog = next
         next.setOnDismissListener {
-            if (dialog === next) { dialog = null; statusView = null; actionButton = null }
+            if (dialog === next) { dialog = null; statusView = null; statusScroll = null; actionButton = null }
             if (from?.isAttachedToWindow == true) from.requestFocus()
         }
         next.show()
         later.setOnClickListener { next.dismiss() }
         action.setOnClickListener { when { ready -> install(); available != null -> download(); else -> check(true) } }
         renderActions()
+        fitStatus()
         action.post { if (dialog === next) action.requestFocus() }
     }
     private fun <T> work(action: () -> T, done: (T) -> Unit) {
@@ -173,7 +198,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
                 updateStatus(if (update.versionCode > BuildConfig.VERSION_CODE && update.minSdk > Build.VERSION.SDK_INT) "新版需要 Android API ${update.minSdk}，当前电视继续使用本版" else "已是最新版本 ${BuildConfig.VERSION_NAME}")
                 worker.execute { apk.delete() }
             } else {
-                updateStatus("发现 ${update.versionName} · ${"%.1f".format(update.size/1048576.0)} MB\n${update.notes}")
+                updateStatus("发现 ${update.versionName} · ${"%.1f".format(update.size/1048576.0)} MB\n${notesText(update.notes)}")
                 if (manual || auto) download()
             }
         }
@@ -188,7 +213,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             repository.download(update, apk) { percent -> main.post { if (generation == ticket && active) updateStatus("正在下载 ${update.versionName} · $percent%") } }
             validateApk(update)
         }) {
-            ready = true; updateStatus("${update.versionName} 已下载并校验\n${update.notes}\n\n确认后由系统覆盖安装，保留本机记录。")
+            ready = true; updateStatus("${update.versionName} 已下载并校验\n${notesText(update.notes)}\n\n确认后由系统覆盖安装，保留本机记录。")
             if (idle() && dialog == null && !promptedThisSession) show(activity.currentFocus)
         }
     }
