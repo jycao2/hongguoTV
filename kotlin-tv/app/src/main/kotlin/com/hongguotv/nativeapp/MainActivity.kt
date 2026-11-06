@@ -47,6 +47,10 @@ private const val FOOTER_MORE_HOT=4
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class MainActivity: Activity() {
+    /** 界面整体缩放：包一层调过密度的 Context，dp/sp 等比生效（见 UiScale 注释）。 */
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(UiScale.wrap(base))
+    }
     private val bg by lazy { TvStyle.background }; private val surface by lazy { TvStyle.surface }
     private val accent by lazy { TvStyle.accent }; private val white by lazy { TvStyle.text }; private val muted by lazy { TvStyle.muted }
     private val gold by lazy { TvStyle.gold }
@@ -80,6 +84,12 @@ class MainActivity: Activity() {
      * 但每次 `showCatalog()` 都会重建视图，所以这里只在重建时重新绑定。
      */
     private var remoteEntryView: TextView?=null
+    /**
+     * 顶栏空间吃紧（特大缩放 + 高密度屏，有效宽度可能只剩 700dp 出头）：
+     * 品牌去掉版本号、工具与遥控入口改用短文案，否则「设置」会被挤出屏幕外、
+     * 方向键也走不过去（模拟器 320dpi / 特大档实测）。由 showCatalog 每次重建时赋值。
+     */
+    private var navTight=false
     private val danmakuRepo=DanmakuRepository(repository.http)
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
@@ -148,6 +158,7 @@ class MainActivity: Activity() {
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
     private var playerView: PlayerView?=null
+    private var keyHints: TextView?=null
     private var danmakuView: DanmakuView?=null
     private var danmakuLoader: DanmakuLoader?=null
     private lateinit var favoriteMonitor: FavoriteMonitor
@@ -386,7 +397,8 @@ class MainActivity: Activity() {
     private fun button(label: String,selected: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
         gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); focusStyle(this,selected); setOnClickListener { onClick() }
     }
-    /** 顶栏文字导航：icon + label，选中态粗体 accent 色，焦点态 raised 底+accent 边框，默认态 muted。 */
+    /** 顶栏文字导航：icon + label，选中态粗体 accent 色，焦点态 raised 底+accent 边框，默认态 muted。
+     *  iconRes 传 0 表示只显示文字（极窄宽度下省掉图标的宽度，见 showCatalog 的 bareNav）。 */
     private fun pillNav(iconRes: Int,label: String,selected: Boolean,onClick: ()->Unit,compact: Boolean=false): TextView {
         val padH=if(compact) 10 else 14
         val padV=if(compact) 6 else 8
@@ -395,7 +407,7 @@ class MainActivity: Activity() {
         val ts=if(compact) 14f else 15f
         val view=text(label,ts,white).apply {
             gravity=Gravity.CENTER; isFocusable=true; isClickable=true; includeFontPadding=false
-            setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(drawPad)
+            if(iconRes != 0) { setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(drawPad) }
             setPadding(dp(padH),dp(padV),dp(padH),dp(padV)); minHeight=dp(h); setOnClickListener { onClick() }
         }
         view.id=View.generateViewId()
@@ -427,6 +439,7 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); extras=PlaybackExtras(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        setupMouseGestures()
         // 永久遥控的密钥/端口落盘，必须先于任何 PhoneRemoteSession 构造
         RemoteAccess.init(this)
         accountManager=AccountManager(this,library)
@@ -747,18 +760,25 @@ class MainActivity: Activity() {
         invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
         if(foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
         val top=row().apply { setPadding(0,0,0,dp(8)) }
-        val compactNav=widthDp()<1600
+        val wdp=widthDp()
+        val compactNav=wdp<1600
+        // 顶栏两级收缩：导航项一多（片源/本地库都打开）+ 高密度面板，960dp 就会把「设置」顶到屏幕外
+        // （模拟器 320dpi 实测：入口挤成一团、设置整块看不见也聚焦不到）。
+        // 一级（<1000dp）去掉版本号、工具与遥控入口改短文案；二级（<800dp）导航 pill 再去掉图标。
+        val tightNav=wdp<1000
+        val bareNav=wdp<800
+        navTight=tightNav
         val brand=row()
         val brandIcon=ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) }
-        val brandName=text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false }
+        val brandName=text("红果",if(tightNav) 19f else 22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false }
         val brandVer=text("v${BuildConfig.VERSION_NAME}",12f,muted).apply { includeFontPadding=false }
-        brand.addView(brandIcon,lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
+        brand.addView(brandIcon,lp(dp(28),dp(28)).apply { rightMargin=dp(if(tightNav) 7 else 9) })
         brand.addView(brandName)
-        brand.addView(brandVer,lp(-2,-2).apply { topMargin=dp(6) })
-        top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(20) })
+        if(!tightNav) brand.addView(brandVer,lp(-2,-2).apply { topMargin=dp(6) })
+        top.addView(brand,lp(-2,dp(44)).apply { rightMargin=dp(if(tightNav) 12 else 20) })
         // 一级导航 Pill：首页 / 搜索 / 排行榜 / 片源 / 我的；收藏与最近观看并入我的
         val navMargin=if(compactNav) dp(4) else dp(6)
-        val homeButton=pillNav(com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0,{ switchTab(0) },compactNav)
+        val homeButton=pillNav(if(bareNav) 0 else com.hongguotv.nativeapp.R.drawable.ic_nav_home,"首页",tab==0,{ switchTab(0) },compactNav)
         val areaButtons=listOf(
             Triple(1,"搜索",listOf(1)),
             Triple(2,"排行榜",listOf(2)),
@@ -766,8 +786,9 @@ class MainActivity: Activity() {
             Triple(6,"片源",listOf(6)),
             Triple(3,"我的",listOf(4,3))).mapIndexed { index,entry ->
             val iconRes=when(index) { 0->com.hongguotv.nativeapp.R.drawable.ic_nav_search; 1->com.hongguotv.nativeapp.R.drawable.ic_nav_rank; 2->com.hongguotv.nativeapp.R.drawable.ic_nav_nas; 3->com.hongguotv.nativeapp.R.drawable.ic_nav_source; else->com.hongguotv.nativeapp.R.drawable.ic_nav_mine }
+            val pillIcon=if(bareNav) 0 else iconRes
             lateinit var view: TextView
-            view=pillNav(iconRes,entry.second,tab==entry.first || tab in entry.third,{
+            view=pillNav(pillIcon,entry.second,tab==entry.first || tab in entry.third,{
                 val target=entry.third.firstOrNull { !navHiddenAt(it) } ?: entry.third.first()
                 if(target!=tab) switchTab(target) else view.requestFocus()
             },compactNav)
@@ -776,16 +797,16 @@ class MainActivity: Activity() {
             view
         }
         lateinit var quickTool: TextView
-        quickTool=button("手机快传",false) {
+        quickTool=button(if(tightNav) "快传" else "手机快传",false) {
             tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{},
                 { tvTools.quickFiles(quickTool,{ f,k -> handleQuickTransfer(f,k) },{ tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{}) },{}) })
-        }.apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
+        }.apply { textSize=13f; minHeight=dp(if(tightNav) 36 else 38); val pad=dp(if(tightNav) 10 else 12); setPadding(pad,dp(7),pad,dp(7)) }
         // 遥控入口放在顶栏而不是只在设置里：用户在任何一个列表页看剧时
         // 想换手机操作，都能就地打开，不用退回首页再一路找进设置。
         lateinit var remoteTool: TextView
         remoteTool=remoteEntryButton()
         val settingsTool=button("设置",tab==5) { switchTab(5) }
-            .apply { textSize=13f; minHeight=dp(38); setPadding(dp(12),dp(7),dp(12),dp(7)) }
+            .apply { textSize=13f; minHeight=dp(if(tightNav) 36 else 38); val pad=dp(if(tightNav) 10 else 12); setPadding(pad,dp(7),pad,dp(7)) }
         listOf(homeButton,areaButtons[0],areaButtons[1],areaButtons[2],areaButtons[3],areaButtons[4]).forEach { item ->
             top.addView(item,lp(-2,-2).apply { rightMargin=navMargin })
         }
@@ -1415,6 +1436,43 @@ class MainActivity: Activity() {
         }
         return super.dispatchKeyEvent(event)
     }
+    /**
+     * 网格内上键：和 [handleCatalogDown] 对称，按「上一行同列」移动。
+     *
+     * 之前上键交给框架 focusSearch：最近观看页的「本机记录」分节标题插在卡片前面、本身不可聚焦，
+     * RecyclerView 从首行卡片往上搜只能搜到它，于是按键被吞掉、按了毫无反应。
+     * 这里首行显式跳到页头按钮（刷新云端记录 / 同步到云端 / 管理等）。
+     */
+    private fun handleCatalogUp(event: KeyEvent): Boolean {
+        if(event.action==KeyEvent.ACTION_DOWN && event.keyCode==KeyEvent.KEYCODE_DPAD_UP && screen=="catalog" && gridFocusOwned
+            && randomDialog?.isShowing!=true && exitDialog?.isShowing!=true) {
+            val recycler=catalogRecycler; val adapter=catalogAdapter
+            if(recycler!=null && adapter!=null) {
+                val focused=recycler.focusedChild
+                var pos=if(focused!=null) recycler.getChildAdapterPosition(focused) else RecyclerView.NO_POSITION
+                if(pos==RecyclerView.NO_POSITION) pos=catalogFocusPos
+                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
+                    val index=adapter.displayedIndex(pos)
+                    if(index in 0 until adapter.displayed.size) {
+                        val cols=(recycler.layoutManager as? GridLayoutManager)?.spanCount ?: 1
+                        val target=index-cols
+                        if(target>=0 && target in adapter.displayed.indices) moveGridFocus(adapter.adapterPosition(target))
+                        else {
+                            // 首行：页头按钮 → 分段（最近观看/收藏）→ 顶栏，保证上键一定有落点，
+                            // 不再出现「按了没反应」；命中不到才交回框架
+                            val up=historyRefresh ?: historySync ?: historyManage ?: favoriteCheck ?: favoriteSortFirst
+                                ?: genreClear ?: collectionBack ?: typeButtons[library.contentType]
+                                ?: segmentFirst ?: nav.getOrNull(tab)
+                            if(up==null) return false
+                            up.requestFocus()
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
     /** 把焦点移到网格内指定 adapter 位置：已布局直接移，未布局先滚动再补焦点 */
     private fun moveGridFocus(pos: Int) {
         val recycler=catalogRecycler ?: return
@@ -1911,6 +1969,10 @@ class MainActivity: Activity() {
         lateinit var themeButton: TextView
         themeButton=setting(look,"系统风格  ·  ${TvStyle.theme.label}") {
             library.theme=TvStyle.toggle().name; recreate()
+        }
+        lateinit var scaleButton: TextView
+        scaleButton=setting(look,"界面缩放  ·  ${UiScale.label(this)}") {
+            UiScale.cycle(this); recreate()
         }
         lateinit var clockButton: TextView
         clockButton=setting(look,"显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}") {
@@ -2438,17 +2500,20 @@ class MainActivity: Activity() {
         val title=TvDialog.title(this,if(loading) "正在随机挑选…" else "随机荐剧")
         body.addView(title)
         val content=FrameLayout(this)
-        body.addView(content,lp(-1,dp(420)).apply { bottomMargin=dp(10) })
+        // 内容区高度按屏幕算：固定 420dp 在 1080p / 高密度面板上会连标题和按钮一起顶出屏幕
+        // （实测模拟器直接超屏）。留出标题、按钮行与卡片内边距，最多 420dp。
+        val contentHeight=minOf(dp(420),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
+        body.addView(content,lp(-1,contentHeight).apply { bottomMargin=dp(10) })
         val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
         // 海报网格 4 列异步填充，宽度必须固定，不能收缩到内容
-        TvDialog.styleWindow(this,dlg,widthDp=560)
+        TvDialog.styleWindow(this,dlg,widthDp=520)
         randomDialog=dlg
         dlg.show()
         if(items.isEmpty() && !loading) {
             content.addView(text("候选池为空，正在补充…",15f,muted).apply { setPadding(0,dp(20),0,0) })
         } else if(items.isNotEmpty()) {
-            // 弹窗专用固定尺寸卡片：宽120dp，上图（3:4固定高）下名称+集数，小图拉伸撑满
-            val cardWidth=dp(120)
+            // 弹窗专用固定尺寸卡片：宽104dp，上图（3:4固定高）下名称+集数，小图拉伸撑满
+            val cardWidth=dp(104)
             val posterHeight=(cardWidth/TvStyle.POSTER_ASPECT).toInt()
             val randomAdapter=object: RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 override fun getItemCount()=items.size
@@ -2459,7 +2524,7 @@ class MainActivity: Activity() {
                     val title=text("",13f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(6),dp(3),0) }
                     val badge=text("",11f,muted).apply { maxLines=1; minLines=1; minHeight=dp(17); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
                     card.addView(title,lp(-1,-2)); card.addView(badge,lp(-1,-2))
-                    card.layoutParams=RecyclerView.LayoutParams(cardWidth,-2).apply { rightMargin=dp(12); bottomMargin=dp(10) }
+                    card.layoutParams=RecyclerView.LayoutParams(cardWidth,-2).apply { rightMargin=dp(8); bottomMargin=dp(10) }
                     return object: RecyclerView.ViewHolder(card) {}
                 }
                 override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
@@ -2819,7 +2884,7 @@ class MainActivity: Activity() {
             hud.addView(playbackStatus)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(7),0,dp(9)) }; hud.addView(playbackText)
             progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
-            hud.addView(text("确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    ↓ 选集    ↑ 更多    长按菜单 快捷面板    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
+            keyHints=text(keyHintText(),13f,muted).apply { setPadding(0,dp(12),0,0) }; hud.addView(keyHints)
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
@@ -3096,6 +3161,53 @@ class MainActivity: Activity() {
         main.removeCallbacks(hideHud)
         panel=false; controls.visibility=View.GONE; controls.clearFocus(); hud.visibility=View.GONE
     }
+    /** 播放屏鼠标手势：垂直滑动换集（仿红果原版，不弹选集面板），单击呼出/收起控制条。挂在根布局上，非播放屏直接放行。 */
+    private fun setupMouseGestures() {
+        val gestures=object: GestureDetector.SimpleOnGestureListener() {
+            private var locked=false; private var total=0f
+            fun beginStroke() { locked=false; total=0f }
+            override fun onDown(e: MotionEvent)=true
+            override fun onScroll(e1: MotionEvent?,e2: MotionEvent,dx: Float,dy: Float): Boolean {
+                if(screen!="player" || locked) return true
+                total+=dy
+                // 累计位移超过屏幕高 20% 触发一次，本手势内不再重复触发（防慢慢拖动连切）
+                if(Math.abs(total)>resources.displayMetrics.heightPixels*0.2f) {
+                    locked=true
+                    skipEpisode(if(total<0) 1 else -1)
+                }
+                return true
+            }
+            override fun onFling(e1: MotionEvent?,e2: MotionEvent,vx: Float,vy: Float): Boolean {
+                if(screen!="player" || locked) return false
+                // 快速轻扫位移可能不够 20%，用速度兜底；要求纵向明显占优，避免误伤横向拖动
+                if(Math.abs(vy)>Math.abs(vx)*1.4f && Math.abs(vy)>2000f) {
+                    locked=true
+                    skipEpisode(if(vy<0) 1 else -1)
+                }
+                return true
+            }
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if(screen!="player" || playError) return false
+                if(hud.visibility==View.VISIBLE && !panel) hidePlaybackOverlay() else showHud()
+                return true
+            }
+        }
+        val detector=GestureDetector(this,gestures)
+        root.setOnTouchListener { _,e ->
+            if(screen!="player") return@setOnTouchListener false
+            when(e.actionMasked) {
+                // 只在按下时重置：抬起后 onFling 才回调，若在 UP 重置会解锁导致 fling 再触发一次（一次滑动切两集）
+                MotionEvent.ACTION_DOWN -> gestures.beginStroke()
+            }
+            detector.onTouchEvent(e)
+        }
+    }
+
+    /** 播放 hud 底部按键提示：跟随「遥控上下键」设置变化。 */
+    private fun keyHintText(): String {
+        val upDown=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "↓ 下一集    ↑ 上一集" else "↓ 选集    ↑ 更多"
+        return "确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    $upDown    长按菜单 快捷面板    鼠标 上下滑换集 · 单击 控制条    返回 收起 / 退出"
+    }
     private fun showHud() {
         if(screen!="player") return
         hud.visibility=View.VISIBLE; updatePlaybackText(); main.removeCallbacks(hideHud)
@@ -3131,11 +3243,13 @@ class MainActivity: Activity() {
         main.removeCallbacks(seekRunnable); pendingSeek=null
         p.seekTo(position.coerceIn(0,(p.duration-500).coerceAtLeast(0))); updatePlaybackText(); syncMediaSession(); showHud()
     }
-    private fun skipEpisode(direction: Int) {
-        if(!foreground || screen!="player") return
-        val count=detail?.episodes?.size ?: return
+    /** 返回是否真的切换了集数（越界返回 false），切换成功时短暂显示 hud 反馈。 */
+    private fun skipEpisode(direction: Int): Boolean {
+        if(!foreground || screen!="player") return false
+        val count=detail?.episodes?.size ?: return false
         val target=episodeIndex+direction
-        if(target in 0 until count) playEpisode(target)
+        if(target !in 0 until count) return false
+        playEpisode(target); showHud(); return true
     }
     private fun syncMediaSession() {
         remotePublish()
@@ -3432,11 +3546,17 @@ class MainActivity: Activity() {
             }
             menu.text="菜单键  ·  ${menuLabel()}"
         }
-        listOf(step,speed,menu).forEachIndexed { index,view ->
+        fun upDownLabel()=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "切换集数" else "选集面板"
+        lateinit var upDown: TextView
+        upDown=button("遥控上下键  ·  ${upDownLabel()}") {
+            extras.dpadUpDownAction=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) PlaybackExtras.UPDOWN_PANEL else PlaybackExtras.UPDOWN_SWITCH
+            upDown.text="遥控上下键  ·  ${upDownLabel()}"; keyHints?.text=keyHintText()
+        }
+        listOf(step,speed,menu,upDown).forEachIndexed { index,view ->
             view.gravity=Gravity.START or Gravity.CENTER_VERTICAL // 弹窗选项一律左对齐，Button 默认居中
             content.addView(view,lp(-1,dp(48)).apply { bottomMargin=dp(8) })
-            view.nextFocusDownId=listOf(step,speed,menu).getOrNull(index+1)?.id ?: View.NO_ID
-            view.nextFocusUpId=listOf(step,speed,menu).getOrNull(index-1)?.id ?: View.NO_ID
+            view.nextFocusDownId=listOf(step,speed,menu,upDown).getOrNull(index+1)?.id ?: View.NO_ID
+            view.nextFocusUpId=listOf(step,speed,menu,upDown).getOrNull(index-1)?.id ?: View.NO_ID
         }
         val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
         TvDialog.styleWindow(this,dialog)
@@ -3797,7 +3917,9 @@ class MainActivity: Activity() {
     private fun frameBackdrop(raw: Bitmap): Bitmap? {
         val width=resources.displayMetrics.widthPixels; val height=resources.displayMetrics.heightPixels
         if(width<=0 || height<=0) return null
-        val scale=maxOf(width.toFloat()/raw.width,height.toFloat()/raw.height)
+        // 界面缩放（UiScale）时背景内容同倍率放大、超出部分裁边：背景跟 UI 一起变大，
+        // 而不是其他元素都放大了背景还停在原尺寸；切档 recreate 后 loadBackdrop 重解码即生效
+        val scale=maxOf(width.toFloat()/raw.width,height.toFloat()/raw.height)*UiScale.factor(this)
         val drawWidth=(raw.width*scale).toInt(); val drawHeight=(raw.height*scale).toInt()
         val scaled=if(drawWidth==raw.width && drawHeight==raw.height) raw else Bitmap.createScaledBitmap(raw,drawWidth,drawHeight,true)
         val output=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
@@ -3937,7 +4059,7 @@ class MainActivity: Activity() {
         main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         playerListener?.let { player?.removeListener(it) }; playerListener=null
         video?.let { android.util.Log.w("HongguoTV","Prefetch end ${it.stats()}") }
-        video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
+        video?.close(); video=null; playerView?.player=null; playerView=null; keyHints=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
         stopDanmaku(); danmakuView=null
         closeTransport(playbackHttp); playbackHttp=null
         playerScreenOn=false; refreshScreenOn()
@@ -4009,7 +4131,8 @@ class MainActivity: Activity() {
     private fun remoteEntryButton(): TextView {
         val view=button("手机遥控",false) { }
         view.setOnClickListener { openRemote(view) }
-        view.textSize=13f; view.minHeight=dp(38); view.setPadding(dp(12),dp(7),dp(12),dp(7))
+        view.textSize=13f; view.minHeight=dp(if(navTight) 36 else 38)
+        val pad=dp(if(navTight) 10 else 12); view.setPadding(pad,dp(7),pad,dp(7))
         remoteEntryView=view
         syncRemoteEntry()
         return view
@@ -4017,19 +4140,22 @@ class MainActivity: Activity() {
 
     /**
      * 顶栏入口文案。三个状态要能一眼区分：
-     * 没开会话就是纯入口；开了没人连就顺带把地址摆出来（换 IP、手输都能看）；
-     * 连上了就只留结果，别再占地方显示地址。
+     * 没开会话就是纯入口；开了没人连就是「待连接」；连上了写台数。
+     * 一律不显示 IP：服务是应用启动就静默挂着的，绝大多数时间没人连，
+     * 顶栏常驻一串局域网地址既没用又占地方，要看地址点开弹窗，二维码下方写着。
+     * 顶栏空间吃紧（navTight）时再压成两个字。
      */
     private fun syncRemoteEntry() {
         val view=remoteEntryView ?: return
         val session=remote
         val clients=session?.hub?.clientCount ?: 0
+        val short=navTight
         view.text=when {
             session==null -> "手机遥控"
             // 现在允许多台手机同时控制，写出台数比笼统的「已连接」更有用
-            clients>1 -> "遥控中 · ${clients} 台设备"
-            clients==1 -> "遥控中 · 手机已连接"
-            else -> "遥控 · ${session.hub.host}"
+            clients>1 -> if(short) "遥控中 · ${clients} 台" else "遥控中 · ${clients} 台设备"
+            clients==1 -> if(short) "遥控中" else "遥控中 · 手机已连接"
+            else -> if(short) "遥控" else "遥控 · 待连接"
         }
     }
 
@@ -4300,6 +4426,7 @@ class MainActivity: Activity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if(tab==6 && third?.onKey(event)==true) return true
         if(handleCatalogDown(event)) return true
+        if(handleCatalogUp(event)) return true
         // 收藏页：菜单键循环切换排序（卡片上的快捷菜单改用长按确认键，与设计稿按键表一致）
         if(screen=="catalog" && tab==3 && collection==null && event.keyCode==KeyEvent.KEYCODE_MENU) {
             if(event.action==KeyEvent.ACTION_UP && !favoriteManage) {
@@ -4350,8 +4477,8 @@ class MainActivity: Activity() {
                         KeyEvent.KEYCODE_DPAD_LEFT -> seek(-1,event.repeatCount)
                         KeyEvent.KEYCODE_DPAD_RIGHT -> if(event.repeatCount==0) seek(1,0) else startFastForward()
                         KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> if(event.repeatCount==0) togglePlayback()
-                        KeyEvent.KEYCODE_DPAD_DOWN -> if(event.repeatCount==0) showEpisodePanel(hud)
-                        KeyEvent.KEYCODE_DPAD_UP -> if(event.repeatCount==0) showPanel()
+                        KeyEvent.KEYCODE_DPAD_DOWN -> if(event.repeatCount==0) { if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) skipEpisode(1) else showEpisodePanel(hud) }
+                        KeyEvent.KEYCODE_DPAD_UP -> if(event.repeatCount==0) { if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) skipEpisode(-1) else showPanel() }
                         else -> showHud()
                     }
                     return true

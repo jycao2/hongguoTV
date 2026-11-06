@@ -1,6 +1,11 @@
 <resources><style name="AppTheme" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#FF8964</item><item name="android:windowBackground">#0B0F15</item><item name="android:windowLightStatusBar">false</item><item name="android:windowNoTitle">true</item><item name="android:alertDialogTheme">@style/TvAlertDialog</item></style>
 <!-- 默认 Material 弹窗主题带 windowMinWidthMajor/Minor，DecorView 会把弹窗窗口最小撑到约半屏，
      我们算好的内容宽度全被顶掉，选项靠左、右侧大片空白。这里把最小宽度压掉，
-     让 styleWindow 的自然测宽真正决定窗口宽度。 -->
-<style name="TvAlertDialog" parent="android:style/Theme.Material.Dialog.Alert"><item name="android:windowMinWidthMajor">20%</item><item name="android:windowMinWidthMinor">20%</item></style>
+     让 styleWindow 的自然测宽真正决定窗口宽度。
+     windowIsFloating=false：PhoneWindow.generateLayout() 对浮窗会无条件 setLayout(WRAP_CONTENT, WRAP_CONTENT)，
+     把 show 前算好的宽度/位置全部清掉，只能等 onShow（show 内部 Handler 异步派发，常在首帧之后）再补，
+     于是弹窗先以默认宽度/居中位置出现、再跳到目标位置——这就是题材弹窗「会飞」的根源。
+     改成非浮窗后 generateLayout 不再重置宽高，styleWindow 在 show 前写入的尺寸和 x/y 首帧即生效；
+     代代价是浮窗自带的变暗遮罩（FLAG_DIM_BEHIND）没了，由 styleWindow 显式补上。 -->
+<style name="TvAlertDialog" parent="android:style/Theme.Material.Dialog.Alert"><item name="android:windowIsFloating">false</item><item name="android:windowBackground">@android:color/transparent</item><item name="android:windowMinWidthMajor">20%</item><item name="android:windowMinWidthMinor">20%</item></style>
 </resources>

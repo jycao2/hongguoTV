@@ -1456,9 +1456,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 }, lp(0, -2).apply { weight = 1f })
                 if(isCurrent) topLine.addView(text("当前", 12f, TvStyle.accent))
                 card.addView(topLine)
-                card.addView(text(hostOf(source.api), 12f, muted).apply { setPadding(0, dp(2), 0, 0) })
+                // 域名与状态行按圆点宽度缩进，和源名称左对齐（圆点 7dp + 间距 8dp）；
+                // 行距给到 5dp，两行信息不再糊成一片
+                val nameIndent = dp(15)
+                card.addView(text(hostOf(source.api), 12f, muted).apply { setPadding(nameIndent, dp(5), 0, 0) })
                 val (label, color) = probeLabel(source.id)
-                val status = text(label, 12f, color).apply { setPadding(0, dp(2), 0, dp(6)) }
+                val status = text(label, 12f, color).apply { setPadding(nameIndent, dp(4), 0, dp(6)) }
                 sourceStatusViews[source.id] = status
                 card.addView(status)
                 val btnRow = row()

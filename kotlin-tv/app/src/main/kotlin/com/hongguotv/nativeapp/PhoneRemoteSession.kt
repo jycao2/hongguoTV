@@ -2,17 +2,13 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
 import com.hongguotv.core.LanRemoteHub
 import com.hongguotv.core.RemoteController
 import com.hongguotv.core.RemoteTarget
@@ -78,25 +74,31 @@ class PhoneRemoteSession(
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(4), dp(16), dp(8))
         }
-        content.addView(TvDialog.title(activity, "手机遥控"));
+        content.addView(TvDialog.title(activity, "手机遥控"))
 
-        val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
-        row.addView(qrImage(hub.url), LinearLayout.LayoutParams(dp(185), dp(185)))
+        // 右侧文案列固定与二维码同高（见 TvDialog.qrRow），文案量控制在 185dp 内
+        content.addView(TvDialog.qrRow(activity, qrImage(hub.url),
+            label("手机扫码打开，即可遥控播放、选集与搜索。", 16f),
+            label("地址永久有效，下次在手机直接打开即可。", 13f).apply { setTextColor(TvStyle.muted) },
+            TvDialog.urlLabel(activity, hub.url),
+            label("等待手机连接…", 13f).apply { setTextColor(TvStyle.gold) }.also { status = it }
+        ))
 
-        val info = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        info.addView(label("手机扫码后用浏览器打开，就能在手机上控制播放、选集与搜索。", 16f))
-        info.addView(label("这个地址永久有效：下次直接在手机浏览器打开同一地址就能连上，电视上不用再开这个窗口。", 14f).apply {
-            setTextColor(TvStyle.muted)
-        })
-        info.addView(label(hub.url, 12f).apply { setTextColor(TvStyle.muted) })
-        val state = label("等待手机连接…", 13f).apply { setTextColor(TvStyle.gold) }
-        status = state
-        info.addView(state)
-        row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
-        content.addView(row)
+        // 配套的遥控器桌面工具（PWA）入口：点开展示安装二维码
+        val tool = TextView(activity).apply {
+            text = "配套的遥控器桌面工具  ›"
+            textSize = 14f
+            setTextColor(TvStyle.accent)
+            background = TvStyle.shape(activity, TvStyle.surface)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            isFocusable = true
+            setOnClickListener { showToolDialog() }
+        }
+        content.addView(tool, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
 
         val window = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
-        TvDialog.styleWindow(activity, window)
+        // 必须显式宽度：行里是「二维码 + weight 文字列」，自然测宽把文字列量成 0 宽（文字消失、弹窗虚高）
+        TvDialog.styleWindow(activity, window, widthDp = 440)
         window.setOnDismissListener {
             // 会话是永久遥控的一部分，关窗口只收二维码这层 UI；服务继续挂着，
             // 手机随时能用旧地址直连。窗口随时可以从顶栏再打开。
@@ -104,6 +106,27 @@ class PhoneRemoteSession(
             if(anchor?.isAttachedToWindow == true) anchor.requestFocus()
         }
         dialog = window
+        window.show()
+    }
+
+    /** 配套 PWA 遥控器桌面工具的安装地址。 */
+    private val toolUrl = "https://hongguo-remote-h5.app.workbuddy.host/?sharecode=G3AWH3OYSU"
+
+    /** 遥控器桌面工具（PWA）二维码弹窗：扫码打开后可添加到手机桌面当 App 用。 */
+    private fun showToolDialog() {
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(8))
+        }
+        content.addView(TvDialog.title(activity, "遥控器桌面工具"))
+        // 标题已点明「遥控器桌面工具」，右侧说明不再重复；文案量控制在二维码同高内（见 qrRow）
+        content.addView(TvDialog.qrRow(activity, qrImage(toolUrl).apply { contentDescription = "遥控器桌面工具二维码" },
+            label("手机扫码打开，添加到手机桌面像 App 一样使用。", 15f),
+            label("打开后扫本页遥控二维码连接，需与电视同一 Wi-Fi。", 13f).apply { setTextColor(TvStyle.muted) },
+            TvDialog.urlLabel(activity, toolUrl)
+        ))
+        val window = AlertDialog.Builder(activity).setView(TvDialog.card(activity, content)).create()
+        TvDialog.styleWindow(activity, window, widthDp = 440)
         window.show()
     }
 
@@ -137,10 +160,5 @@ class PhoneRemoteSession(
         setPadding(dp(8), dp(4), dp(8), dp(4))
     }
 
-    private fun qrImage(url: String) = ImageView(activity).apply {
-        val bits = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 360, 360)
-        val pixels = IntArray(360 * 360) { i -> if(bits[i % 360, i / 360]) Color.BLACK else Color.WHITE }
-        setImageBitmap(Bitmap.createBitmap(pixels, 360, 360, Bitmap.Config.ARGB_8888))
-        contentDescription = "遥控二维码"
-    }
+    private fun qrImage(url: String) = TvDialog.qrView(activity, url, "遥控二维码")
 }

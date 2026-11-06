@@ -21,8 +21,6 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
 import com.hongguotv.core.EpisodeTarget
 import com.hongguotv.core.PhoneForm
 import com.hongguotv.core.PhoneInputServer
@@ -115,7 +113,8 @@ class TvTools(private val activity: Activity) {
             content.addView(row)
         }
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 键盘按钮是 weight 横排，自然测宽会把按钮量成 0 宽，必须固定宽度
+        TvDialog.styleWindow(activity,dialog,widthDp=300)
         dialog.setOnKeyListener { _,key,event ->
             when {
                 key in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> { if(event.action==KeyEvent.ACTION_DOWN) digit((key-KeyEvent.KEYCODE_0).toString()); true }
@@ -147,12 +146,7 @@ class TvTools(private val activity: Activity) {
         locate.nextFocusUpId=buttons[10].id; cancel.nextFocusUpId=buttons[9].id
         buttons.first().requestFocus()
     }
-    private fun qr(url: String)=ImageView(activity).apply {
-        val bits=QRCodeWriter().encode(url,BarcodeFormat.QR_CODE,360,360)
-        val pixels=IntArray(360*360) { i->if(bits[i%360,i/360]) Color.BLACK else Color.WHITE }
-        setImageBitmap(Bitmap.createBitmap(pixels,360,360,Bitmap.Config.ARGB_8888))
-        contentDescription="二维码"
-    }
+    private fun qr(url: String)=TvDialog.qrView(activity,url)
     /** 搜索剧名场景的手机输入（文案固定为剧名）。 */
     fun phoneInput(anchor: View?,submit: (String)->Unit)=phoneForm(anchor,PhoneForm.search()) { values->submit(values["query"].orEmpty()) }
     /** 通用手机填写页：表单内容由调用方定义，填写完成后回传全部字段值。 */
@@ -162,7 +156,8 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,form.heading))
         val status=label("正在生成二维码…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 二维码 + weight 文字列：自然测宽量不出文字列（0 宽消失），必须固定宽度
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
         open(dialog,anchor)
         worker.execute {
             try {
@@ -170,12 +165,9 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(this@TvTools.dialog!==dialog) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                    val instructions=column()
-                    instructions.addView(label("手机扫码后用浏览器打开，按页面提示填写，提交后内容会发送到电视。\n需连接同一局域网；关闭窗口即失效，最长 5 分钟。",16f))
-                    instructions.addView(label(session.url,12f).apply { setTextColor(TvStyle.muted) })
-                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    content.addView(TvDialog.qrRow(activity, qr(session.url),
+                        label("手机扫码打开，按提示填写，提交后发送到电视。\n仅限同一局域网，关闭即失效。",16f),
+                        TvDialog.urlLabel(activity, session.url)))
                 }
             } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机填写，请检查网络后重试。" } }
         }
@@ -187,7 +179,8 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,"源配置导入/导出"))
         val status=label("正在生成二维码…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 二维码 + weight 文字列：必须固定宽度（同 phoneForm）
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
         open(dialog,anchor)
         worker.execute {
             try {
@@ -196,12 +189,9 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(this@TvTools.dialog!==dialog) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                    val instructions=column()
-                    instructions.addView(label("手机扫码后用浏览器打开：可下载当前源配置，或选择配置文件恢复到电视。\n已有源不会被覆盖，只追加缺失的源；仅限同一局域网，最长 5 分钟。",16f))
-                    instructions.addView(label(session.url,12f).apply { setTextColor(TvStyle.muted) })
-                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    content.addView(TvDialog.qrRow(activity, qr(session.url),
+                        label("扫码打开：可下载当前源配置，或上传配置恢复到电视。\n已有源不覆盖，仅追加缺失。",16f),
+                        TvDialog.urlLabel(activity, session.url)))
                 }
             } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启源配置传输，请检查网络后重试。" } }
         }
@@ -212,7 +202,8 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,"手机备份与恢复"))
         val status=label("正在生成二维码…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 二维码 + weight 文字列：必须固定宽度（同 phoneForm）
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
         open(dialog,anchor)
         worker.execute {
             try {
@@ -240,12 +231,9 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(this@TvTools.dialog!==dialog) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                    val instructions=column()
-                    instructions.addView(label("手机扫码，用浏览器下载备份或选择备份文件恢复。\n仅限同一局域网；关闭即失效，最长 5 分钟。恢复需在电视确认。",16f))
-                    instructions.addView(label(session.url,12f).apply { setTextColor(TvStyle.muted) })
-                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    content.addView(TvDialog.qrRow(activity, qr(session.url),
+                        label("扫码用浏览器下载备份，或选择备份文件恢复。\n仅限同一局域网，恢复需在电视确认。",16f),
+                        TvDialog.urlLabel(activity, session.url)))
                 }
             } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启备份传输，请检查网络后重试。" } }
         }
@@ -256,7 +244,8 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,"自定义背景"))
         val status=label("正在生成二维码…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 二维码 + weight 文字列：必须固定宽度（同 phoneForm）
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
         open(dialog,anchor)
         worker.execute {
             try {
@@ -265,12 +254,9 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(this@TvTools.dialog!==dialog) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                    val instructions=column()
-                    instructions.addView(label("手机扫码，或用浏览器打开下方地址，上传图片设为电视背景。\n手机和电视需连接同一无线网；关闭窗口即失效，最长 5 分钟。",16f))
-                    instructions.addView(label(session.url,12f).apply { setTextColor(TvStyle.muted) })
-                    row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    content.addView(TvDialog.qrRow(activity, qr(session.url),
+                        label("扫码或打开下方地址，上传图片设为电视背景。\n手机与电视需同一无线网。",16f),
+                        TvDialog.urlLabel(activity, session.url)))
                 }
             } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启图片上传，请检查网络后重试。" } }
         }
@@ -282,7 +268,8 @@ class TvTools(private val activity: Activity) {
         val content=column(); content.addView(TvDialog.title(activity,"手机快传"))
         val status=label("正在生成二维码…").apply { isFocusable=true }; content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,dialog)
+        // 二维码 + weight 文字列：必须固定宽度（同 phoneForm）
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
         var views: QuickViews?=null
         var receivedFiles=0
         var session: QuickTransferServer?=null
@@ -333,12 +320,9 @@ class TvTools(private val activity: Activity) {
                         if(this@TvTools.dialog!==dialog) { s.close(); return@post }
                         session?.close(); session=s; phone=s; sessionStart.set(System.nanoTime())
                         content.removeAllViews()
-                        val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
-                        row.addView(qr(s.url),LinearLayout.LayoutParams(dp(185),dp(185)))
-                        val instructions=column()
-                        instructions.addView(label("手机扫码后用浏览器打开，选择文件发送到电视。\nAPK 会提示安装，视频和图片存入电视；失败的文件不留痕迹。",16f))
-                        instructions.addView(label(s.url,12f).apply { setTextColor(TvStyle.muted) })
-                        row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                        content.addView(TvDialog.qrRow(activity, qr(s.url),
+                            label("手机扫码打开，选择文件发送到电视。\nAPK 会提示安装，视频图片存入电视。",16f),
+                            TvDialog.urlLabel(activity, s.url)))
                         countdown=label("二维码有效期 · 剩余 10:00",13f).apply { setTextColor(TvStyle.accent); setPadding(0,dp(6),0,dp(2)) }; content.addView(countdown)
                         val space=label(spaceLabel(),13f).apply { setTextColor(TvStyle.muted) }; content.addView(space)
                         val name=label("等待手机发送…",15f); content.addView(name)
@@ -353,7 +337,8 @@ class TvTools(private val activity: Activity) {
                         val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(12),0,0) }
                         val filesBtn=TvDialog.capsuleButton(activity,"快传文件") { onShowFiles() }
                         val refresh=TvDialog.capsuleButton(activity,"刷新二维码") { startSession() }
-                        val clear=TvDialog.capsuleButton(activity,"清空快传文件") {
+                        // 文案压短：这一行四个胶囊按钮，6 个字会挤到换行
+                        val clear=TvDialog.capsuleButton(activity,"清空文件") {
                             TvDialog.confirm(activity,"清空快传文件","删除通过手机快传收到的全部文件，不影响收藏、观看记录和已安装的应用。") {
                                 worker.execute {
                                     listOf(TransferKind.APK,TransferKind.OTHER).map { quickDirectory(it) }.distinct().forEach { dir ->
@@ -370,12 +355,15 @@ class TvTools(private val activity: Activity) {
                             }.show()
                         }
                         val close=TvDialog.capsuleButton(activity,"完成") { dialog.dismiss() }
+                        // 四个胶囊按钮横排，440dp 卡片内容宽约 352dp：默认 20dp 内边距 + 10dp 间距会多出
+                        // 一格宽度，把「完成」挤出卡片右缘（只剩一角）。这里统一收窄内边距与间距。
+                        listOf(filesBtn,refresh,clear,close).forEach { it.setPadding(dp(10),0,dp(10),0) }
                         filesBtn.id=View.generateViewId(); refresh.id=View.generateViewId(); clear.id=View.generateViewId(); close.id=View.generateViewId()
                         filesBtn.nextFocusRightId=refresh.id; refresh.nextFocusLeftId=filesBtn.id; refresh.nextFocusRightId=clear.id
                         clear.nextFocusLeftId=refresh.id; clear.nextFocusRightId=close.id; close.nextFocusLeftId=clear.id
-                        actions.addView(filesBtn,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(10) })
-                        actions.addView(refresh,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(10) })
-                        actions.addView(clear,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(12) })
+                        actions.addView(filesBtn,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
+                        actions.addView(refresh,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
+                        actions.addView(clear,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
                         actions.addView(close,LinearLayout.LayoutParams(-2,-2))
                         content.addView(actions)
                         views=QuickViews(name,bar,detail,received,space)

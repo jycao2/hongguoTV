@@ -73,6 +73,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     @Volatile private var appSearchRetryAt=0L
     // 最近一次取播放模型成功的路由，下次优先复用，减少平台按请求量限流时的无效请求
     @Volatile private var goodRoute: String?=null
+    /** 连续「全部路由空体」轮数：达到 2 触发一次匿名设备重注册（身份自愈），成功换集归零。 */
+    @Volatile private var blankStrikes=0
     // 分类筛选接口只在较新客户端版本开放；版本号沿用参考实现验证过的取值，平台升级时集中改这里
     private val discoveryVersion=mapOf(
         "version_code" to "73532",
@@ -566,9 +568,21 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             for((path,payload) in routes) if(path!=good) add(path to payload)
         }
         val first=sweepRoutes(ordered,identity)
-        first.model?.let { model -> goodRoute=first.path; return model }
-        // 全部路由都是空体时是网关限流，重新注册设备不会改变结果，直接报空响应，别把限流窗口延长。
-        if(first.allBlank) throw EmptyPlaybackResponseException()
+        first.model?.let { model -> goodRoute=first.path; blankStrikes=0; return model }
+        // 全部路由都是空体时是网关拦截：单轮空响应按限流处理直接报错，避免把限流窗口延长。
+        // 但连续两轮全空（自动重试会再次进入）说明大概率是进程内身份被风控拉黑或注册时发的
+        // ttwid/msToken 已失效——网关按「注册过的设备+有效 Cookie」放行，此时换一台匿名设备
+        // （等效用户杀进程重进，实测有效）再扫一轮，是进程内唯一的自愈手段；每两轮才换一次，
+        // 不会在限流窗口内连续注册把窗口越打越长。
+        if(first.allBlank) {
+            if(++blankStrikes>=2) {
+                blankStrikes=0
+                val healed=sweepRoutes(ordered,playbackSession.renew(http))
+                healed.model?.let { model -> goodRoute=healed.path; return model }
+            }
+            throw EmptyPlaybackResponseException()
+        }
+        blankStrikes=0
         val renewed=sweepRoutes(ordered,playbackSession.renew(http))
         renewed.model?.let { model -> goodRoute=renewed.path; return model }
         throw renewed.failure ?: IOException("播放信息为空")

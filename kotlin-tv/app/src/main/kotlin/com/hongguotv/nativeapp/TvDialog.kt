@@ -4,14 +4,19 @@ package com.hongguotv.nativeapp
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.Dialog
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 
 /**
  * 统一弹窗视觉层：深色玻璃卡片底、大圆角、细描边、胶囊按钮、 accent 焦点高亮。
@@ -130,6 +135,80 @@ object TvDialog {
         }
     }
 
+    /**
+     * 二维码弹窗的标准行：左侧二维码（默认 132dp 见方，比早先的 185dp 收小近三成，
+     * 避免二维码压过文案成为视觉主体），右侧文案列**顶边与二维码顶边齐平**、高度随文案自适应。
+     * 文案列用 wrap 而不是早先的固定 185dp 高：固定高 + 垂直居中时，多行文案会把二维码压得很小、
+     * 少行文案又显得空；地址行改成整段换行后（见 [urlLabel]），列高天然接近 132dp，两端对齐更自然。
+     * 文案列宽度约 200dp，说明建议 3-4 行、地址行交给 [urlLabel] 自动折行，避免整块高过二维码太多。
+     */
+    fun qrRow(activity: Activity, qr: View, vararg texts: TextView, qrDp: Int = 132): LinearLayout {
+        val row = LinearLayout(activity).apply { gravity = Gravity.TOP }
+        row.addView(qr, LinearLayout.LayoutParams(dp(activity, qrDp), dp(activity, qrDp)))
+        val col = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.TOP
+            setPadding(dp(activity, 12), dp(activity, 2), 0, 0)
+        }
+        texts.forEachIndexed { i, t ->
+            // 左右 padding 一并清零：label() 自带 8dp 左内边距、urlLabel 是 0，
+            // 保留的话地址会比上面的说明整体左移 8dp（看上去「地址没和文案左对齐」）。
+            // 内缩统一由文案列自己的左 padding 给，所有行从同一 x 起排。
+            t.setPadding(0, 0, 0, 0)
+            t.gravity = Gravity.START
+            col.addView(t, LinearLayout.LayoutParams(-1, -2).apply { if(i > 0) topMargin = dp(activity, 6) })
+        }
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        return row
+    }
+
+    /** 二维码旁的地址行：muted 小字，整段完整显示、按字符强制折行（不省略）。
+     *  扫码失败时用户要靠这行手输地址，截断就失去意义；BREAK_STRATEGY_SIMPLE 让超长无空白串也能任意断行。
+     *  常量取 Layout 里的同名值（=0）：LineBreaker 的版本要 API 29，这里全版本都要生效。 */
+    @Suppress("WrongConstant")
+    fun urlLabel(activity: Activity, url: String): TextView = TextView(activity).apply {
+        text = url
+        textSize = 10f
+        setTextColor(TvStyle.muted)
+        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+    }
+
+    /**
+     * 生成二维码视图，白框（静区）固定只留码体宽度的 6%。
+     *
+     * ZXing 默认静区 4 个模块，再叠加「按整倍数缩放后居中补齐」的留白，360px 里每边约 48px 全是白，
+     * 缩到 132dp 显示就是一圈很厚的白框，二维码本体反而被压小。这里先按默认参数编码，
+     * 裁掉自带静区，再按固定 6% 补白重建像素图：白框厚度与二维码版本号、缩放取整都无关，
+     * 1:1 像素映射不糊边，扫码区稳定占满 88%（6% 约 1.7 个模块，深色卡片底上仍能正常识别）。
+     */
+    fun qrView(activity: Activity, url: String, description: String = "二维码"): ImageView {
+        val size = 420
+        val bits = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, size, size)
+        var minX = size; var minY = size; var maxX = -1; var maxY = -1
+        for(y in 0 until size) for(x in 0 until size) if(bits[x, y]) {
+            if(x < minX) minX = x
+            if(x > maxX) maxX = x
+            if(y < minY) minY = y
+            if(y > maxY) maxY = y
+        }
+        val codeW = maxX - minX + 1
+        val codeH = maxY - minY + 1
+        val side = maxOf(codeW, codeH)
+        val pad = (side * 0.06f).toInt().coerceAtLeast(2)
+        val out = side + pad * 2
+        val pixels = IntArray(out * out) { i ->
+            val dx = i % out - pad
+            val dy = i / out - pad
+            if(dx in 0 until codeW && dy in 0 until codeH && bits[minX + dx, minY + dy]) Color.BLACK else Color.WHITE
+        }
+        return ImageView(activity).apply {
+            setImageBitmap(Bitmap.createBitmap(pixels, out, out, Bitmap.Config.ARGB_8888))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = description
+        }
+    }
+
     /** 列表选择弹窗：统一卡片 + 选项按钮列。
      *  样式与「全局默认清晰度」选择器完全一致：surface 底无边框、焦点 raised+accent 边框、
      *  当前项 selectedSurface 底（调用方在文案里带「· 当前」）；不设取消按钮，按返回键关闭。
@@ -188,13 +267,14 @@ object TvDialog {
         }
         val scroll = android.widget.ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         scroll.addView(content, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
-        // 锚点弹窗：高度压到「按钮顶部 → 屏幕底部」以内，小屏电视也放得下；普通弹窗维持 55% 屏高
+        // 卡片高度上限：锚点弹窗压到「按钮顶部 → 屏幕底部」以内（小屏电视也放得下），普通弹窗约 60% 屏高。
+        // 交给 styleWindow 在 show 前按真实宽度预先压缩——那里的高度才算得准（见 styleWindow 注释）
         val a = anchorView
-        if(a != null && a.isAttachedToWindow) {
+        val cardCap = if(a != null && a.isAttachedToWindow) {
             val loc = IntArray(2)
             a.getLocationOnScreen(loc)
-            capHeight(activity, scroll, activity.resources.displayMetrics.heightPixels - loc[1] - dp(activity, 24))
-        } else capHeight(activity, scroll)
+            activity.resources.displayMetrics.heightPixels - loc[1] - dp(activity, 24)
+        } else (activity.resources.displayMetrics.heightPixels * 0.6f).toInt()
         val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         root.addView(scroll)
         // 不设取消按钮：返回键就能关。extra（如搜索历史的「清空历史」）是功能入口，保留
@@ -208,7 +288,7 @@ object TvDialog {
             root.addView(buttons)
         }
         dialog.setView(card(activity, root))
-        styleWindow(activity, dialog, anchor = anchorView) {
+        styleWindow(activity, dialog, anchor = anchorView, capPx = cardCap) {
             items.getOrNull(if(focusIndex in labels.indices) focusIndex else 0)?.requestFocus()
         }
         return dialog
@@ -274,16 +354,25 @@ object TvDialog {
      * 通用弹窗窗口样式：透明背景、屏幕居中、宽度收缩到内容自然宽度。
      * - 不传 widthDp：show 前对卡片做一次 UNSPECIFIED 自然测量，短内容（几个选项、一句确认）
      *   得到窄弹窗，不再一律撑半屏；下限 180dp 防过窄，上限 maxWidthDp 防长文撑爆。
-     *   注意内容必须是 show 前就绪的（异步填充的列表弹窗请传 widthDp 固定宽度）。
+     *   注意：内容必须是 show 前就绪的（异步填充的列表弹窗请传 widthDp 固定宽度）；
+     *   **内容里不能有水平 weight 横排**（如「二维码 + weight 文字列」）——UNSPECIFIED
+     *   测量把 weight 子项量成 0 宽，文字被裁没、还按 0 宽逐字换行撑出虚高，这类弹窗必须传 widthDp
+     *   （窗口宽度是 EXACTLY 时 weight 才正常分配剩余空间）。
      * - 传 widthDp：固定宽度，给表单、网格这类内容宽度和位置都要求稳定的弹窗。
-     * gravity/marginDp 供播放中的小型选择器用：居中会挡住画面，靠左 + 收窄后
-     * 既不遮中间内容，也离触发它的底部按钮更近。
-     * anchor：悬浮定位到锚点按钮左侧（题材这类筛选器用，像从按钮边展开的下拉）；
-     * 顶部与按钮顶部对齐，估高放不下时整体上移夹回屏幕内。
+     * - 传 capPx：卡片高度上限（内容过长时压第一个 ScrollView 的高度）。压缩在 show 前完成，
+     *   首帧就是最终高度，不会先撑满再收缩。
+     * - gravity/marginDp 供播放中的小型选择器用：居中会挡住画面，靠左 + 收窄后
+     *   既不遮中间内容，也离触发它的底部按钮更近。
+     * - anchor：悬浮定位到锚点按钮左侧（题材这类筛选器用，像从按钮边展开的下拉）；
+     *   顶部与按钮顶部对齐，估高放不下时整体上移夹回屏幕内。
+     *
+     * 所有窗口参数（含 x/y）都必须在 show() 之前写进 attributes：Dialog 的 OnShowListener 是
+     * show() 内部 Handler post 出来的，回调落地时窗口已经 addView，很可能已经过了一帧，
+     * 在那里改位置就会看到「先出现在默认位置（居中/左上）再飞过去」。
      */
     fun styleWindow(activity: Activity, dialog: AlertDialog, widthDp: Int? = null, maxWidthDp: Int = 520,
                     gravity: Int = Gravity.CENTER, marginDp: Int = 0, anchor: View? = null,
-                    onShown: (() -> Unit)? = null) {
+                    capPx: Int? = null, onShown: (() -> Unit)? = null) {
         val screen = activity.resources.displayMetrics.widthPixels
         val screenH = activity.resources.displayMetrics.heightPixels
         val cap = dp(activity, maxWidthDp).coerceAtMost((screen * 0.92f).toInt())
@@ -307,37 +396,74 @@ object TvDialog {
                 (card.measuredWidth + dp(activity, 6)).coerceAtMost(cap).coerceAtLeast(minOf(dp(activity, 180), cap))
             }
         }
-        dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT) // show 前就定宽，避免先宽后窄闪一帧
-        dialog.setOnShowListener {
-            val wantGravity = if(anchor != null) Gravity.TOP or Gravity.START else gravity
-            dialog.window?.apply {
-                setBackgroundDrawableResource(android.R.color.transparent)
-                setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
-                attributes = attributes.apply {
-                    this.gravity = wantGravity
-                    if(marginDp > 0) x = dp(activity, marginDp)
-                }
-            }
-            // 锚点定位在 onShow 里同步算好 x/y（首帧前生效；若放到 decor.post 会先落左上角再飞过去）：
-            // 右缘贴按钮左侧、顶部与按钮顶部对齐，估高超出屏幕底部时整体上移夹回。
-            anchor?.takeIf { it.isAttachedToWindow && it.width > 0 }?.let { a ->
-                val win = dialog.window ?: return@let
-                val loc = IntArray(2)
-                a.getLocationOnScreen(loc)
-                val pad = dp(activity, 12)
-                // 弹窗高度估算：卡片自然测高（widthDp 路径可能还没量过，补一次）
-                if(card != null && card.measuredHeight == 0) card.measure(
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        // 宽度定了再按 EXACTLY 宽量一次高：宽度不对，换行数就不对，估出来的高度会带偏 anchor 的 y
+        var cardH = 0
+        if(card != null) {
+            card.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            // 内容超过 capPx：show 前就把滚动区压到位，否则首帧超高、次帧收缩，位置也跟着跳
+            if(capPx != null && card.measuredHeight > capPx) {
+                shrinkScroll(card, card.measuredHeight - capPx)
+                card.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
-                val estH = (card?.measuredHeight ?: 0) + dp(activity, 6)
-                val lp = win.attributes
-                lp.x = (loc[0] - width - pad).coerceAtLeast(pad)
-                lp.y = loc[1].coerceAtMost((screenH - estH - pad).coerceAtLeast(pad)).coerceAtLeast(pad)
-                win.attributes = lp
+            }
+            cardH = card.measuredHeight
+        }
+        val pad = dp(activity, 12)
+        val anchorLoc = anchor?.takeIf { it.isAttachedToWindow && it.width > 0 }?.let { a ->
+            IntArray(2).also { a.getLocationOnScreen(it) }
+        }
+        val wantGravity = if(anchor != null) Gravity.TOP or Gravity.START else gravity
+        // 右缘贴按钮左侧、顶部与按钮顶部对齐；估高超出屏幕底部时整体上移夹回
+        fun place(loc: IntArray): Pair<Int, Int> {
+            val estH = (cardH.takeIf { it > 0 } ?: (screenH / 3)) + dp(activity, 6)
+            return (loc[0] - width - pad).coerceAtLeast(pad) to
+                loc[1].coerceAtMost((screenH - estH - pad).coerceAtLeast(pad)).coerceAtLeast(pad)
+        }
+        dialog.window?.let { win ->
+            val xy = anchorLoc?.let { place(it) } ?: (dp(activity, marginDp) to 0)
+            // 非浮窗（windowIsFloating=false，见 styles.xml）不再自带变暗遮罩，显式补上，
+            // 保持与浮窗弹窗一致的观感
+            win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            win.setDimAmount(0.6f)
+            win.setBackgroundDrawableResource(android.R.color.transparent)
+            win.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+            win.attributes = win.attributes.apply {
+                this.width = width
+                this.height = ViewGroup.LayoutParams.WRAP_CONTENT
+                this.gravity = wantGravity
+                x = xy.first
+                y = xy.second
+            }
+            // 锚点弹窗关掉窗口动画：Material 弹窗的进入动画带缩放，位置明明对也像「从别处飞过来」
+            if(anchor != null) win.setWindowAnimations(0)
+        }
+        dialog.setOnShowListener {
+            // 兜底：show 前锚点还没量出宽度（刚 attach 的极端情况）时补一次定位
+            if(anchorLoc == null) anchor?.takeIf { it.isAttachedToWindow && it.width > 0 }?.let { a ->
+                val loc = IntArray(2).also { a.getLocationOnScreen(it) }
+                val xy = place(loc)
+                dialog.window?.let { win ->
+                    win.attributes = win.attributes.apply { x = xy.first; y = xy.second }
+                }
             }
             track(dialog)
             onShown?.invoke()
         }
+    }
+
+    /** 把第一个 ScrollView 的高度压掉 [delta]（内容超屏时用，show 前调用才能首帧到位）。 */
+    private fun shrinkScroll(view: View, delta: Int): Boolean {
+        if(view is android.widget.ScrollView && view.measuredHeight > 0) {
+            val p = view.layoutParams
+            p.height = (view.measuredHeight - delta).coerceAtLeast(view.measuredHeight / 4)
+            view.layoutParams = p
+            return true
+        }
+        if(view is ViewGroup) for(i in 0 until view.childCount) {
+            if(shrinkScroll(view.getChildAt(i), delta)) return true
+        }
+        return false
     }
 
     /** 登记弹窗；窗口消失时自动摘掉，避免长期攥着已经关掉的 Activity。

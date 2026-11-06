@@ -44,6 +44,11 @@ class PlaybackExtras(context: Context) {
         get() = prefs.getString(KEY_MENU, MENU_PANEL)?.takeIf { it in listOf(MENU_PANEL, MENU_EPISODES, MENU_DANMAKU) } ?: MENU_PANEL
         set(value) { prefs.edit().putString(KEY_MENU, value).apply() }
 
+    /** 播放中遥控 ↑↓ 的行为：panel 默认(↓选集/↑更多) / switch 直接切换集数(↓下一集/↑上一集)。 */
+    var dpadUpDownAction: String
+        get() = prefs.getString(KEY_UPDOWN, UPDOWN_PANEL)?.takeIf { it in listOf(UPDOWN_PANEL, UPDOWN_SWITCH) } ?: UPDOWN_PANEL
+        set(value) { prefs.edit().putString(KEY_UPDOWN, value).apply() }
+
     companion object {
         private const val PREFS = "playback-extras-v1"
         private const val KEY_BLOCKED = "blockedWords"
@@ -52,11 +57,14 @@ class PlaybackExtras(context: Context) {
         private const val KEY_SEEK_STEP = "seekStepSeconds"
         private const val KEY_FAST_SPEED = "longPressSpeed"
         private const val KEY_MENU = "menuKeyAction"
+        private const val KEY_UPDOWN = "dpadUpDownAction"
         val SEEK_STEPS = listOf(10, 15, 30, 60)
         val FAST_SPEEDS = listOf(2f, 3f, 4f)
         const val MENU_PANEL = "panel"
         const val MENU_EPISODES = "episodes"
         const val MENU_DANMAKU = "danmaku"
+        const val UPDOWN_PANEL = "panel"
+        const val UPDOWN_SWITCH = "switch"
         private val DEFAULT_BLOCKED = setOf("加群", "微信", "公众号", "QQ群")
     }
 }
