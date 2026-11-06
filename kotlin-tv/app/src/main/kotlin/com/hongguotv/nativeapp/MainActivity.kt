@@ -1458,11 +1458,17 @@ class MainActivity: Activity() {
                         val target=index-cols
                         if(target>=0 && target in adapter.displayed.indices) moveGridFocus(adapter.adapterPosition(target))
                         else {
-                            // 首行：页头按钮 → 分段（最近观看/收藏）→ 顶栏，保证上键一定有落点，
-                            // 不再出现「按了没反应」；命中不到才交回框架
-                            val up=historyRefresh ?: historySync ?: historyManage ?: favoriteCheck ?: favoriteSortFirst
-                                ?: genreClear ?: collectionBack ?: typeButtons[library.contentType]
-                                ?: segmentFirst ?: nav.getOrNull(tab)
+                            // 首行：先回本页的菜单按钮（排行榜的看榜/刷新、搜索的输入行），
+                            // 再按键才回顶栏；不再一步跳到顶部菜单栏。
+                            val up=when(tab) {
+                                2 -> (if(aiCatalog) aiEntry ?: aiGenreButton else rankSwitch ?: rankRefresh)
+                                    ?: nav.getOrNull(tab)
+                                1 -> searchInput ?: searchButton ?: searchActions.firstOrNull()?.takeIf { it.isFocusable }
+                                    ?: typeButtons[library.contentType] ?: nav.getOrNull(tab)
+                                else -> historyRefresh ?: historySync ?: historyManage ?: favoriteCheck ?: favoriteSortFirst
+                                    ?: genreClear ?: collectionBack ?: typeButtons[library.contentType]
+                                    ?: segmentFirst ?: nav.getOrNull(tab)
+                            }
                             if(up==null) return false
                             up.requestFocus()
                         }
@@ -1480,10 +1486,14 @@ class MainActivity: Activity() {
         if(holder!=null) { holder.itemView.requestFocus(); return }
         // 目标在屏幕外：只按一行高度滚动。用 scrollToPosition 会把目标整行锚到顶部，
         // 当前焦点卡瞬间被滚出屏幕并回收，焦点被清空后框架直接回落到顶栏「首页」。
+        // 滚动方向必须跟着目标走：向上找目标时要往回滚，否则上一行永远进不了布局。
         val focused=recycler.focusedChild
         if(focused!=null) {
             val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
-            recycler.scrollBy(0,focused.height+margin)
+            val step=focused.height+margin
+            val current=recycler.getChildAdapterPosition(focused)
+            val downward=current!=RecyclerView.NO_POSITION && pos>current
+            recycler.scrollBy(0,if(downward) step else -step)
         } else recycler.scrollToPosition(pos)
         recycler.post {
             if(screen!="catalog" || recycler!==catalogRecycler) return@post
@@ -3064,7 +3074,16 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm() }
+                    // 预加载也会撞上「HTTP 200 + 0 字节」：同一实例上立刻再取一次，
+                    // 第二轮会触发 ContentRepository 的换设备自愈（与正式播放同一套逻辑），
+                    // 不必等 15 秒退避到片尾才发现下一集没预取到。
+                    val info=try {
+                        source.stream(id,quality)
+                    } catch(blank: EmptyPlaybackResponseException) {
+                        android.util.Log.w("HongguoTV","Prefetch empty response id=$id, recovering now")
+                        source.stream(id,quality)
+                    }
+                    RemoteVideo(http,info).also { remote=it; it.warm() }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
                     android.util.Log.i("HongguoTV","Next episode prepared near end")
