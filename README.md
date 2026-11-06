@@ -2,7 +2,7 @@
 
 自家电视使用的非官方红果短剧客户端，与红果官方无关联。**Kotlin 原生独立 APK**：安装后联网即可浏览播放，无需 Node / Docker / 服务器。最低 Android 8.0（API 26），电视遥控器操作，ARM32 / ARM64 / x86 / x86_64 通用。
 
-**[下载最新版 APK](https://github.com/jycao2/hongguoTV/releases/latest)** · [问题反馈 / 提交 Issue](https://github.com/jycao2/hongguoTV-updates/issues) · [版本记录与构建说明](kotlin-tv/README.md) · [自动更新机制](kotlin-tv/AUTO_UPDATES.md)
+**[下载最新版 APK](https://github.com/jycao2/hongguoTV/releases/latest)** · [手机遥控端](https://github.com/jycao2/hongguoTV-remote) · [问题反馈 / 提交 Issue](https://github.com/jycao2/hongguoTV-updates/issues) · [版本记录与构建说明](kotlin-tv/README.md) · [自动更新机制](kotlin-tv/AUTO_UPDATES.md)
 
 > 使用中遇到问题、有功能建议，请到 **[hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues)** 提交。该仓库同时承载版本更新与下载，问题与建议统一在那里提出，方便跟进修复与回复。
 
@@ -10,7 +10,8 @@
 
 - **浏览**：首页接着看 / 收藏有更新 / 稍后看 / 热门发现横向剧架，随机荐剧一键换一批，漫剧 / 短剧热播榜，24+8 个题材分类浏览，多季剧详情页直接跳季
 - **搜索**：漫剧 / 短剧分类型，联想词、搜索历史、同一局域网手机扫码输入，键盘 / 联想 / 结果三栏同屏，超长联想词获焦横向滚动显示全名
-- **播放**：自动连播、系列剧跨季连播、片头片尾按剧跳过、0.75-2× 倍速、清晰度档位、定时停止、播完推荐；遇到平台未提供标准编码的集数可一键下一集或自动连跳；遥控器按键行为可自定义
+- **播放**：自动连播、系列剧跨季连播、片头片尾按剧跳过、0.75-2× 倍速、清晰度档位、定时停止、播完推荐；遇到平台未提供标准编码的集数可一键下一集或自动连跳；遥控器按键行为可自定义，遥控 ↑↓ 可选「选集面板 / 直切集数」；全屏播放支持鼠标手势（上滑下一集、下滑上一集、单击呼出控制条）；播放接口持续空响应时自动换匿名设备身份重试
+- **手机遥控**：列表页顶栏「手机遥控」扫码后，手机浏览器立刻变成遥控器——方向 / 确认 / 返回 / 菜单、进度拖动、上一集 / 下一集、倍速、静音、弹幕开关、搜索与续播都在手机上；官方与三方片源都支持（三方片源无弹幕），遥控期间电视保持常亮，实物遥控器可同时操作；地址首次扫码后永久有效，电视启动即静默待连，无需每次开二维码窗口。手机端的入口安装、多台电视管理、添加到桌面与 PWA 独立遥控器见 [hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)
 - **片源**：独立「片源」页，源由用户自行添加或手机扫码导入；支持聚合搜索、详情换源播放、多源测速优选，数据与本地内容库完全隔离
 - **本地库**：接入 WebDAV / NAS，自动扫描目录并缓存剧集，手机扫码填写连接，点击即全屏播放；连接信息仅存本机、不随备份导出
 - **账号**：扫码登录红果账号，观看记录可手动同步到云端，云端记录可随时手动刷新；本机记录与云端记录分区展示，云端记录带角标且只读，切换账号不影响本机数据
@@ -27,6 +28,12 @@
 - `scripts/`：正式包构建与发布脚本
 - `deploy/`：匿名装机统计的云函数部署
 - `docs/`：接口研究、部署与历史交付资料
+
+## 配套仓库
+
+- [hongguoTV](https://github.com/jycao2/hongguoTV)（本仓库）：电视端客户端。手机遥控所需的局域网服务、遥控页面与按键指令协议都内置在 APK 里，遥控二维码由电视生成。
+- [hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)：手机端遥控入口管理。扫码把电视上的 `http://<电视IP>:<端口>/<令牌>` 存到手机，支持命名、多台电视统一管理、点一下直接打开电视内置遥控页，并提供 H5 / PWA 与 Android APK 两种形式。**它只管理入口地址，不实现遥控本身**——遥控界面与按键逻辑都在电视端 APK 内，两个仓库需配套使用。
+- [hongguoTV-updates](https://github.com/jycao2/hongguoTV-updates)：电视端版本更新、APK 下载与 issue 集中受理。
 
 ## 隐私
 

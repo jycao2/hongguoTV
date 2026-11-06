@@ -6,8 +6,9 @@
 - 包名：`com.hongguotv.nativeapp`。
 - 收藏和历史保存在本机，可通过「本地备份与恢复」在重装后自动恢复。
 - APK 不含 JNI 库，可由 Android 在 ARM32、ARM64、x86、x86_64 上运行；视频解码能力依赖设备。
-- 源码分支：`main`，推送即触发发布构建。
+- 源码分支：`main`；推送不会自动发版，正式版由维护者手动触发 `.github/workflows/release.yml`。
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
+- 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
 ## 0.27.0 新增
