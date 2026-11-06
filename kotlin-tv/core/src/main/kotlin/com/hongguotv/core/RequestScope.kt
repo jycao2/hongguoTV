@@ -10,6 +10,9 @@ class RequestScope {
     private var cancelled = false
     private val calls = mutableSetOf<Call>()
 
+    /** 调用方据此丢弃「已被新意图取消」的结果与异常，避免把取消当成真实失败上报。 */
+    val isCancelled: Boolean @Synchronized get() = cancelled
+
     @Synchronized fun cancel() {
         cancelled = true
         calls.forEach { it.cancel() }

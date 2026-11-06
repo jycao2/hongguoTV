@@ -16,8 +16,8 @@ import android.content.res.Configuration
  * 一处覆盖即全局生效；改档位后 recreate() 重建即生效（与「系统风格」切换同款交互）。
  */
 object UiScale {
-    /** 档位循环用；不做自由滑杆——遥控器很难操作滑杆，档位循环与现有设置风格一致。 */
-    val LEVELS = listOf("标准" to 1.0f, "大" to 1.15f, "特大" to 1.3f)
+    /** 档位选择用；不做自由滑杆——遥控器很难操作滑杆，档位与现有设置风格一致。 */
+    val LEVELS = listOf("标准" to 1.0f, "大" to 1.15f, "特大" to 1.3f, "极大" to 1.45f)
     private const val PREFS = "native-library-v1"
     private const val KEY = "uiScale"
 
@@ -29,11 +29,10 @@ object UiScale {
 
     fun label(context: Context): String = LEVELS[index(context)].first
 
-    /** 切到下一档并落盘，返回新档位下标。调用方随后 recreate() 让新密度生效。 */
-    fun cycle(context: Context): Int {
-        val next = (index(context) + 1) % LEVELS.size
+    /** 选中某一档并落盘。调用方随后 recreate() 让新密度生效。 */
+    fun set(context: Context, index: Int) {
+        val next = index.coerceIn(0, LEVELS.size - 1)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY, next).apply()
-        return next
     }
 
     /** 包一层带缩放密度的 Context；标准档原样返回，零开销。 */

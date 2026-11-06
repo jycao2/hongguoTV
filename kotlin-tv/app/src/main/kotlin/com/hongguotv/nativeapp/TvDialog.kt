@@ -226,8 +226,9 @@ object TvDialog {
         anchorView: View? = null
     ): AlertDialog {
         val dialog = AlertDialog.Builder(activity).create()
-        val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(title(activity, title))
+        // 标题钉在卡片顶部，不进滚动区：特大/极大档选项行变高放不下时只滚选项，标题始终可见
+        val heading = title(activity, title)
+        val itemsHost = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         // 行宽按最长文案统一：窄弹窗 + 等宽选项行，文字左对齐（Button 默认居中）
         val tp = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 15f * activity.resources.displayMetrics.scaledDensity
@@ -263,10 +264,10 @@ object TvDialog {
             view.nextFocusUpId = items.getOrNull(index - 1)?.id ?: view.id
             view.nextFocusDownId = items.getOrNull(index + 1)?.id ?: view.id
             // 下限只兜极端短的选项（如「是/否」），宽度主要跟最长文案走
-            content.addView(view, LinearLayout.LayoutParams(itemWidth.coerceIn(dp(activity, 120), dp(activity, 480)), -2).apply { bottomMargin = dp(activity, 8) })
+            itemsHost.addView(view, LinearLayout.LayoutParams(itemWidth.coerceIn(dp(activity, 120), dp(activity, 480)), -2).apply { bottomMargin = dp(activity, 8) })
         }
         val scroll = android.widget.ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
-        scroll.addView(content, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        scroll.addView(itemsHost, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
         // 卡片高度上限：锚点弹窗压到「按钮顶部 → 屏幕底部」以内（小屏电视也放得下），普通弹窗约 60% 屏高。
         // 交给 styleWindow 在 show 前按真实宽度预先压缩——那里的高度才算得准（见 styleWindow 注释）
         val a = anchorView
@@ -276,6 +277,7 @@ object TvDialog {
             activity.resources.displayMetrics.heightPixels - loc[1] - dp(activity, 24)
         } else (activity.resources.displayMetrics.heightPixels * 0.6f).toInt()
         val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(heading)
         root.addView(scroll)
         // 不设取消按钮：返回键就能关。extra（如搜索历史的「清空历史」）是功能入口，保留
         if(extra != null) {

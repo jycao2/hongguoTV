@@ -134,7 +134,14 @@ class LanRemoteHub(
 
     init { acceptThread.start() }
 
-    val clientCount: Int get() = clients.size
+    /**
+     * 在线设备数，不是连接数。
+     *
+     * 用客户端内网 IP 去重：同一台手机不管开几个标签页、用哪个浏览器（Chrome /
+     * 系统浏览器 / PWA），在 LAN 上都是同一个 IP，只算一台设备；不同手机 IP
+     * 不同，各算各的。遥控本身要求和电视同一局域网，所以 IP 能稳定区分物理设备。
+     */
+    val clientCount: Int get() = clients.map { it.socket.inetAddress.hostAddress }.distinct().size
 
     override fun close() {
         stopped.set(true)
