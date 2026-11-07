@@ -1,6 +1,23 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#FF694F" android:pathData="M0,0H108V108H0Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M54,24C21,17 16,47 26,70C34,89 50,90 54,84C58,90 74,89 82,70C92,47 87,17 54,24Z"/>
-    <path android:fillColor="#3FA45B" android:pathData="M54,24Q55,7 77,10Q70,28 54,24Z"/>
-    <path android:fillColor="#FF694F" android:pathData="M45,42L45,70L68,56Z"/>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 应用内品牌标：底充满 108，白色电视放大到 62×42（占宽 57%、四周留白 23%），
+         屏幕圆角 8、播放键 20×26 光学居中、支杆 6 宽、底座 34×6 全圆角 -->
+    <path
+        android:fillColor="#FFFF6A47"
+        android:pathData="M0,0H108V108H0Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M31,25H77A8,8 0 0 1 85,33V59A8,8 0 0 1 77,67H31A8,8 0 0 1 23,59V33A8,8 0 0 1 31,25Z" />
+    <path
+        android:fillColor="#FFFF5C3D"
+        android:pathData="M46,33L66,46L46,59Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M51,67H57V77H51Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M40,77H68A3,3 0 0 1 71,80A3,3 0 0 1 68,83H40A3,3 0 0 1 37,80A3,3 0 0 1 40,77Z" />
 </vector>

@@ -28,6 +28,7 @@ keystore.properties
 /captures/
 /downloads/
 /tmp/
+icon-preview.png
 
 # Delivery artifacts, native intermediates, local runtime
 /outputs/

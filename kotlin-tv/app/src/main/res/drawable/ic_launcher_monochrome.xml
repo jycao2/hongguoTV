@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 主题图标（Android 13 单色层）：屏幕实心、播放键挖空，系统按主题色重新着色 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M38,34H70A6,6 0 0 1 76,40V58A6,6 0 0 1 70,64H38A6,6 0 0 1 32,58V40A6,6 0 0 1 38,34Z M48,40L62,49L48,58Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M52,64H56V71H52Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M44,71H64A2,2 0 0 1 66,73A2,2 0 0 1 64,75H44A2,2 0 0 1 42,73A2,2 0 0 1 44,71Z" />
+</vector>

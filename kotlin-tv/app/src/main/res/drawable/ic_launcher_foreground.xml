@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 电视屏：44×30、圆角 6，四周留白充足；播放键按光学重心略偏右，下面只有窄支杆 + 短底座 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,34H70A6,6 0 0 1 76,40V58A6,6 0 0 1 70,64H38A6,6 0 0 1 32,58V40A6,6 0 0 1 38,34Z" />
+    <path
+        android:fillColor="#FFFF5C3D"
+        android:pathData="M48,40L62,49L48,58Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M52,64H56V71H52Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M44,71H64A2,2 0 0 1 66,73A2,2 0 0 1 64,75H44A2,2 0 0 1 42,73A2,2 0 0 1 44,71Z" />
+</vector>

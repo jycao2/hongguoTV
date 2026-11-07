@@ -1,0 +1,9 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <!-- 品牌珊瑚红渐变底（左上偏亮、右下压深），与列表页强调色同一套 -->
+    <gradient
+        android:angle="315"
+        android:startColor="#FFFF8A62"
+        android:endColor="#FFDF3A1D"
+        android:type="linear" />
+</shape>
