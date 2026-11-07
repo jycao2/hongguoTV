@@ -2708,7 +2708,8 @@ class MainActivity: Activity() {
             if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
         }, { problem -> error(body,problem) { openDetail(series,resume,detailAutoplay,cloud) } })
     }
-    private fun showDetail(focusEpisode: Boolean) {
+    /** focusPager：翻页后焦点留在翻页按钮上（-1=‹，1=›），0=按 focusEpisode 决定，见函数末尾。 */
+    private fun showDetail(focusEpisode: Boolean, focusPager: Int = 0) {
         invalidatePage(); releaseCatalogViews(); screen="detail"; val data=detail ?: return showCatalog()
         val body=base("剧集详情")
         val scroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false }; val content=column(); scroll.addView(content); body.addView(scroll,lp(-1,0).apply { weight=1f })
@@ -2786,10 +2787,10 @@ class MainActivity: Activity() {
             val pager=row().apply { setPadding(0,dp(8),0,dp(4)); gravity=Gravity.CENTER_VERTICAL }
             pager.addView(text("集数",13f,muted))
             pager.addView(Space(this),lp(0,1).apply { weight=1f })
-            prevPager=button("‹",detailEpisodePage>0) { if(detailEpisodePage>0){detailEpisodePage--;showDetail(true)} }
+            prevPager=button("‹",detailEpisodePage>0) { if(detailEpisodePage>0){detailEpisodePage--;showDetail(true,-1)} }
             pager.addView(prevPager)
             pager.addView(text("${detailEpisodePage+1}/${totalPages}",12f,muted).apply { setPadding(dp(8),0,dp(8),0) })
-            nextPager=button("›",detailEpisodePage<totalPages-1) { if(detailEpisodePage<totalPages-1){detailEpisodePage++;showDetail(true)} }
+            nextPager=button("›",detailEpisodePage<totalPages-1) { if(detailEpisodePage<totalPages-1){detailEpisodePage++;showDetail(true,1)} }
             pager.addView(nextPager)
             info.addView(pager)
         }
@@ -2883,7 +2884,18 @@ class MainActivity: Activity() {
                 v.nextFocusDownId=if(rowIndex<extraRows.lastIndex) extraRows[rowIndex+1].getOrNull(i.coerceAtMost(extraRows[rowIndex+1].lastIndex))?.id ?: v.id else v.id
             }
         }
-        if(focusEpisode) episodes.getOrNull((episodeIndex-pageStart).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
+        // 翻页后焦点留在翻页按钮上，方便连按继续翻；翻到头/尾时落到另一个仍能用的按钮，
+        // 避免焦点停在一个按下没反应的按钮上。
+        val pagerTarget=when {
+            focusPager<0 -> if(detailEpisodePage<=0) nextPager ?: prevPager else prevPager ?: nextPager
+            focusPager>0 -> if(detailEpisodePage>=totalPages-1) prevPager ?: nextPager else nextPager ?: prevPager
+            else -> null
+        }
+        when {
+            pagerTarget!=null -> pagerTarget.requestFocus()
+            focusEpisode -> episodes.getOrNull((episodeIndex-pageStart).coerceIn(0,episodes.lastIndex))?.requestFocus()
+            else -> play.requestFocus()
+        }
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         updater.interrupt(); cancelWarm()
