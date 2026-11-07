@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import com.hongguotv.core.seasonNumber
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -48,6 +49,36 @@ object ThirdCms {
     fun searchKey(name: String, year: String?): String =
         name.replace("《", "").replace("》", "").replace(Regex("\\s+"), "").lowercase() +
             "|" + year?.trim().orEmpty()
+
+    /** 季标记：兼容「第二季」「第2季」「第 2 部」，数字与「季/部」之间允许空格。 */
+    private val SeasonMark = Regex("第\\s*([0-9零〇一二三四五六七八九十百千]+)\\s*(?:季|部)")
+
+    /** 系列主名：去掉季标记和两端的括号/分隔符，「某剧（第二季）」与「某剧」算同一个系列。 */
+    fun seriesBase(name: String): String = name.replace(SeasonMark, "")
+        .trim().trim(' ', '\u3000', '：', ':', '-', '—', '_', '·', '（', '）', '(', ')',
+            '【', '】', '[', ']', '《', '》')
+
+    /** 季号：复用红果的季号规则，先去掉空格，避免「第 2 季」被漏判。 */
+    fun seriesNumber(name: String): Int = seasonNumber(name.replace(Regex("\\s+"), ""))
+
+    /** 系列剧：同一片源里按主名归拢的全部分季（含当前季，按季号排序）。
+     *  只认带「第N季/部」的真续季——同名但没有季号的多半是重复上架，不能算系列；
+     *  同季号的重复条目只留一条（当前季优先）。不足两季时返回空，详情页据此隐藏区块。 */
+    fun series(current: ThirdDetail, candidates: List<ThirdDetail>): List<ThirdDetail> {
+        val base = seriesBase(current.video.name)
+        if(base.isEmpty()) return emptyList()
+        val rows = LinkedHashMap<Int, ThirdDetail>()
+        rows[seriesNumber(current.video.name)] = current
+        candidates.forEach { item ->
+            if(item.video.id == current.video.id) return@forEach
+            if(seriesBase(item.video.name) != base) return@forEach
+            val number = seriesNumber(item.video.name)
+            if(number == Int.MAX_VALUE) return@forEach
+            if(!rows.containsKey(number)) rows[number] = item
+        }
+        if(rows.size < 2) return emptyList()
+        return rows.entries.sortedBy { if(it.key == Int.MAX_VALUE) 0 else it.key }.map { it.value }
+    }
 
     fun episodeCount(detail: ThirdDetail): Int = detail.groups.sumOf { it.second.size }
 
@@ -333,6 +364,18 @@ class ThirdCmsClient {
         val parsed = try { ThirdCms.parseDetailPage(response.body!!) } catch(_: Exception) { null }
             ?: return ThirdSearchResult(null, "该片源未开启搜索")
         store(key, parsed); return ThirdSearchResult(parsed, null)
+    }
+
+    /** 系列剧候选：按片名主名在同一片源里搜一次，结果自带封面与播放地址，切季可直接播。
+     *  按「源 + 主名」缓存，同一系列的多季来回切不重复请求；源站关闭搜索或网络失败时返回空。 */
+    fun seriesCandidates(api: String, name: String): List<ThirdDetail> {
+        val base = ThirdCms.seriesBase(name)
+        if(base.isEmpty()) return emptyList()
+        val key = "$api|series|$base"
+        @Suppress("UNCHECKED_CAST")
+        (cached(key) as? List<ThirdDetail>)?.let { return it }
+        val details = searchPage(api, base, 1).page?.details.orEmpty()
+        store(key, details); return details
     }
 
     /** 探活：HTTP 200 + JSON 含 list 字段即通过，返回条目数；失败带明确原因。 */

@@ -160,6 +160,16 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var detailSource: ThirdSource? = null
     private var detailGroup = 0
     private var synopsisExpanded = false
+    /** 系列剧：同片源内按「第N季」识别出的全部分季（含当前季）。异步查找，到位后原地插入不重建。 */
+    private var seriesKey = ""
+    private var seriesSeasons: List<ThirdDetail> = emptyList()
+    private var seriesRequested = false
+    private var seriesHost: LinearLayout? = null
+    /** 详情页焦点接线：系列条是异步插入的，接线必须能重算。 */
+    private var detailMainFocus: TextView? = null
+    private var detailTabButtons: List<TextView> = emptyList()
+    private var detailEpisodeGrid: RecyclerView? = null
+    private var detailSeriesChips: List<TextView> = emptyList()
 
     // ---- 收藏态 ----
     private var favoriteEntries: List<ThirdFavorite> = emptyList()
@@ -2102,12 +2112,24 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         autoFallbackGroups.clear()
         autoFallbackSources.clear()
         stallAdviceShown = false; sourceSwitchInFlight = false
+        // 换了一部片才重置系列剧状态：从系列条切到同系列另一季时沿用已找到的分季，区块不会闪一下再回来
+        val key = detailSource?.id.orEmpty() + "|" + data.video.id
+        if(key != seriesKey) {
+            if(seriesSeasons.none { it.video.id == data.video.id }) {
+                seriesSeasons = emptyList(); seriesHost = null
+            }
+            seriesKey = key
+        }
+        // 每次进详情允许重新查一次（上次网络失败可恢复）；客户端有缓存，成功过的几乎零成本
+        seriesRequested = false
         mode = Mode.DETAIL
         rebuild()
     }
 
     private fun renderDetail(container: LinearLayout) {
         val data = detail ?: run { mode = Mode.BROWSE; renderBrowse(container); return }
+        detailMainFocus = null; detailTabButtons = emptyList()
+        detailEpisodeGrid = null; detailSeriesChips = emptyList()
         val body = column()
 
         // 顶栏：返回按钮与片名同行、垂直居中对齐
@@ -2191,6 +2213,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         favoriteButton.nextFocusLeftId = start.id
         content.addView(mainActions)
 
+        // 系列剧条：同源同名分季（第二季/第三季…）。首次进详情异步查找，到位后原地插入，
+        // 不整页重建，避免用户正在翻集数时焦点被抢回主按钮
+        val seriesBox = column()
+        content.addView(seriesBox)
+        seriesHost = seriesBox
+        paintSeries(seriesBox, data)
+        if(!seriesRequested && seriesSeasons.none { it.video.id == data.video.id }) requestSeries(data)
+
         // 播放组 tabs：左右互连，向下进入分集网格；主按钮向下先落到第一个线路标签
         val tabButtons = mutableListOf<TextView>()
         if(data.groups.size > 1) {
@@ -2204,13 +2234,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 tabButtons += tab
             }
             content.addView(tabRow)
-            tabButtons.firstOrNull()?.let { tab ->
-                mainFocus?.nextFocusDownId = tab.id
-                tab.nextFocusUpId = mainFocus?.id ?: View.NO_ID
-            }
         }
 
         // 分集网格
+        var episodeGrid: RecyclerView? = null
         val episodes = data.groups.getOrNull(playGroup)?.second.orEmpty()
         if(episodes.isEmpty()) {
             content.addView(text("该线路暂无可用剧集", 14f, muted).apply { setPadding(0, dp(8), 0, 0) })
@@ -2227,10 +2254,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 } }
             }
             content.addView(recycler, lp(-1, -2))
-            // 有线路标签时向下从标签进网格，否则直接从主按钮进网格
-            if(tabButtons.isEmpty()) mainFocus?.nextFocusDownId = recycler.id
-            else tabButtons.forEach { it.nextFocusDownId = recycler.id }
+            episodeGrid = recycler
         }
+
+        // 焦点接线统一在这里做：主按钮 → 系列剧 → 线路 → 分集网格，三段任一缺失都自动跳过
+        detailMainFocus = mainFocus
+        detailTabButtons = tabButtons
+        detailEpisodeGrid = episodeGrid
+        wireDetailFocus()
 
         body.addView(scroll, lp(-1, 0).apply { weight = 1f })
         container.addView(body, lp(-1, 0).apply { weight = 1f })
@@ -2241,6 +2272,77 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     private fun renderDetailRefresh() {
         if(mode == Mode.DETAIL) rebuild()
+    }
+
+    /** 系列剧条：当前季高亮，其它季标注已有进度；点一下切到那一季（详情由同一片源的搜索结果直接带回）。 */
+    private fun paintSeries(host: LinearLayout, data: ThirdDetail) {
+        host.removeAllViews()
+        detailSeriesChips = emptyList()
+        val seasons = seriesSeasons
+        if(seasons.size < 2) { wireDetailFocus(); return }
+        val heading = row()
+        heading.addView(text("系列剧", 13f, TvStyle.accent), lp(-2, -2))
+        heading.addView(text("共 ${seasons.size} 季 · 左右切换", 12f, muted).apply { setPadding(dp(8), 0, 0, 0) }, lp(-2, -2))
+        host.addView(heading, lp(-1, -2).apply { topMargin = dp(2); bottomMargin = dp(6) })
+
+        val strip = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false }
+        val line = row()
+        strip.addView(line)
+        val chips = mutableListOf<TextView>()
+        seasons.forEach { season ->
+            val current = season.video.id == data.video.id
+            val number = ThirdCms.seriesNumber(season.video.name)
+            val label = if(number == Int.MAX_VALUE) season.video.name.take(12) else "第 $number 季"
+            val seen = if(current) "" else store.progress(detailSource?.id.orEmpty(), season.video.id)
+                ?.let { " · 看到第${it.episode + 1}集" }.orEmpty()
+            val chip = addButton(line, label + seen, current) { if(!current) openDetail(season, detailSource) }
+            if(current) chip.setTextColor(TvStyle.accent)
+            chips += chip
+        }
+        host.addView(strip, lp(-1, -2))
+        detailSeriesChips = chips
+        wireDetailFocus()
+    }
+
+    /** 系列剧查找：用去掉季号的主名在同一片源里搜一次（客户端 10 分钟内复用），
+     *  结果自带播放地址，切季无需二次请求。失败或没有其它季时静静不显示，绝不影响详情渲染。 */
+    private fun requestSeries(data: ThirdDetail) {
+        val source = detailSource ?: return
+        val base = ThirdCms.seriesBase(data.video.name)
+        if(base.isEmpty()) return
+        val gen = generation
+        val key = seriesKey
+        seriesRequested = true
+        executor.execute {
+            val picked = try {
+                ThirdCms.series(data, client.seriesCandidates(source.api, base))
+            } catch(_: Exception) { emptyList() }
+            main.post {
+                if(gen != generation || key != seriesKey) return@post
+                seriesSeasons = picked
+                val host = seriesHost ?: return@post
+                if(detail?.video?.id != data.video.id || host.parent == null) return@post
+                paintSeries(host, data)
+            }
+        }
+    }
+
+    /** 详情页焦点接线：主按钮 → 系列剧 → 线路 → 分集网格。系列条异步插入，所以每次变化都重算一遍。 */
+    private fun wireDetailFocus() {
+        val main = detailMainFocus ?: return
+        val chips = detailSeriesChips
+        val tabs = detailTabButtons
+        val grid = detailEpisodeGrid
+        val firstTab = tabs.firstOrNull()
+        main.nextFocusDownId = chips.firstOrNull()?.id ?: firstTab?.id ?: grid?.id ?: View.NO_ID
+        chips.forEachIndexed { index, chip ->
+            chip.nextFocusLeftId = chips.getOrNull(index - 1)?.id ?: View.NO_ID
+            chip.nextFocusRightId = chips.getOrNull(index + 1)?.id ?: View.NO_ID
+            chip.nextFocusUpId = main.id
+            chip.nextFocusDownId = firstTab?.id ?: grid?.id ?: View.NO_ID
+        }
+        firstTab?.nextFocusUpId = chips.lastOrNull()?.id ?: main.id
+        tabs.forEach { it.nextFocusDownId = grid?.id ?: View.NO_ID }
     }
 
     /** 详情页收藏/取消收藏：只记录影片与来源源，随主备份迁移。 */

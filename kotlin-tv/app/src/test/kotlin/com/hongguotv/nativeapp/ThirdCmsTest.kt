@@ -255,4 +255,55 @@ class ThirdCmsTest {
         )
         assertEquals(2, ThirdCms.dedupeHits(hits, null).size)
     }
+
+    // ---------- 系列剧 ----------
+
+    @Test
+    fun `seriesBase 去掉季标记与两端括号分隔符`() {
+        assertEquals("无敌小神医", ThirdCms.seriesBase("无敌小神医 第二季"))
+        assertEquals("无敌小神医", ThirdCms.seriesBase("无敌小神医（第 2 季）"))
+        assertEquals("无敌小神医", ThirdCms.seriesBase("《无敌小神医》第二部"))
+        assertEquals("无敌小神医", ThirdCms.seriesBase("无敌小神医"))
+    }
+
+    @Test
+    fun `seriesNumber 兼容空格与中文数字`() {
+        assertEquals(2, ThirdCms.seriesNumber("某剧 第 2 季"))
+        assertEquals(12, ThirdCms.seriesNumber("某剧第十二季"))
+        assertEquals(Int.MAX_VALUE, ThirdCms.seriesNumber("某剧"))
+    }
+
+    @Test
+    fun `series 归拢同主名分季并按季号排序`() {
+        val current = detail("2", "末日重生 第二季", "2025", 10)
+        val candidates = listOf(
+            detail("3", "末日重生 第三季", "2026", 8),
+            detail("1", "末日重生 第一季", "2024", 20),
+            detail("9", "另一部剧", "2025", 10)
+        )
+        assertEquals(listOf("1", "2", "3"), ThirdCms.series(current, candidates).map { it.video.id })
+    }
+
+    @Test
+    fun `series 未标季号的首季也能与后续季归为一组`() {
+        val current = detail("1", "末日重生", "2025", 10)
+        val candidates = listOf(detail("2", "末日重生 第二季", "2026", 10))
+        assertEquals(listOf("1", "2"), ThirdCms.series(current, candidates).map { it.video.id })
+    }
+
+    @Test
+    fun `series 同名无季号的重复上架不算系列`() {
+        val current = detail("1", "末日重生", "2025", 10)
+        assertTrue(ThirdCms.series(current, listOf(detail("2", "末日重生", "2025", 12))).isEmpty())
+    }
+
+    @Test
+    fun `series 同季号重复条目只留当前季`() {
+        val current = detail("2", "末日重生 第二季", "2025", 10)
+        val candidates = listOf(
+            detail("1", "末日重生 第一季", "2024", 10),
+            detail("8", "末日重生 第2季", "2025", 12)
+        )
+        assertEquals(listOf("1", "2"), ThirdCms.series(current, candidates).map { it.video.id })
+    }
 }
