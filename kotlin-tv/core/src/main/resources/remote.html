@@ -18,7 +18,8 @@
   body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   button{appearance:none;font-family:inherit;cursor:pointer}
 
-  .bar{display:flex;align-items:center;gap:8px;padding:12px 18px 8px;flex:0 0 auto}
+  /* 右键菜单定位在 bar 内，宽屏内容居中后仍贴着「···」而不是跑到屏幕右边缘 */
+  .bar{display:flex;align-items:center;gap:8px;padding:12px 18px 8px;flex:0 0 auto;position:relative}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
   .dot.off{background:var(--dim)}
   .ip{font-size:12px;color:var(--muted);letter-spacing:.02em}
@@ -200,6 +201,53 @@
   .full button.ghost{background:transparent;border:1px solid var(--outline);color:var(--muted);
     font-size:14px;padding:12px 22px;border-radius:11px}
   .full .foot{position:absolute;bottom:34px;font-size:11px;color:var(--dim)}
+
+  /* 横屏：手机全屏被系统转成横向、平板横放、电脑浏览器都会走到这里。
+     单列布局在横向视口里会被抻成一条条横杠（进度条横贯全屏、三个参数卡变成细长条），
+     下面那截搜索/选集还会掉出首屏。改成左右两栏、按可用高度压间距，宽度再居中限死。 */
+  @media (orientation:landscape) and (max-height:640px){
+    .bar{max-width:1080px;margin:0 auto;width:100%;padding:8px 18px 6px}
+    .modebar{padding:0 18px}
+    #v-panel.on,#v-browse.on{width:100%;max-width:1080px;margin:0 auto;box-sizing:border-box;
+      display:grid;align-content:center;column-gap:26px;padding:0 18px}
+
+    #v-panel.on{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)}
+    #v-panel .now{grid-area:1/1;padding:6px 0 0}
+    #v-panel .prog{grid-area:2/1;padding:16px 0 0}
+    #v-panel .ctrl{grid-area:3/1;padding:10px 0 0}
+    #v-panel .params{grid-area:1/2;padding:6px 0 0}
+    #v-panel .searchwrap{grid-area:2/2;padding:14px 0 0}
+    #v-panel .quick{grid-area:3/2;padding:12px 0 0;justify-content:flex-start;gap:10px}
+    #v-panel .openlist{grid-area:4/2;margin:14px 0 0;padding:10px;font-size:12.5px}
+    #v-panel .panelnote{display:none}
+
+    /* 浏览形态右下角是竖着排的「继续观看」，横向高度不够时让它自己滚，不要把标题顶出屏幕 */
+    #v-browse.on{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);align-content:stretch}
+    #v-browse .modehint{grid-area:1/1/2/3;padding-top:4px;min-height:0}
+    #v-browse .padwrap{grid-area:2/1/4/2;padding:8px 0 0;gap:10px}
+    #v-browse .pad{width:172px;height:172px}
+    #v-browse .pad button{width:44px;height:44px}
+    #v-browse .pad .ok{width:50px;height:50px}
+    #v-browse .searchwrap{grid-area:2/2;padding:8px 0 0}
+    #v-browse .resume{grid-area:3/2;padding:10px 0 0}
+    /* 横屏竖向空间紧张：海报压扁到 104px，卡片窄一点，标题两行也不至于被裁掉 */
+    #v-browse .card{flex:0 0 96px}
+    #v-browse .card .cover{height:104px}
+    #v-browse .card .ct{margin-top:6px;font-size:12px}
+
+    .sheet{max-width:640px;margin:0 auto;width:100%}
+  }
+
+  /* 更矮的横屏（16:9 手机、车机）：再把方向盘和海报压一档，保证「继续观看」标题完整露出 */
+  @media (orientation:landscape) and (max-height:470px){
+    #v-browse .pad{width:148px;height:148px}
+    #v-browse .pad button{width:40px;height:40px}
+    #v-browse .pad .ok{width:46px;height:46px}
+    #v-browse .card .cover{height:84px}
+    #v-browse .resume h2{font-size:12px;margin-bottom:8px}
+    #v-panel .prog{padding-top:12px}
+    #v-panel .ctrl{padding-top:6px}
+  }
 </style>
 </head>
 <body>
@@ -210,13 +258,14 @@
   <span class="spacer"></span>
   <button class="more" id="fs" title="全屏" hidden>⛶</button>
   <button class="more" id="more">···</button>
+  <!-- 菜单放进 bar：宽屏把内容收窄居中后，绝对定位仍跟着「···」走 -->
+  <div class="menu" id="menu">
+    <button id="m-exit">返回上一级（退回详情或收起菜单）</button>
+    <button id="m-detach">断开遥控</button>
+    <div class="addr" id="m-addr"></div>
+  </div>
 </div>
 <div class="banner" id="banner">电视已暂停。请在电视上重新打开红果TV，回来后会接着遥控。</div>
-<div class="menu" id="menu">
-  <button id="m-exit">返回上一级（退回详情或收起菜单）</button>
-  <button id="m-detach">断开遥控</button>
-  <div class="addr" id="m-addr"></div>
-</div>
 
 <!-- 形态切换：两个形态都要能点到，否则播放中就无法切到浏览、也就没有方向键可用 -->
 <div class="modebar">
@@ -847,16 +896,32 @@
     // HTML 里按钮默认带 hidden；只有确认支持全屏时才显示出来，否则永远看不见。
     btn.hidden = false;
     function cur(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement; }
+    // 进全屏后浏览器会沿用手机当时的姿态，不少内核（国产浏览器尤其）在全屏时直接转成横向，
+    // 而这一页是按竖屏手机排的。能锁就锁竖屏；锁不住的（桌面 Chrome、老内核）走上面的横屏两栏样式。
+    function lockPortrait(){
+      var so = screen.orientation;
+      if (!so || !so.lock) return;
+      try { var p = so.lock("portrait"); if (p && p.catch) p.catch(function(){}); } catch(err){}
+    }
+    function unlockOrientation(){
+      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(err){}
+    }
     btn.onclick = function(e){
       e.stopPropagation();
       if (cur()) {
         var exit = document.exitFullscreen || document.webkitExitFullscreen;
         try { exit.call(document); } catch(err){}
+        unlockOrientation();
       } else {
         try { var p = req.call(root); if (p && p.catch) p.catch(function(){}); } catch(err){}
+        lockPortrait();
       }
     };
-    document.addEventListener("fullscreenchange", function(){ btn.hidden = !!cur(); });
+    document.addEventListener("fullscreenchange", function(){
+      var on = !!cur();
+      btn.hidden = on;
+      if (on) lockPortrait(); else unlockOrientation();
+    });
     document.addEventListener("webkitfullscreenchange", function(){ btn.hidden = !!cur(); });
   })();
   $("lost-retry").onclick = function(){
