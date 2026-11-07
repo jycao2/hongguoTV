@@ -43,7 +43,7 @@ data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
 data class WarmReport(val requested: Int, val cached: Int, val batch: Int, val route: String?)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 /** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。 */
-class UnplayableVideoException(message: String): IOException(message)
+class UnplayableVideoException(message: String, val diagnostic: String = ""): IOException(message)
 /** 播放信息接口返回了 HTTP 200 空体；已按有界退避重读仍未成功。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 
@@ -475,7 +475,28 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  `Cookie` header. No signature headers are involved in this call. */
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
-        return streamFromModel(videoModel(id),maxQuality)
+        try {
+            return streamFromModel(videoModel(id),maxQuality)
+        } catch (unplayable: UnplayableVideoException) {
+            // 站方对同一集会间歇性下发降级模型（2026-11-08 路由标记诊断证实：来自 video_tab 主接口，
+            // video_list 全部清晰度都是 bytevc2 加密 blob，旧 POST 路由已全空、无路由可跳，换身份也不影响下发）。
+            // 降级按请求随机出现：剔除坏缓存、换一台匿名设备，再多赌几轮正常模型，轮间稍作退避；
+            // 连续降级才把异常交给上层，由「自动跳过不兼容集数」接手。
+            var failure=unplayable
+            for(round in 1 until PLAYBACK_RETRY_ROUNDS) {
+                if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("播放请求已取消")
+                modelCache.evict(id)
+                playbackSession.renew(http)
+                if(round>1) Thread.sleep(RETRY_BACKOFF_MS*(round-1))
+                try {
+                    val (level,preferAlt)=RETRY_PLANS[round-1]
+                    return streamFromModel(videoModel(id,level,preferAlt),maxQuality)
+                } catch(next: UnplayableVideoException) {
+                    failure=next
+                }
+            }
+            throw failure
+        }
     }
     private fun streamFromModel(model: JSONObject, maxQuality: Int): StreamInfo {
         val raw=model.opt("fallback_api")
@@ -488,13 +509,30 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
             it.second.str("main_url").isNotEmpty() && it.second.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
         }.map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
-        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw UnplayableVideoException("本集片源暂不兼容，请播放下一集")
+        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw UnplayableVideoException(
+            "本集片源暂不兼容，请播放下一集",
+            // 诊断：不整段截断（截断会漏掉后面的清晰度条目），逐条给紧凑摘要，
+            // 并带上该模型来源路由，定位降级模型由哪条接口下发。
+            "route="+model.optString(ROUTE_KEY).ifEmpty { "unknown" }+" lvl="+model.optString(LEVEL_KEY).ifEmpty { "?" }+" video_list="+compactVideoList(videoList))
         val item=selected.third; var url=cleanUrl(item.str("main_url")); val seed=info.str("key_seed")
         if(seed.isNotEmpty()) url=MediaCrypto.decryptUrl(url,decode64(seed))
         if(!url.startsWith("https://") && !url.startsWith("http://")) throw IOException("播放地址无效")
         val key=item.str("spade_a").takeIf { it.isNotEmpty() }?.let(MediaCrypto::deriveKey)
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
+    }
+    /** 诊断用：每条清晰度给 `key:codec:高度:main_url形态/backup形态` 的紧凑摘要，条目间用分号，不再整段截断。 */
+    private fun compactVideoList(videoList: JSONObject): String = videoList.keys().asSequence().mapNotNull { k ->
+        val o=videoList.optJSONObject(k) ?: return@mapNotNull null
+        val codec=o.str("codec_type").ifEmpty { "?" }
+        val height=o.str("vheight").ifEmpty { o.str("height").ifEmpty { "?" } }
+        "$k:$codec:$height:"+urlShape(o.str("main_url"))+"/"+urlShape(o.str("backup_url_1"))
+    }.joinToString(";")
+    /** 地址归类：http=直接可播 URL；enc=base64 加密 blob（非 http 开头）；empty=缺字段。 */
+    private fun urlShape(value: String) = when {
+        value.isEmpty() -> "empty"
+        value.startsWith("http") -> "http"
+        else -> "enc"
     }
     /** 预热一整窗剧集的播放模型：命中缓存的不再请求，批量最多 15 集（站方上限 20）。
      *  失败不上抛——播放时按需取址仍是兜底，预取只负责把后续切集变成 0 次网络。 */
@@ -536,7 +574,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             val models=modelsOf(data).filterKeys { it in ids }
             if(models.isEmpty()) continue
             val now=clock()
-            models.forEach { (id,model) -> modelCache.put(id,model,now) }
+            // 批量取到的模型也会进缓存、后续被 stream 消费：路由标记在这里一起注入，诊断才能覆盖批量预热路径。
+            models.forEach { (id,model) -> modelCache.put(id,model.put(ROUTE_KEY,path),now) }
             return Batch(models.size,path)
         }
         return Batch(0,null)
@@ -592,9 +631,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  签名与匿名身份均如此），而这条 GET 接口同刻正常返回 `code 0` 与完整 `video_list`。
      *  参数取自官方 `GetVideoModelRequest` 的 snake_case 字段，缺任一字段会回 `100103`。
      *  失败一律返回 null，由调用方回退旧接口，不改变旧的空响应与身份轮换语义。 */
-    private fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile): JSONObject? {
+    private fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile, level: Int = 1, preferAlt: Boolean = false): JSONObject? {
         val extra=linkedMapOf(
-            "video_id" to id, "video_id_type" to "0", "device_level" to "1",
+            "video_id" to id, "video_id_type" to "0", "device_level" to level.toString(),
             "need_all_video_definition" to "1", "need_mp4_align" to "0",
             "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
             "from_video_id" to "",
@@ -603,7 +642,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/",
             "https://reading.snssdk.com/reading/bookapi/video_tab/multi_video_model/v1/",
         )
-        for(base in hosts) {
+        // preferAlt：重试诊断用，优先探测备用主机（两个主机可能落在不同后端集群）。
+        val ordered=if(preferAlt) hosts.reversed() else hosts
+        for(base in ordered) {
             val signed=signer.signPlayback(base,playbackValues(identity)+extra,null,PLAYBACK_UA)
             val request=signedBuilder(signed,identity).get().build()
             val body=try {
@@ -624,7 +665,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             val rows=data.optJSONObject("video_model_data") ?: data
             val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: continue
             val model=modelOf(row.opt("video_model")) ?: continue
-            return model
+            return model.put(ROUTE_KEY,"video_tab|"+base.removePrefix("https://").substringBefore('/'))
         }
         return null
     }
@@ -632,18 +673,18 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  旧接口按「旧路径 → 新路径 → 带场景段」依次尝试，第一个能取到 `video_model` 的用；
      *  记住上次成功的路由优先复用、其余路由各试一次，避免把请求量放大。
      *  空响应基本是「当前匿名身份已被站方用尽」：立刻换一台匿名设备再扫一轮，仍空才算失败。 */
-    private fun videoModel(id: String): JSONObject {
+    private fun videoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
         modelCache.get(id,clock())?.let { return it }
-        val model=fetchVideoModel(id)
+        val model=fetchVideoModel(id,level,preferAlt).put(LEVEL_KEY,level)
         modelCache.put(id,model,clock())
         return model
     }
-    private fun fetchVideoModel(id: String): JSONObject {
+    private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
         val identity=playbackSession.profile(http)
-        tabVideoModel(id,identity)?.let { return it }
-        // 旧接口与 video_tab 保持一致用 device_level=1：部分剧集在 3 下会把 360P–720P 全发成
+        tabVideoModel(id,identity,level,preferAlt)?.let { return it }
+        // 与 video_tab 保持同一 device_level（可诊断轮换）：部分剧集在 3 下会把 360P–720P 全发成
         // bytevc2（MP4 提取器读不出视频轨），只剩超出电视解码上限的 1080P bytevc1，降档无路可走。
-        val biz="""{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
+        val biz="""{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
         val single="""{"video_id":"$id","biz_param":$biz}""".toByteArray()
         val map="""{"biz_param":$biz,"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val routes=linkedMapOf(
@@ -689,7 +730,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                 val data=JSONObject(body)
                 val code=data.optInt("Code",data.optInt("code",0))
                 if(code==0) {
-                    videoModelOf(data)?.let { model -> return Sweep(model,path,false,null) }
+                    videoModelOf(data)?.let { model -> return Sweep(model.put(ROUTE_KEY,path),path,false,null) }
                     failure=IOException("播放信息为空")
                 } else failure=IOException("播放接口暂不可用（错误码 $code）")
                 break
@@ -722,6 +763,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         private const val BLANK_BACKOFF_MS=400L
         // 一次注册问一整窗：站方硬上限 20 集，取 15 留出余量。
         private const val BATCH_LIMIT=15
+        // 诊断专用：随模型进缓存的路由标记，streamFromModel 抛不兼容异常时写进 diagnostic。
+        private const val ROUTE_KEY="__route"
+        // 降级模型按请求间歇出现（实测约 1/3），一次取址失败后最多再赌两轮正常模型；仍降级才报不兼容。
+        private const val PLAYBACK_RETRY_ROUNDS=3
+        private const val RETRY_BACKOFF_MS=400L
+        // 重试轮次轮换参数：诊断降级窗口下 level=3 与备用主机是否下发电视可解码的转码集
+        // （1=现行为，3=官方档位；preferAlt=优先 reading.snssdk.com 备用主机）。
+        private val RETRY_PLANS=listOf(1 to true, 3 to false)
+        private const val LEVEL_KEY="__level"
         private val BATCH_ROUTES=listOf(
             "/novel/player/multi_video_model/v1/",
             "/novel/player/multi_video_model/preload/v1/",
@@ -758,6 +808,9 @@ class PlaybackModelCache(private val limit: Int = 120, private val ttlMillis: Lo
     }
     @Synchronized fun put(id: String, model: JSONObject, now: Long) {
         entries[id]=Entry(now,model)
+    }
+    @Synchronized fun evict(id: String) {
+        entries.remove(id)
     }
 }
 

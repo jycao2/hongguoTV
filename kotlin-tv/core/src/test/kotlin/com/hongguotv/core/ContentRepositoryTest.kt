@@ -37,6 +37,69 @@ class ContentRepositoryTest {
         assertThrows(UnplayableVideoException::class.java) { repo.stream("123",720) }
     }
 
+    @Test fun incompatibleSourceDiagnosticCarriesRouteAndEveryVideoListEntry() {
+        // 模拟站方降级模型：全部条目 main_url 都是加密 blob（非 http 开头），应逐条出现在诊断里且带路由。
+        // tab 接口响应缺 code:0 被 tabVideoModel 拒绝，模型实际来自第一条旧 POST 路由。
+        val repo=repository { request ->
+            if(request.url.host=="example.com") {
+                val rows=JSONObject()
+                    .put("video_1",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","qAABAGXlCAY==").put("backup_url_1","qAABAFoQKf1K=="))
+                    .put("video_5",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
+                JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
+            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+        }
+        val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
+        // mock 的 tab 接口缺 code:0 被 tabVideoModel 拒绝，模型实际来自第一条旧 POST 路由；
+        // 最终失败轮是重试计划的最后一项 (level=3, 主机)，诊断里带 lvl=3。
+        assertEquals("route=/novel/player/multi_video_model/v1/ lvl=3 video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty",error.diagnostic)
+    }
+
+    @Test fun tabRouteTagRidesAlongInIncompatibleDiagnostic() {
+        val repo=repository { request ->
+            if(request.url.host=="example.com") {
+                val rows=JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
+                JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
+            } else if(request.url.encodedPath==tabPath)
+                """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
+            else ""
+        }
+        val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
+        assertTrue(error.diagnostic.startsWith("route=video_tab|"))
+    }
+
+    @Test fun degradedModelIsEvictedAndRefetchedWithRenewedIdentity() {
+        var streamFetches=0
+        val repo=repository { request ->
+            if(request.url.host=="example.com") {
+                streamFetches++
+                val rows=JSONObject()
+                if(streamFetches==1) rows.put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","https://example.com/unsupported"))
+                else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
+                JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
+            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+        }
+        // 第一次取到降级模型，剔缓存换身份重取后拿到正常片源，而不是直接报不兼容。
+        assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
+        assertEquals(2,streamFetches)
+    }
+
+    @Test fun repeatedlyDegradedModelsKeepRetryingBeforeReportingIncompatible() {
+        // 站方对同一集间歇性下发降级模型（全清晰度 bytevc2），按请求随机出现：
+        // 连续两轮降级后第三轮拿到正常模型，应播放成功而不是提前报不兼容。
+        var streamFetches=0
+        val repo=repository { request ->
+            if(request.url.host=="example.com") {
+                streamFetches++
+                val rows=JSONObject()
+                if(streamFetches<3) rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
+                else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
+                JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
+            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+        }
+        assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
+        assertEquals(3,streamFetches)
+    }
+
     @Test fun legacyMissingCodecLabelKeepsQualityLimit() {
         val repo=streamRepository(Triple(720,"","https://example.com/legacy"),Triple(1080,"bytevc1","https://example.com/hevc"))
         assertEquals("720P",repo.stream("123",720).quality)
