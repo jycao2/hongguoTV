@@ -261,8 +261,10 @@ class LanRemoteHubTest {
             val (second, secondStream) = events(server, sid = "phoneb")
             second.use {
                 secondStream.nextSnapshot()
-                // 两台都在线，谁也不踢谁：家里人同时拿手机操作是常态，不是异常
-                assertTrue(waitUntil { server.clientCount == 2 })
+                // 两台都在线，谁也不踢谁：家里人同时拿手机操作是常态，不是异常。
+                // 单测两条连接都来自 127.0.0.1，clientCount 按内网 IP 去重后只算一台设备；
+                // 真实场景两台手机 IP 不同会各自计数，这里只验证「不互相踢」。
+                assertTrue(waitUntil { server.clientCount == 1 })
                 // 第一台不能收到 evicted。收到了页面会停掉自动重连，那台手机就废了
                 server.snapshot = PlaybackSnapshot(source = PlaybackSource.OFFICIAL, title = "双端", episode = 3)
                 assertEquals(3, firstStream.nextSnapshot().getInt("episode"))
@@ -281,7 +283,8 @@ class LanRemoteHubTest {
             firstStream.nextSnapshot()
             val (second, secondStream) = events(server, sid = "phoneb")
             secondStream.nextSnapshot()
-            assertTrue(waitUntil { server.clientCount == 2 })
+            // 两条连接同源（127.0.0.1），按 IP 去重后在线设备数为 1
+            assertTrue(waitUntil { server.clientCount == 1 })
             // 带 sid 的 detach 只断自己：另一台还在看电视，不该被一起收掉
             assertEquals(200, code(request(server, "POST", "/cmd", """{"cmd":"detach","sid":"phonea"}""")))
             assertTrue(waitUntil { server.clientCount == 1 })

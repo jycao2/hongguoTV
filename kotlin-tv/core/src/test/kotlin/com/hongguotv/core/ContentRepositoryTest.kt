@@ -70,6 +70,30 @@ class ContentRepositoryTest {
         assertEquals("1080P",repo.stream("123").quality)
     }
 
+    @Test fun warmFillsAWholeWindowInOneBatchAndSubsequentLookupHitsCache() {
+        val modelRequests=mutableListOf<String>()
+        val repo=repository { request ->
+            when {
+                request.url.host=="example.com" -> videoInfo()
+                request.url.encodedPath.startsWith("/novel/player/multi_video_model/") -> {
+                    modelRequests += request.url.encodedPath
+                    val rows=JSONObject()
+                    listOf("1","2","3").forEach { id ->
+                        rows.put(id,JSONObject().put("video_model",JSONObject().put("fallback_api","https://example.com/stream")))
+                    }
+                    JSONObject().put("code",0).put("data",rows).toString()
+                }
+                else -> ""
+            }
+        }
+        val report=repo.warm(listOf("1","2","3"))
+        assertEquals(3,report.cached)
+        assertEquals(1,modelRequests.size)
+        assertEquals("1080P",repo.stream("3").quality)
+        // 批量取过的集不再单独问一次模型接口。
+        assertEquals(1,modelRequests.size)
+    }
+
     @Test fun blankRouteFallsBackToNextRoute() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->

@@ -844,6 +844,8 @@
     var btn = $("fs");
     var req = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
     if (!req) { btn.hidden = true; return; }
+    // HTML 里按钮默认带 hidden；只有确认支持全屏时才显示出来，否则永远看不见。
+    btn.hidden = false;
     function cur(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement; }
     btn.onclick = function(e){
       e.stopPropagation();

@@ -44,6 +44,20 @@ fun main(args: Array<String>) {
     }
     val detail=repository.detail(seriesArg ?: repository.home(type=type).items.first().id)
     println("detail=${detail.series.title}; episodes=${detail.episodes.size}")
+    // --warm：验证「一次注册问一整窗」是否可用，以及切集是否真的命中缓存（耗时接近 0ms）。
+    if(args.contains("--warm")) {
+        val ids=detail.episodes.take(15)
+        val primary=repository.stream(ids.first())
+        println("primary quality=${primary.quality}")
+        val startedWarm=System.currentTimeMillis()
+        val report=repository.warm(ids)
+        println("warm requested=${report.requested} cached=${report.cached} batch=${report.batch} route=${report.route} ms=${System.currentTimeMillis()-startedWarm}")
+        val startedHit=System.currentTimeMillis()
+        val hit=repository.stream(ids.getOrElse(5) { ids.last() })
+        println("cacheHit quality=${hit.quality} ms=${System.currentTimeMillis()-startedHit}")
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
     val stream=repository.stream(detail.episodes.first())
     RemoteVideo(repository.http,stream).use { remote ->
         remote.prepare(); val first=remote.read(0,1024*1024)

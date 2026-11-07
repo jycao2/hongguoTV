@@ -39,6 +39,8 @@ data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val rankin
 /** One website genre selector entry; the slug selects the category path, ids echo back for validation. */
 data class Genre(val slug: String, val name: String, val ids: List<String>)
 data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
+/** 一次窗口取址的结果：[requested] 请求集数、[cached] 取址后可播放的集数、[batch] 本次批量新增、[route] 命中的路由。 */
+data class WarmReport(val requested: Int, val cached: Int, val batch: Int, val route: String?)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 /** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。 */
 class UnplayableVideoException(message: String): IOException(message)
@@ -62,7 +64,9 @@ class MemoryCookies : okhttp3.CookieJar {
     }
 }
 
-open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).cookieJar(MemoryCookies()).build(), private val clock: () -> Long = System::currentTimeMillis, private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession.shared) {
+open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).cookieJar(MemoryCookies()).build(), private val clock: () -> Long = System::currentTimeMillis, private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession.shared, private val modelCache: PlaybackModelCache = PlaybackModelCache()) {
+    /** 同一份取址缓存、另一套传输：预取需要更短的超时，但必须和正式播放看到同一个缓存。 */
+    fun childTransport(http: OkHttpClient) = ContentRepository(http, clock, playbackSession, modelCache)
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
@@ -73,8 +77,6 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     @Volatile private var appSearchRetryAt=0L
     // 最近一次取播放模型成功的路由，下次优先复用，减少平台按请求量限流时的无效请求
     @Volatile private var goodRoute: String?=null
-    /** 连续「全部路由空体」轮数：达到 2 触发一次匿名设备重注册（身份自愈），成功换集归零。 */
-    @Volatile private var blankStrikes=0
     // 分类筛选接口只在较新客户端版本开放；版本号沿用参考实现验证过的取值，平台升级时集中改这里
     private val discoveryVersion=mapOf(
         "version_code" to "73532",
@@ -483,6 +485,78 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
     }
+    /** 预热一整窗剧集的播放模型：命中缓存的不再请求，批量最多 15 集（站方上限 20）。
+     *  失败不上抛——播放时按需取址仍是兜底，预取只负责把后续切集变成 0 次网络。 */
+    fun warm(episodes: List<String>): WarmReport {
+        val ids=episodes.filter { it.matches(Regex("[0-9]{1,30}")) }.distinct()
+        if(ids.isEmpty()) return WarmReport(0,0,0,null)
+        val now=clock()
+        val cached=ids.count { modelCache.get(it,now)!=null }
+        val missing=ids.filter { modelCache.get(it,now)==null }.take(BATCH_LIMIT)
+        if(missing.isEmpty()) return WarmReport(ids.size,cached,0,null)
+        val batch=runCatching { batchModels(missing) }.getOrElse { Batch(0,null) }
+        return WarmReport(ids.size,cached+batch.filled,batch.filled,batch.route)
+    }
+    private data class Batch(val filled: Int, val route: String?)
+    /** 一次签名请求问一整窗；空体或全失败时换一台匿名设备再问一轮，仍失败就交给按需取址。 */
+    private fun batchModels(ids: List<String>): Batch {
+        val payload=batchPayload(ids)
+        sweepBatch(payload,ids,playbackSession.profile(http)).takeIf { it.filled>0 }?.let { return it }
+        return sweepBatch(payload,ids,playbackSession.renew(http))
+    }
+    private fun sweepBatch(payload: ByteArray, ids: List<String>, identity: PlaybackDeviceSession.Profile): Batch {
+        for(path in BATCH_ROUTES) {
+            val body=try {
+                RequestScope.execute(http.newCall(playerRequest(path,payload,identity))) { response ->
+                    if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
+                    response.body?.string().orEmpty()
+                }
+            } catch(problem: java.io.InterruptedIOException) {
+                throw problem
+            } catch(_: IOException) {
+                continue
+            } catch(_: RuntimeException) {
+                continue
+            }
+            if(body.isBlank()) continue
+            val root=runCatching { JSONObject(body) }.getOrNull() ?: continue
+            if(root.optInt("Code",root.optInt("code",-1))!=0) continue
+            val data=root.optJSONObject("data") ?: continue
+            val models=modelsOf(data).filterKeys { it in ids }
+            if(models.isEmpty()) continue
+            val now=clock()
+            models.forEach { (id,model) -> modelCache.put(id,model,now) }
+            return Batch(models.size,path)
+        }
+        return Batch(0,null)
+    }
+    /** 批量响应的模型可能嵌在 `data.video_model_data[<id>]`，也可能直接以 id 为键。 */
+    private fun modelsOf(data: JSONObject): Map<String,JSONObject> {
+        val rows=data.optJSONObject("video_model_data") ?: data
+        val models=linkedMapOf<String,JSONObject>()
+        for(key in rows.keys()) {
+            val entry=rows.optJSONObject(key) ?: continue
+            val model=modelOf(entry.opt("video_model")) ?: entry.takeIf { it.has("fallback_api") }
+            if(model!=null) models[key]=model
+        }
+        return models
+    }
+    private fun batchPayload(ids: List<String>): ByteArray {
+        val biz=JSONObject()
+            .put("detail_page_version",0)
+            .put("device_level",1)
+            .put("disable_digg_stat",false)
+            .put("need_all_video_definition",true)
+            .put("need_mp4_align",false)
+            .put("use_os_player",false)
+            .put("use_server_dns",false)
+            .put("video_platform",1024)
+        return JSONObject()
+            .put("biz_param",biz)
+            .put("mixed_video_id_map",JSONObject().put("1004",JSONArray(ids)))
+            .toString()
+            .toByteArray()
+    }
     /** 2026-11-05 起播放接口必须带完整六头签名；查询串里的客户端版本同步到签名实测可用的 7.3.9.32。 */
     private fun playbackValues(identity: PlaybackDeviceSession.Profile) = identity.values + mapOf(
         "version_code" to "73932",
@@ -546,8 +620,14 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     /** 播放模型：官方现行的 `video_tab` 接口优先，失败再走旧 `/novel/player/` 多路由兜底。
      *  旧接口按「旧路径 → 新路径 → 带场景段」依次尝试，第一个能取到 `video_model` 的用；
      *  记住上次成功的路由优先复用、其余路由各试一次，避免把请求量放大。
-     *  空响应是网关拦截，直接报错；只有业务错误码时才重新注册一台匿名设备再走一轮。 */
+     *  空响应基本是「当前匿名身份已被站方用尽」：立刻换一台匿名设备再扫一轮，仍空才算失败。 */
     private fun videoModel(id: String): JSONObject {
+        modelCache.get(id,clock())?.let { return it }
+        val model=fetchVideoModel(id)
+        modelCache.put(id,model,clock())
+        return model
+    }
+    private fun fetchVideoModel(id: String): JSONObject {
         val identity=playbackSession.profile(http)
         tabVideoModel(id,identity)?.let { return it }
         // 旧接口与 video_tab 保持一致用 device_level=1：部分剧集在 3 下会把 360P–720P 全发成
@@ -568,24 +648,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             for((path,payload) in routes) if(path!=good) add(path to payload)
         }
         val first=sweepRoutes(ordered,identity)
-        first.model?.let { model -> goodRoute=first.path; blankStrikes=0; return model }
-        // 全部路由都是空体时是网关拦截：单轮空响应按限流处理直接报错，避免把限流窗口延长。
-        // 但连续两轮全空（自动重试会再次进入）说明大概率是进程内身份被风控拉黑或注册时发的
-        // ttwid/msToken 已失效——网关按「注册过的设备+有效 Cookie」放行，此时换一台匿名设备
-        // （等效用户杀进程重进，实测有效）再扫一轮，是进程内唯一的自愈手段；每两轮才换一次，
-        // 不会在限流窗口内连续注册把窗口越打越长。
-        if(first.allBlank) {
-            if(++blankStrikes>=2) {
-                blankStrikes=0
-                val healed=sweepRoutes(ordered,playbackSession.renew(http))
-                healed.model?.let { model -> goodRoute=healed.path; return model }
-            }
-            throw EmptyPlaybackResponseException()
-        }
-        blankStrikes=0
-        val renewed=sweepRoutes(ordered,playbackSession.renew(http))
-        renewed.model?.let { model -> goodRoute=renewed.path; return model }
-        throw renewed.failure ?: IOException("播放信息为空")
+        first.model?.let { model -> goodRoute=first.path; return model }
+        // 空体基本都发生在「当前匿名身份已经被站方用尽」之后：立刻换一台匿名设备再扫一轮。
+        // 不把第一次失败抛给播放器——否则每次手动切集都要先走一遍可见的自动重试。
+        val healed=sweepRoutes(ordered,playbackSession.renew(http))
+        healed.model?.let { model -> goodRoute=healed.path; return model }
+        if(first.allBlank || healed.allBlank) throw EmptyPlaybackResponseException()
+        throw healed.failure ?: IOException("播放信息为空")
     }
     /** 一轮路由扫描：首条路由原地重发一次，其余路由各发一次，尽量少的请求量覆盖所有候选。 */
     private fun sweepRoutes(routes: List<Pair<String,ByteArray>>, identity: PlaybackDeviceSession.Profile): Sweep {
@@ -640,6 +709,14 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 首条路由的空响应重发次数与退避：网关抖动时先原地重试，再换下一条路由。
         private const val BLANK_RETRIES=2
         private const val BLANK_BACKOFF_MS=400L
+        // 一次注册问一整窗：站方硬上限 20 集，取 15 留出余量。
+        private const val BATCH_LIMIT=15
+        private val BATCH_ROUTES=listOf(
+            "/novel/player/multi_video_model/v1/",
+            "/novel/player/multi_video_model/preload/v1/",
+            "/novel/player/multi_video_model/default/v1/",
+            "/novel/player/multi_video_model/detail/v1/",
+        )
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")
@@ -652,6 +729,24 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             throw IOException("页面数据不完整")
         }
         fun qualityNumber(value: String): Int = Regex("2160|1440|1080|720|576|540|480|360").find(value)?.value?.toInt() ?: mapOf("1920" to 1080,"1280" to 720,"1024" to 576,"854" to 480,"640" to 360)[value] ?: value.toIntOrNull() ?: 0
+    }
+}
+
+/** 播放模型的小缓存：一窗剧集一次批量取址，切集直接命中，不再向站方重复要地址。 */
+class PlaybackModelCache(private val limit: Int = 120, private val ttlMillis: Long = 2*60*60*1000L) {
+    private class Entry(val at: Long, val model: JSONObject)
+    // accessOrder=true：get/put 命中都把条目移到末尾，淘汰时删最久未用的（LRU），
+    // 而不是最早插入的——反复回看的前几集不该被后面批量插入的集挤掉。
+    private val entries=object : LinkedHashMap<String,Entry>(16,0.75f,true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String,Entry>?) = size > limit
+    }
+    @Synchronized fun get(id: String, now: Long): JSONObject? {
+        val entry=entries[id] ?: return null
+        if(now-entry.at>ttlMillis) { entries.remove(id); return null }
+        return entry.model
+    }
+    @Synchronized fun put(id: String, model: JSONObject, now: Long) {
+        entries[id]=Entry(now,model)
     }
 }
 

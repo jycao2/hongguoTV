@@ -109,6 +109,10 @@ class MainActivity: Activity() {
     private var prefetchJob: java.util.concurrent.Future<*>?=null
     private var prefetchScope: RequestScope?=null
     private var prefetchedFor=""
+    // 窗口取址预热：播放就绪后用一次批量请求覆盖前后若干集，手动切集直接命中缓存。
+    private var warmJob: java.util.concurrent.Future<*>?=null
+    private var warmScope: RequestScope?=null
+    private var warmWindow=""
     // 已提前挂进 ExoPlayer 播放列表的下一集：由播放器无缝切换，不再 stop/clearMediaItems。
     private var queuedNextId=""
     private var queuedIndex=-1
@@ -2882,7 +2886,7 @@ class MainActivity: Activity() {
         if(focusEpisode) episodes.getOrNull((episodeIndex-pageStart).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
-        updater.interrupt()
+        updater.interrupt(); cancelWarm()
         val data=detail ?: return
         val playbackStarted=android.os.SystemClock.elapsedRealtime()
         // 从详情页重新进播放器时丢弃上一轮的临时设置；自动连播保持在同一条降档链上。
@@ -2974,6 +2978,7 @@ class MainActivity: Activity() {
                         firstReady=false; readySince=android.os.SystemClock.elapsedRealtime()
                         android.util.Log.w("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-episodeStartedAt}")
                         startDanmaku()
+                        warmEpisodeWindow()
                     } else if(rebufferStart>0) {
                         android.util.Log.w("HongguoTV","Rebuffer end episode=${episodeIndex+1} stalledMs=${android.os.SystemClock.elapsedRealtime()-rebufferStart}")
                         rebufferStart=0
@@ -3030,6 +3035,7 @@ class MainActivity: Activity() {
                     }
                     if(p.playbackState==Player.STATE_READY) markReady() else if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     syncMediaSession()
+                    warmEpisodeWindow()
                     if(sleepTimer.episodeEnded()) { stopForSleep(false); return }
                 }
                 override fun onRenderedFirstFrame() {
@@ -3059,7 +3065,32 @@ class MainActivity: Activity() {
         prefetchScope?.cancel(); prefetchScope=null
         preparedNext.clear(); prefetchJob?.cancel(true); prefetchJob=null
         closeTransport(prefetchHttp); prefetchHttp=null; prefetchedFor=""
+        cancelWarm()
         dropQueuedNext()
+    }
+    /** 播放就绪后预热当前集前后的一窗（最多 15 集）：之后切集直接命中缓存，不再走「取址失败→自动重试」。 */
+    private fun warmEpisodeWindow() {
+        val data=detail ?: return
+        val count=data.episodes.size
+        if(count==0 || !foreground || screen!="player" || playError) return
+        if(!networkAvailable() || connectivity.isActiveNetworkMetered) return
+        val from=(episodeIndex-3).coerceAtLeast(0)
+        val to=(from+14).coerceAtMost(count-1)
+        val key="${data.series.id}:$from:$to"
+        if(key==warmWindow) return
+        warmWindow=key
+        val index=episodeIndex
+        val ids=data.episodes.subList(from,to+1)
+        val scope=RequestScope(); warmScope=scope
+        warmJob=prefetchWorker.submit {
+            try {
+                val report=scope.run { repository.warm(ids) }
+                android.util.Log.i("HongguoTV","Playback window warmed episode=${index+1} ${report.cached}/${report.requested} batch=${report.batch} route=${report.route}")
+            } catch(_: Exception) { }
+        }
+    }
+    private fun cancelWarm() {
+        warmScope?.cancel(); warmScope=null; warmJob?.cancel(true); warmJob=null; warmWindow=""
     }
     /** 放弃已经挂到播放列表的下一集：先从播放列表移除，再释放它独占的取流会话。 */
     private fun dropQueuedNext() {
@@ -3111,21 +3142,17 @@ class MainActivity: Activity() {
         val ticket=preparedNext.begin(key)
         // 记住播放身份的匿名 Cookie 罐必须继承，否则预加载与正式播放不是同一个会话。
         val http=repository.http.newBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
-        val source=ContentRepository(http); prefetchHttp=http
+        // 与正式播放共用同一份取址缓存：窗口已预热时，这里的取址是 0 次网络。
+        val source=repository.childTransport(http); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    // 预加载也会撞上「HTTP 200 + 0 字节」：同一实例上立刻再取一次，
-                    // 第二轮会触发 ContentRepository 的换设备自愈（与正式播放同一套逻辑），
-                    // 不必等 15 秒退避到片尾才发现下一集没预取到。
-                    val info=try {
-                        source.stream(id,quality)
-                    } catch(blank: EmptyPlaybackResponseException) {
-                        android.util.Log.w("HongguoTV","Prefetch empty response id=$id, recovering now")
-                        source.stream(id,quality)
-                    }
+                    // 取址内部已经在首轮空体时立刻换匿名设备自愈（fetchVideoModel），
+                    // 这里不必再套一层 try/catch 重试——否则会连续注册两台设备，
+                    // 浪费且可能撞站方限流。失败就让 maybePrefetch 的退避机制兜底。
+                    val info=source.stream(id,quality)
                     RemoteVideo(http,info).also { remote=it; it.warm() }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
