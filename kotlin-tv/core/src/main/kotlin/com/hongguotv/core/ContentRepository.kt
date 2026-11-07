@@ -201,9 +201,18 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     private val seasonFills=mutableMapOf<String, SeasonFill>()
     /** 网站搜索固定只返回前 10 条，多季剧必然缺季；联想接口未被拦截，用同名季的精确标题回查网站补齐。 */
     private fun collectSeasons(base: String, known: List<Series>, genre: String?, hints: List<String>, cacheKey: String, budget: Int = 10): List<Series> {
-        val cached=synchronized(seasonFills) { seasonFills[cacheKey]?.takeIf { clock()-it.at<86_400_000 }?.items }
-        if(cached!=null) return cached
         val knownIds=known.map { it.id }.toSet()
+        // 缓存存的是「该剧名已知季并集」（写缓存时的 known + 本次新发现），不是差集。
+        // 各季详情页的 related 聚合范围不一致（第 1 季页常带全季、第 5 季页只带前四季）：
+        // 存差集时第 1 季页算出「无缺季」的空结果会污染第 5 季页，第 6 季直接消失（2026-11-08 用户实测）。
+        // 存并集后，第 5 季页只需从缓存里减掉自己已有的季，缺的季原样补回，无需重新全网搜索。
+        val cached=synchronized(seasonFills) { seasonFills[cacheKey]?.takeIf { clock()-it.at<86_400_000 }?.items }
+        if(cached!=null) {
+            val missing=cached.filter { it.id !in knownIds }.take(budget)
+            // 缓存知识面覆盖本次已知（或确实还有缺季）才直接复用；缓存比本次知道的还少，则重新补一次。
+            // 比较基数只数同基底的季：搜索页传进来的 known 混着多个剧，用总数会误判成「缓存太窄」而白跑一轮网络。
+            if(missing.isNotEmpty() || cached.size>=known.count { baseName(it.title)==base }) return missing
+        }
         val found=mutableListOf<Series>()
         fun absorb(page: CatalogPage?) {
             page?.items?.filter { it.id !in knownIds && baseName(it.title)==base && found.none { s -> s.id==it.id } }?.let { found+=it }
@@ -238,8 +247,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             pool.shutdownNow()
         }
         val final=found.take(budget)
+        // 写并集：本次已知（同基底）+ 新发现，供其它季页减去自己已有的季后复用。
+        val union=(known.filter { baseName(it.title)==base }+final).distinctBy { it.id }.take(40)
         synchronized(seasonFills) {
-            seasonFills[cacheKey]=SeasonFill(clock(),final)
+            seasonFills[cacheKey]=SeasonFill(clock(),union)
             while(seasonFills.size>50) seasonFills.remove(seasonFills.keys.first())
         }
         return final

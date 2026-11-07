@@ -447,6 +447,65 @@ class ContentRepositoryTest {
         assertEquals(listOf("222","333"),repo.detail("123").sameName.map { it.id })
     }
 
+    @Test fun seasonFillCacheMissesRecomputeWhenAnotherSeasonPageKnowsFewerSeasons() {
+        // 2026-11-08 用户实测：第 1 季详情页 related 聚合了全季，补齐管线算出「无缺季」的空结果被缓存；
+        // 跳到其它季页（related 只带部分季）后复用这条空缓存，缺的季不再补齐。
+        // 修复：空结果只在「已知季数一致」时才可信，规模变化触发重算。
+        val s1=JSONObject().put("series_id","1").put("series_name","测试剧 第一季").put("vid_list",JSONArray().put("900"))
+        val s2=JSONObject().put("series_id","2").put("series_name","测试剧 第二季").put("vid_list",JSONArray().put("901"))
+        val repo=repository { request ->
+            when {
+                request.url.encodedPath=="/detail" ->
+                    if(request.url.queryParameter("series_id")=="1")
+                        detailHtml(s1,JSONArray().put(relatedItem("2","测试剧 第二季")).put(relatedItem("3","测试剧 第三季")))
+                    else detailHtml(s2,JSONArray().put(relatedItem("1","测试剧 第一季")))
+                request.url.encodedPath=="/api/search/result/" ->
+                    """{"searchList":[{"video_data":{"series_id":"3","series_name":"测试剧 第三季","genre":"203"}}]}"""
+                else -> """{"code":0,"data":{"query_result":[]}}"""
+            }
+        }
+        // 第 1 季页：related 自带 2、3 季，搜索结果里的第 3 季在已知集合内被过滤，补齐结果为空并被缓存。
+        assertEquals(listOf("2","3"),repo.detail("1").sameName.map { it.id })
+        // 第 2 季页：related 只带第 1 季，已知季数从 3 变 2，空缓存不可信，重算补出第 3 季。
+        assertEquals(listOf("1","3"),repo.detail("2").sameName.map { it.id })
+    }
+
+    @Test fun seasonListKeepsSeasonsDiscoveredOnAnotherSeasonPage() {
+        // 2026-11-08 用户实测（谁让这个文盲修仙的 第六季）：站方 related 已不再聚合同系列季，
+        // 「系列 N 季」完全由搜索补齐管线构建。第 6 季页补齐出 1-5 季入缓存后，
+        // 点进第 5 季页时已知集合只有第 5 季，若缓存只存差集，过滤后只剩 1-4 季，第 6 季消失。
+        // 修复：缓存存「已知季并集」，任何季页减去自己已有的季即可拿回全部。
+        fun season(id: String,title: String)=JSONObject().put("series_id",id).put("series_name",title).put("vid_list",JSONArray().put("90$id"))
+        val page=mapOf(
+            "6" to detailHtml(season("6","测试剧第六季"),JSONArray()),
+            "5" to detailHtml(season("5","测试剧第五季"),JSONArray()),
+        )
+        val repo=repository { request ->
+            when {
+                request.url.encodedPath=="/detail" -> page[request.url.queryParameter("series_id")].orEmpty()
+                request.url.host.endsWith("fqnovel.com") -> JSONObject().put("code",0).put("data",JSONObject()
+                    .put("query_result",JSONArray().put("测试剧第二季").put("测试剧第三季")
+                        .put("测试剧第四季").put("测试剧第五季"))).toString()
+                else -> {
+                    val keyword=request.url.queryParameter("query").orEmpty()
+                    val row=when(keyword) {
+                        "测试剧" -> """{"video_data":{"series_id":"1","series_name":"测试剧第一季","genre":"203"}}"""
+                        "测试剧第二季" -> """{"video_data":{"series_id":"2","series_name":"测试剧第二季","genre":"203"}}"""
+                        "测试剧第三季" -> """{"video_data":{"series_id":"3","series_name":"测试剧第三季","genre":"203"}}"""
+                        "测试剧第四季" -> """{"video_data":{"series_id":"4","series_name":"测试剧第四季","genre":"203"}}"""
+                        "测试剧第五季" -> """{"video_data":{"series_id":"5","series_name":"测试剧第五季","genre":"203"}}"""
+                        else -> ""
+                    }
+                    if(row.isEmpty()) """{"searchList":[]}""" else """{"searchList":[${row}]}"""
+                }
+            }
+        }
+        // 第 6 季页：补齐出 1-5 季，共 6 季。
+        assertEquals(listOf("1","2","3","4","5"),repo.detail("6").sameName.map { it.id })
+        // 第 5 季页：related 为空、已知只有自己，仍应拿回第 6 季而不是把缓存里减没了。
+        assertEquals(listOf("1","2","3","4","6"),repo.detail("5").sameName.map { it.id })
+    }
+
     private fun currentRealRank(payload: JSONObject) = script("mergeLoaderData",JSONArray()
         .put("rank_hot-real-drama/page").put(JSONArray().put(JSONObject().put("key","content")
             .put("routerDataFnName","p").put("routerDataFnArgs",JSONArray().put(payload.toString())))))
