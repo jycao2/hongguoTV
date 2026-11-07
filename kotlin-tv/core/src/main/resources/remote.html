@@ -251,6 +251,23 @@
     .allgrid{grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;padding:2px 18px 18px}
     .allgrid .ct{font-size:11.5px;line-height:16px;height:32px;margin-top:6px}
     .allgrid .cc{font-size:10.5px}
+
+    /* 选集同理：固定 5 列的方块在横屏里一个就 113px 见方，两行就占满整个弹层。
+       横屏按宽度auto-fill 更多列（640 宽约 8 列、67px），一屏能看到四行以上。 */
+    .grid{grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:8px;padding:0 18px 18px}
+    .grid button{font-size:13px;border-radius:9px}
+
+    /* 失联页：三行说明 + 地址 + 重试按钮在矮横屏里本来就顶到边，
+       底部那行「重试 3 次…」还是 position:absolute，直接压在按钮上。
+       横屏把底部说明改回正常文档流，整块可滚动，文字再收一档。 */
+    .full{padding:16px 24px;overflow-y:auto;overscroll-behavior:contain;
+      justify-content:center;justify-content:safe center}
+    .full .icon{width:40px;height:40px;margin-bottom:10px}
+    .full h2{font-size:15px;margin:0 0 6px}
+    .full p{font-size:12px;line-height:1.55;max-width:520px;margin:0 0 4px}
+    .full .addr{margin:10px 0 12px}
+    .full .actions{margin-top:2px}
+    .full .foot{position:static;margin-top:10px}
   }
 
   /* 更矮的横屏（16:9 手机、车机）：再把方向盘和海报压一档，保证「继续观看」标题完整露出 */
