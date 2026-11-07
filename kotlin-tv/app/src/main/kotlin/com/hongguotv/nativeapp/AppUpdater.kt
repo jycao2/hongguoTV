@@ -229,8 +229,10 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         val version = if (Build.VERSION.SDK_INT >= 28) candidate.longVersionCode else candidate.versionCode.toLong()
         fun signers(info: android.content.pm.PackageInfo) =
             ((if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else null) ?: info.signatures)?.map { it.toCharsString() }?.toSet().orEmpty()
+        // ApplicationInfo.minSdkVersion 要 API 24，低版本读不到就不校验这一项
+        val candidateMinSdk = if (Build.VERSION.SDK_INT >= 24) candidate.applicationInfo?.minSdkVersion ?: 0 else update.minSdk
         if (candidate.packageName != activity.packageName || version != update.versionCode || candidate.versionName != update.versionName || version <= BuildConfig.VERSION_CODE ||
-            candidate.applicationInfo?.minSdkVersion != update.minSdk || signers(installed).isEmpty() || signers(installed) != signers(candidate))
+            candidateMinSdk != update.minSdk || signers(installed).isEmpty() || signers(installed) != signers(candidate))
             throw IOException("新版包名、版本或签名不匹配，已阻止安装")
     }
     private fun install() {

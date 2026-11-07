@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.hongguotv.core.BackupData
 import com.hongguotv.core.BackupFiles
 import com.hongguotv.core.DirectoryBackupFiles
@@ -41,7 +43,7 @@ class LocalBackupStorage(private val context: Context) {
             !supported -> false
             // MediaStore 写入无需权限
             Build.VERSION.SDK_INT >= 29 -> true
-            else -> context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            else -> ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     val restoreAllowed: Boolean
         get() = when {
@@ -61,10 +63,10 @@ class LocalBackupStorage(private val context: Context) {
                 else runCatching { activity.startActivityForResult(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), REQUEST_MANAGE); true }.getOrDefault(false)
             }
             Build.VERSION.SDK_INT == 29 -> {
-                activity.requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), REQUEST_READ); true
+                ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), REQUEST_READ); true
             }
             else -> {
-                activity.requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WRITE); true
+                ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WRITE); true
             }
         }
     }

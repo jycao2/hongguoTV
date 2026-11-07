@@ -3,6 +3,7 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -10,6 +11,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -49,11 +51,19 @@ class TvTools(private val activity: Activity) {
     private fun dp(value: Int)=(value*activity.resources.displayMetrics.density).toInt()
     /** 当前可用的局域网 IPv4：只认 Wi-Fi / 有线，手机必须和电视在同一网段才能扫码。 */
     fun lanAddress(): String? {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork ?: return null
-        val capabilities=connectivity.getNetworkCapabilities(network) ?: return null
-        if(!(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) return null
-        return connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
+        val connectivity=activity.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+        if(Build.VERSION.SDK_INT>=23) {
+            val network=connectivity.activeNetwork ?: return null
+            val capabilities=connectivity.getNetworkCapabilities(network) ?: return null
+            if(!(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) return null
+            return connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
+        }
+        // API 21/22 没有 Network API，改为直接枚举网卡上的局域网地址
+        return runCatching {
+            java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces()).asSequence()
+                .flatMap { it.inetAddresses.asSequence() }
+                .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && it.isSiteLocalAddress }?.hostAddress
+        }.getOrNull()
     }
     private fun freeBytes()=runCatching { android.os.StatFs(activity.filesDir.absolutePath).availableBytes }.getOrDefault(0L)
     /** 快传落盘目录：都在 filesDir 下，卸载应用时随应用数据一起清除。 */

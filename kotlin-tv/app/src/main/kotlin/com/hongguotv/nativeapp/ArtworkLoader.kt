@@ -45,14 +45,16 @@ class ArtworkLoader(context: Context) {
         lateinit var layout: View.OnLayoutChangeListener
         lateinit var attach: View.OnAttachStateChangeListener
     }
-    private class Job(val key: Key, val owner: Long, var priority: Int, val order: Long) {
+    private class Job(val key: Key, val owner: Long, var priority: Int, val order: Long) : Comparable<Job> {
         val listeners = linkedSetOf<Binding>()
         @Volatile var cancelled = false
         @Volatile var call: Call? = null
+        // PriorityQueue 的比较器构造器要 API 24，这里用自然序（API 1 就有）
+        override fun compareTo(other: Job) = compareValuesBy(this, other, { it.priority }, { it.order })
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val lowRam = context.applicationContext.getSystemService(ActivityManager::class.java)?.isLowRamDevice == true
+    private val lowRam = (context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
     private val cacheBytes = (if (lowRam) 4 else 8) * 1024 * 1024
     private val cache = object : LruCache<Key, Bitmap>(cacheBytes) {
         override fun sizeOf(key: Key, value: Bitmap) = value.allocationByteCount
@@ -66,7 +68,7 @@ class ArtworkLoader(context: Context) {
         Thread(runnable, "hongguotv-artwork").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
     private val signal = Object()
-    private val pending = PriorityQueue<Job>(compareBy<Job> { it.priority }.thenBy { it.order })
+    private val pending = PriorityQueue<Job>()
     private val jobs = mutableMapOf<Key, Job>()
     private val bindings = WeakHashMap<ImageView, Binding>()
     private var owner = 0L

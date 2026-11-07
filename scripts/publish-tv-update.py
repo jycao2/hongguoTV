@@ -6,7 +6,7 @@ TAG = os.environ["UPDATE_TAG"]
 VERSION_NAME = os.environ["HONGGUOTV_VERSION_NAME"]
 VERSION_CODE = int(os.environ["HONGGUOTV_VERSION_CODE"])
 APK_SRC = "kotlin-tv/app/build/outputs/apk/release/app-release.apk"
-APK_NAME = f"hongguotv-kotlin-{VERSION_NAME}-android8.apk"
+APK_NAME = f"hongguotv-kotlin-{VERSION_NAME}-android5.apk"
 OUTPUTS = "outputs"
 os.makedirs(OUTPUTS, exist_ok=True)
 apk_path = os.path.join(OUTPUTS, APK_NAME)
@@ -31,7 +31,7 @@ manifest = {
     "packageName": "com.hongguotv.nativeapp",
     "versionCode": VERSION_CODE,
     "versionName": VERSION_NAME,
-    "minSdk": 26,
+    "minSdk": 21,
     "tag": TAG,
     "apk": {"name": APK_NAME, "size": size, "sha256": sha256},
     "notes": notes,
