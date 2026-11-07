@@ -26,7 +26,10 @@
   .spacer{flex:1}
   .more{background:transparent;border:0;color:var(--muted);font-size:18px;padding:4px 8px;border-radius:8px;
     display:flex;align-items:center;justify-content:center}
+  /* .more 用了 display:flex，会盖掉 UA 的 [hidden]{display:none}，必须自己补一条 */
+  .more[hidden]{display:none}
   .more svg{display:block;width:19px;height:19px}
+  .more.on{color:var(--accent);background:var(--accent-bg)}
   .more:active{background:var(--raised)}
 
   .menu{position:absolute;right:14px;top:46px;z-index:40;min-width:190px;
@@ -206,12 +209,16 @@
 
   /* 横屏：手机全屏被系统转成横向、平板横放、电脑浏览器都会走到这里。
      单列布局在横向视口里会被抻成一条条横杠（进度条横贯全屏、三个参数卡变成细长条），
-     下面那截搜索/选集还会掉出首屏。改成左右两栏、按可用高度压间距，宽度再居中限死。 */
+     下面那截搜索/选集还会掉出首屏。改成左右两栏、按可用高度压间距，宽度再居中限死。
+     高度真的不够时（车机、矮窗口）让整个 view 自己滚 —— 页面是按 100% 高度锁死的，
+     不给滚动就等于「继续观看」永远摸不到。 */
   @media (orientation:landscape) and (max-height:640px){
     .bar{max-width:1080px;margin:0 auto;width:100%;padding:8px 18px 6px}
     .modebar{padding:0 18px}
     #v-panel.on,#v-browse.on{width:100%;max-width:1080px;margin:0 auto;box-sizing:border-box;
-      display:grid;align-content:center;column-gap:26px;padding:0 18px}
+      display:grid;column-gap:26px;padding:10px 18px 16px;overflow-y:auto;overscroll-behavior:contain;
+      -webkit-overflow-scrolling:touch;
+      align-content:center;align-content:safe center}
 
     #v-panel.on{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)}
     #v-panel .now{grid-area:1/1;padding:6px 0 0}
@@ -223,8 +230,8 @@
     #v-panel .openlist{grid-area:4/2;margin:14px 0 0;padding:10px;font-size:12.5px}
     #v-panel .panelnote{display:none}
 
-    /* 浏览形态右下角是竖着排的「继续观看」，横向高度不够时让它自己滚，不要把标题顶出屏幕 */
-    #v-browse.on{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);align-content:stretch}
+    /* 浏览形态：方向盘占左边，搜索与「继续观看」在右边上下排 */
+    #v-browse.on{grid-template-columns:auto minmax(0,1fr)}
     #v-browse .modehint{grid-area:1/1/2/3;padding-top:4px;min-height:0}
     #v-browse .padwrap{grid-area:2/1/4/2;padding:8px 0 0;gap:10px}
     #v-browse .pad{width:172px;height:172px}
@@ -247,8 +254,15 @@
     #v-browse .pad .ok{width:46px;height:46px}
     #v-browse .card .cover{height:84px}
     #v-browse .resume h2{font-size:12px;margin-bottom:8px}
+    /* 面板这一档把纵向间距也收一收，能少滚一点是一点 */
+    #v-panel.on,#v-browse.on{padding:6px 18px 10px}
     #v-panel .prog{padding-top:12px}
     #v-panel .ctrl{padding-top:6px}
+    #v-panel .params{padding-top:2px}
+    #v-panel .param{padding:8px 0}
+    #v-panel .searchwrap{padding-top:8px}
+    #v-panel .quick{padding-top:8px}
+    #v-panel .openlist{margin-top:10px}
   }
 </style>
 </head>
@@ -258,6 +272,7 @@
   <span class="dot" id="dot"></span>
   <span class="ip" id="ip">正在连接…</span>
   <span class="spacer"></span>
+  <button class="more" id="rot" title="转成横屏" hidden></button>
   <button class="more" id="fs" title="全屏" hidden></button>
   <button class="more" id="more">···</button>
   <!-- 菜单放进 bar：宽屏把内容收窄居中后，绝对定位仍跟着「···」走 -->
@@ -893,26 +908,44 @@
   (function(){
     var root = document.documentElement;
     var btn = $("fs");
+    var rot = $("rot");
     var req = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
-    if (!req) { btn.hidden = true; return; }
+    if (!req) { btn.hidden = true; rot.hidden = true; return; }
     function cur(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement; }
     // 四角向外=进全屏，向内=退出：一个字符的 ⛶ 看不出点下去会发生什么
     var ICON_IN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg>';
     var ICON_OUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M9 20v-5H4"/><path d="M15 20v-5h5"/></svg>';
+    // 旋转：两个半环箭头，横屏时按钮染成主题色，一眼看出当前是横还是竖
+    var ICON_ROT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5a7.8 7.8 0 0 1 13.2-3.6"/><path d="M18 3.4v4h-4"/><path d="M19.5 13.5a7.8 7.8 0 0 1-13.2 3.6"/><path d="M6 20.6v-4h4"/></svg>';
     // 全屏里按钮保持可见：之前进全屏就 hidden，等于把人锁在全屏里，只剩系统返回手势能出来
     function paintFs(){ var on = !!cur(); btn.innerHTML = on ? ICON_OUT : ICON_IN; btn.title = on ? "退出全屏" : "全屏"; }
     // HTML 里按钮默认带 hidden；只有确认支持全屏时才显示出来，否则永远看不见。
     btn.hidden = false; paintFs();
-    // 进全屏后浏览器会沿用手机当时的姿态，不少内核（国产浏览器尤其）在全屏时直接转成横向，
-    // 而这一页是按竖屏手机排的。能锁就锁竖屏；锁不住的（桌面 Chrome、老内核）走上面的横屏两栏样式。
-    function lockPortrait(){
-      var so = screen.orientation;
-      if (!so || !so.lock) return;
-      try { var p = so.lock("portrait"); if (p && p.catch) p.catch(function(){}); } catch(err){}
+
+    // 屏幕方向：默认锁竖屏（浏览器全屏会沿用当时姿态，不少内核直接转横向），
+    // 全屏期间给一个按钮手动转横屏/转回竖屏；锁不住的桌面内核不显示这个按钮。
+    var SO = screen.orientation || null;
+    var lockKind = "portrait";
+    function canLock(){ return !!(SO && SO.lock); }
+    function paintRot(){
+      rot.innerHTML = ICON_ROT;
+      rot.title = lockKind === "portrait" ? "转成横屏" : "转成竖屏";
+      rot.classList.toggle("on", lockKind !== "portrait");
+    }
+    function applyLock(kind){
+      lockKind = kind;
+      paintRot();
+      if (!canLock()) return;
+      try { var p = SO.lock(kind); if (p && p.catch) p.catch(function(){}); } catch(err){}
     }
     function unlockOrientation(){
-      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(err){}
+      try { if (SO && SO.unlock) SO.unlock(); } catch(err){}
     }
+    paintRot(); rot.hidden = true;
+    rot.onclick = function(e){
+      e.stopPropagation();
+      applyLock(lockKind === "portrait" ? "landscape" : "portrait");
+    };
     btn.onclick = function(e){
       e.stopPropagation();
       if (cur()) {
@@ -921,10 +954,16 @@
         unlockOrientation();
       } else {
         try { var p = req.call(root); if (p && p.catch) p.catch(function(){}); } catch(err){}
-        lockPortrait();
+        applyLock(lockKind);
       }
     };
-    function syncFs(){ paintFs(); if (cur()) lockPortrait(); else unlockOrientation(); }
+    function syncFs(){
+      var on = !!cur();
+      paintFs();
+      rot.hidden = !(on && canLock());
+      if (on) applyLock(lockKind);
+      else { unlockOrientation(); lockKind = "portrait"; paintRot(); }
+    }
     document.addEventListener("fullscreenchange", syncFs);
     document.addEventListener("webkitfullscreenchange", syncFs);
   })();
