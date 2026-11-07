@@ -217,6 +217,10 @@ class Library(context: Context) {
     var favoriteSort: String
         get() = prefs.getString("favoriteSort", null)?.takeIf { it in listOf("update", "watch", "name") } ?: "update"
         set(value) { prefs.edit().putString("favoriteSort", value).apply() }
+    /** 排行榜「上新」视图上次用的时间窗：记住偏好，下次进区不用重新选。本机偏好，不进备份。 */
+    var newReleaseWindow: String
+        get() = prefs.getString("newReleaseWindow", null).orEmpty()
+        set(value) { prefs.edit().putString("newReleaseWindow", value).apply() }
     /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置里单独显示；随备份一起恢复。 */
     var sourceHidden: Boolean
         get() = state().settings.sourceHidden

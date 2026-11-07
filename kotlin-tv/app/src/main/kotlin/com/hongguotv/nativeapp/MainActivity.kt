@@ -269,7 +269,8 @@ class MainActivity: Activity() {
     private var filterRefresh: TextView?=null
     // 条件变更后重建页面时，把焦点送回刚刚操作的那个条件
     private var pendingFilterFocus: Pair<String,String>?=null
-    private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null,val aiCatalog: Boolean=false,val aiGenre: Genre?=null,val newRelease: Boolean=false,val newReleaseWindow: String?=null)
+    // cursor/discovery 一并缓存：分类接口的续页靠服务器 session，切走再回来若沿用别的页签的条件就会拉到错内容
+    private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?,val board: RankBoard?=null,val genre: Genre?=null,val aiCatalog: Boolean=false,val aiGenre: Genre?=null,val newRelease: Boolean=false,val newReleaseWindow: String?=null,val cursor: DiscoveryCursor?=null,val discovery: DiscoverySelection?=null)
     private var ranking: ComicRanking?=null
     private var rankBoard=RankBoard.COMIC
     // 榜单按枚举顺序循环切换，新增榜单只需在 RankBoard 里加一项
@@ -281,7 +282,19 @@ class MainActivity: Activity() {
         return DiscoverySelection().choose("genre",genreId).choose("sort","online_time").choose("online_time",newReleaseWindow)
     }
     private fun newReleaseLabel()=NEW_RELEASE_WINDOWS.firstOrNull { it.first==newReleaseWindow }?.second ?: NEW_RELEASE_WINDOWS[0].second
-    private fun nextNewReleaseWindow()=NEW_RELEASE_WINDOWS[(NEW_RELEASE_WINDOWS.indexOfFirst { it.first==newReleaseWindow }.coerceAtLeast(0)+1)%NEW_RELEASE_WINDOWS.size].first
+    /** 时间窗一次选到位置，不再四档轮转：弹层里标出当前档，确认即切换。 */
+    private fun showNewReleaseWindowPicker() {
+        val anchor=newReleaseWindowButton ?: return
+        val current=NEW_RELEASE_WINDOWS.indexOfFirst { it.first==newReleaseWindow }
+        val labels=NEW_RELEASE_WINDOWS.map { (id,name) -> if(id==newReleaseWindow) "$name · 当前" else name }
+        tvTools.choose("上新时间范围",labels,anchor,{ index ->
+            val next=NEW_RELEASE_WINDOWS.getOrNull(index)?.first ?: return@choose
+            if(next==newReleaseWindow) return@choose
+            newReleaseWindow=next; library.newReleaseWindow=next
+            page=1; catalog=emptyList(); hasMore=false; catalogFocus=""; discoveryCursor=null; discoverySelection=newReleaseSelection()
+            tabState.remove(2); tabFocus.remove(2); pendingNewReleaseFocus="window"; showCatalog(true)
+        },focusIndex=current,anchorToButton=true)
+    }
     /** 上新区重建后把焦点还给用户刚按的那个按钮；没有待处理请求时返回 false。 */
     private fun consumePendingNewReleaseFocus(): Boolean {
         val target=when(pendingNewReleaseFocus) {
@@ -499,6 +512,8 @@ class MainActivity: Activity() {
         }
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); extras=PlaybackExtras(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        // 上新区沿用上次选择的时间窗（只在本机记，识别不了的值回落到默认档）
+        newReleaseWindow=library.newReleaseWindow.takeIf { id -> NEW_RELEASE_WINDOWS.any { it.first==id } } ?: NEW_RELEASE_WINDOWS[0].first
         setupMouseGestures()
         // 永久遥控的密钥/端口落盘，必须先于任何 PhoneRemoteSession 构造
         RemoteAccess.init(this)
@@ -764,7 +779,7 @@ class MainActivity: Activity() {
     private fun switchTab(next: Int) {
         if(navHiddenAt(next)) return
         leaveCollection()
-        tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre,aiCatalog,aiGenre,newRelease,newReleaseWindow); tabFocus[tab]=catalogFocus
+        tabState[tab]=CatalogState(page,catalog,hasMore,ranking,rankBoard,genre,aiCatalog,aiGenre,newRelease,newReleaseWindow,discoveryCursor,discoverySelection); tabFocus[tab]=catalogFocus
         // 从其他模块切回搜索页时重置为全新搜索状态，不保留上次的搜索词与结果
         if(next==1) {
             query=""; phoneSearched=false; lastSuggestWords=emptyList<String>(); lastSuggestKey=""; suggestFocusIndex=-1; keyboardLastLabel=null
@@ -775,6 +790,8 @@ class MainActivity: Activity() {
         rankBoard=saved?.board ?: rankBoard; genre=saved?.genre ?: genre
         aiCatalog=saved?.aiCatalog ?: false; aiGenre=saved?.aiGenre
         newRelease=saved?.newRelease ?: false; newReleaseWindow=saved?.newReleaseWindow ?: newReleaseWindow
+        // 续页游标与分类条件跟着页签一起存：上新/高级筛选的 session 不能跨页签复用，否则续页拉到的是别的条件
+        discoveryCursor=saved?.cursor; discoverySelection=saved?.discovery ?: discoverySelection
         showCatalog(load=(next<=2 && catalog.isEmpty() && (next!=1 || query.isNotBlank())))
         // 切回搜索页时焦点落输入框，避免页面重建后焦点丢失
         if(next==1) searchInput?.requestFocus()
@@ -1138,6 +1155,8 @@ class MainActivity: Activity() {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
             aiEntry=null; aiBack=null; aiGenreButton=null
             newReleaseEntry=null; newReleaseBack=null; newReleaseWindowButton=null
+            // 这三个按钮只在部分子视图里存在，重建时先清空，避免焦点链指向已经拆掉的旧按钮
+            rankSwitch=null; rankRefresh=null
             heading.addView(text(when { newRelease -> "新剧上新"; aiCatalog -> "AI剧 · 全部分类"; else -> "${rankBoard.label}热播榜" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(newRelease) {
                 newReleaseBack=addButton(heading,"‹ 返回${rankBoard.label}榜") {
@@ -1145,12 +1164,9 @@ class MainActivity: Activity() {
                     discoveryCursor=null; discoverySelection=DiscoverySelection()
                     tabState.remove(2); tabFocus.remove(2); pendingNewReleaseFocus="back"; showCatalog(true)
                 }.apply { nextFocusUpId=nav[tab].id }
-                newReleaseWindowButton=addButton(heading,newReleaseLabel()) {
-                    newReleaseWindow=nextNewReleaseWindow()
-                    page=1; catalogFocus=""; discoveryCursor=null; discoverySelection=newReleaseSelection()
-                    tabState.remove(2); tabFocus.remove(2); pendingNewReleaseFocus="window"; showCatalog(true)
-                }.apply { nextFocusUpId=nav[tab].id }
-                rankRefresh=addButton(heading,"刷新上新") {
+                newReleaseWindowButton=addButton(heading,"时间 · ${newReleaseLabel()}") { showNewReleaseWindowPicker() }
+                    .apply { nextFocusUpId=nav[tab].id }
+                rankRefresh=addButton(heading,"刷新") {
                     page=1; catalogFocus=""; discoveryCursor=null; discoverySelection=newReleaseSelection()
                     pendingNewReleaseFocus="refresh"; showCatalog(true)
                 }.apply { nextFocusUpId=nav[tab].id }
@@ -1166,7 +1182,7 @@ class MainActivity: Activity() {
                 newReleaseEntry=addButton(heading,"上新") {
                     newRelease=true; aiCatalog=false; aiGenre=null
                     page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""
-                    discoveryCursor=null; discoverySelection=newReleaseSelection()
+                    discoveryCursor=null; discoverySelection=newReleaseSelection(); pendingNewReleaseFocus=null
                     tabState.remove(2); tabFocus.remove(2); showCatalog(true)
                     newReleaseEntry?.post { if(newReleaseEntry?.isAttachedToWindow==true) newReleaseEntry?.requestFocus() }
                 }.apply { nextFocusUpId=nav[tab].id }
@@ -1425,7 +1441,7 @@ class MainActivity: Activity() {
         val localCount=displayed.size
         if(cloudRows.isNotEmpty()) displayed+=cloudRows.map { it.series }
         if(displayed.isEmpty()) {
-            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(advancedSearch) "当前条件下没有内容，可以换个条件或点「重置」" else if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 2 -> if(newRelease) "${newReleaseLabel()}内暂无上新，换个更长的时间窗试试" else "本页没有更多内容"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
+            message(body,if(loading) "正在加载推荐…" else when(tab) { 1 -> if(advancedSearch) "当前条件下没有内容，可以换个条件或点「重置」" else if(query.isBlank()) "输入名称关键词，或用字母键拼首拼选择联想词" else "没有找到相关${library.contentType.label}，换个关键词试试"; 2 -> if(newRelease) "${newReleaseLabel()}内暂无${rankBoard.label}上新，按「时间」换成更长的范围" else "本页没有更多内容"; 3 -> if(favoriteGroupFilter!=null) "「$favoriteGroupFilter」分组暂无收藏" else "在剧集详情中选择收藏，喜欢的剧就会出现在这里"; 4 -> "播放过的剧集会自动保存在这里"; else -> "本页没有更多内容" })
             wireSearchPanel(null)
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
@@ -1487,6 +1503,21 @@ class MainActivity: Activity() {
         aiEntry?.nextFocusDownId=recycler.id; aiBack?.nextFocusDownId=recycler.id
         newReleaseEntry?.nextFocusDownId=recycler.id; newReleaseBack?.nextFocusDownId=recycler.id
         newReleaseWindowButton?.nextFocusDownId=recycler.id
+        // 排行榜页头按钮行按真实排列顺序左右互连（上新 / 全部分类 / 看X榜 / 刷新，上新页则是 返回 / 时间 / 刷新）。
+        // 只靠框架 focusSearch 时，最左侧的「上新」常被跳过，从网格 ↑ 回按钮后摸不回去；
+        // 两端的键设成自己，避免按到头时焦点乱跳到右上角工具区或直接钻进网格。
+        listOfNotNull(
+            if(newRelease) newReleaseBack else newReleaseEntry,
+            newReleaseWindowButton,
+            aiEntry ?: aiBack,
+            rankSwitch,
+            rankRefresh,
+        ).let { buttons ->
+            buttons.forEachIndexed { index,button ->
+                button.nextFocusLeftId=buttons.getOrNull(index-1)?.id ?: button.id
+                button.nextFocusRightId=buttons.getOrNull(index+1)?.id ?: button.id
+            }
+        }
         favoriteFilterButtons.forEach { it.nextFocusDownId=recycler.id }
         collectionBack?.nextFocusDownId=recycler.id; genreClear?.nextFocusDownId=recycler.id
         typeButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: collectionBack?.id ?: genreClear?.id ?: recycler.id }
@@ -2567,7 +2598,11 @@ class MainActivity: Activity() {
             main.post {
                 // 网格自己会在 layout 后把焦点放到卡片上，这里排到它之后再把焦点还回按钮
                 if(pendingNewReleaseFocus!=null) { catalogRecycler?.postDelayed({ consumePendingNewReleaseFocus() },80); return@post }
-                if(result.items.isEmpty()) { newReleaseWindowButton?.requestFocus(); return@post }
+                if(result.items.isEmpty()) {
+                    // 空态别让用户盯着空白：副标题直接告诉他下一步按哪儿，焦点也落在时间按钮上
+                    rankSubtitle?.text="${newReleaseLabel()}内暂无${rankBoard.label}上新，按「时间」放宽范围"
+                    newReleaseWindowButton?.requestFocus(); return@post
+                }
                 if(keepNav) nav[tab].requestFocus() else (resultFirstCard ?: newReleaseBack)?.requestFocus()
             }
         }, { problem ->
