@@ -245,6 +245,12 @@
     #v-browse .card .ct{margin-top:6px;font-size:12px}
 
     .sheet{max-width:640px;margin:0 auto;width:100%}
+    /* 全量记录弹层原本固定两列大卡片：横屏下每列 293px，3:4 的封面高 391px，
+       比整个弹层（约 375px）还高 —— 一打开只看到两张巨图，标题和集数全被顶到屏幕外。
+       横屏按可用高度排更多小列，保证一眼能看到多行、卡片信息完整。 */
+    .allgrid{grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;padding:2px 18px 18px}
+    .allgrid .ct{font-size:11.5px;line-height:16px;height:32px;margin-top:6px}
+    .allgrid .cc{font-size:10.5px}
   }
 
   /* 更矮的横屏（16:9 手机、车机）：再把方向盘和海报压一档，保证「继续观看」标题完整露出 */
