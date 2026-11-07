@@ -6,6 +6,9 @@ import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 internal class Signer(private val clock: () -> Long = System::currentTimeMillis, private val random: () -> Double = Math::random) {
     data class Request(val url: String, val headers: Map<String, String>, val body: ByteArray?)
@@ -165,44 +168,134 @@ internal class Signer(private val clock: () -> Long = System::currentTimeMillis,
         error("无法生成请求签名")
     }
     /**
-     * 播放接口签名（2026-11-05 平台变更）。播放接口现在要求完整的六头签名，只带 UA + Cookie 的
-     * 请求一律回 HTTP 200 + 0 字节；比 [sign] 少一个 `ts` 查询参数（播放接口不接受），
-     * 且 medusa 必须绑定查询串里的 device_id / version_name，否则风控回 110001。
+     * 播放接口签名（2026-11-05 平台变更后的新算法，移植自 PhoenixReadApi 的 SignPlayer：
+     * https://github.com/LanZhan-Harmony/PhoenixReadApi ）。
+     * 旧六头（含 helios/medusa）已被风控废弃（一律回 110001）；新签名只保留五头：
+     * X-Khronos / X-SS-Req-Ticket / X-Gorgon / X-Argus / X-Ladon，body 非空时附 X-SS-STUB。
+     * 比 [sign] 少一个 `ts` 查询参数（播放接口不接受）；Argus/Ladon 绑定查询串里的
+     * device_id / aid，指纹固定为 7.3.5.32。
      */
     fun signPlayback(base: String, values: Map<String,String>, body: ByteArray?, userAgent: String): Request {
-        val now = clock(); val ts = (now / 1000).toInt()
-        var ticket = now
-        for (offset in 0..127) {
-            ticket = now + offset
-            val query = encode(values + mapOf("_rticket" to ticket.toString()))
-            if (branch(query, body, ts) != 0) continue
-            val url = "$base?$query"
-            val random = (random()*65536).toInt()
-            val headers = linkedMapOf(
-                "User-Agent" to userAgent,
-                "Accept" to "application/json; charset=utf-8,application/x-protobuf",
-                "x-ss-req-ticket" to ticket.toString(),
-                "sdk-version" to "2",
-                "x-xs-from-web" to "0",
-                "x-khronos" to ts.toString(),
-                "x-ladon" to be32(ts).base64(),
-                "x-argus" to le32(ts).base64(),
-                "x-gorgon" to gorgon(query,body,ts,random),
-                "x-helios" to helios(ts),
-                "x-medusa" to medusa(url,body,ts,
-                    deviceId = values["device_id"] ?: VendorConstants.device.getValue("device_id"),
-                    versionName = values["version_name"] ?: VendorConstants.device.getValue("version_name")),
-            )
-            if (body != null) {
-                headers["Content-Type"]="application/json; charset=utf-8"
-                headers["x-ss-stub"]=digest("MD5",body).hex().uppercase()
-            }
-            return Request(url,headers,body)
+        val now = clock(); val ts = now / 1000
+        val query = encode(values + mapOf("_rticket" to now.toString()))
+        val url = "$base?$query"
+        val nonce = ByteArray(11) { (random() * 256).toInt().toByte() }
+        val deviceId = values["device_id"] ?: VendorConstants.device.getValue("device_id")
+        val aid = values["aid"] ?: "8662"
+        val headers = linkedMapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "application/json; charset=utf-8,application/x-protobuf",
+            "x-ss-req-ticket" to now.toString(),
+            "x-khronos" to ts.toString(),
+            "x-gorgon" to playerGorgon(query,body,ts),
+            "x-argus" to playerArgus(query,body,ts,deviceId,nonce),
+            "x-ladon" to playerLadon(aid,ts,nonce.copyOfRange(2,6)),
+        )
+        if (body != null && body.isNotEmpty()) {
+            headers["Content-Type"]="application/json; charset=utf-8"
+            headers["x-ss-stub"]=digest("MD5",body).hex().uppercase()
         }
-        error("无法生成播放签名")
+        return Request(url,headers,body)
+    }
+    // ---- 以下为 PhoenixReadApi 新播放签名私有实现 ----
+    private fun playerGorgon(query: String, body: ByteArray?, ts: Long): String {
+        val payload = ByteArray(20)
+        digest("MD5",query.toByteArray()).copyInto(payload,0,0,4)
+        if (body != null && body.isNotEmpty()) digest("MD5",body).copyInto(payload,4,0,4)
+        payload[13] = 6; payload[14] = 11; payload[15] = 28
+        be32(ts.toInt()).copyInto(payload,16)
+        for (i in payload.indices) payload[i] = (payload[i].u() xor PLAYER_REQUEST_KEY[i].u()).toByte()
+        for (j in payload.indices) {
+            val rotated = ((payload[j].u() shl 4) or (payload[j].u() ushr 4)) and 255
+            val mixed = rotated xor payload[(j + 1) % payload.size].u()
+            payload[j] = ((Integer.reverse(mixed) ushr 24) xor 0xFF xor payload.size).toByte()
+        }
+        return (hex("8404401c0000") + payload).hex()
+    }
+    private fun playerArgus(query: String, body: ByteArray?, ts: Long, deviceId: String, nonce: ByteArray): String {
+        val bodyHash = if (body == null || body.isEmpty()) sm3(ByteArray(16)) else sm3(digest("MD5",body))
+        val queryHash = sm3(query.toByteArray())
+        val out = ByteArrayOutputStream()
+        fun pvTo(s: ByteArrayOutputStream, field: Long, value: Long) { s.write(varint(field shl 3)); s.write(varint(value)) }
+        fun pbTo(s: ByteArrayOutputStream, field: Long, value: ByteArray) { s.write(varint((field shl 3) or 2)); s.write(varint(value.size.toLong())); s.write(value) }
+        fun pv(field: Long, value: Long) = pvTo(out,field,value)
+        fun pb(field: Long, value: ByteArray) = pbTo(out,field,value)
+        fun pb(field: Long, value: String) = pb(field,value.toByteArray())
+        val counters = ByteArrayOutputStream().apply { pvTo(this,1,1); pvTo(this,2,1); pvTo(this,3,1); pvTo(this,7,3348294860L) }.toByteArray()
+        val environment = ByteArrayOutputStream().apply { pbTo(this,1,"25053RT47C".toByteArray()); pbTo(this,2,"16".toByteArray()); pbTo(this,3,"update_64".toByteArray()); pvTo(this,4,2147483648L) }.toByteArray()
+        pv(1,0x20200929L * 2); pv(2,2)
+        pv(3,(nonce.i32(6,true) and 0x7fffffff).toLong())
+        pb(4,"8662"); pb(5,deviceId); pb(6,"1611921764"); pb(7,"7.3.5.32"); pb(8,"v04.07.01-ml-android")
+        pv(9,135135744); pb(10,ByteArray(8)); pv(11,0); pv(12,ts * 2)
+        pb(13,bodyHash.copyOf(6)); pb(14,queryHash.copyOf(6))
+        pb(15,counters)
+        pb(16,ByteArray(0)); pb(20,"none"); pv(21,738)
+        pb(23,environment)
+        pv(25,2)
+        val data = pad(out.toByteArray())
+        val rounds = LongArray(72)
+        for (i in 0..3) rounds[i] = PLAYER_ARGUS_DERIVED.i64(i * 8,true)
+        for (k in 4 until 72) {
+            var mixed = java.lang.Long.rotateRight(rounds[k - 1],3) xor rounds[k - 3]
+            mixed = mixed xor java.lang.Long.rotateRight(mixed,1)
+            val bit = (0x3dc94c3a046d678bL ushr ((k - 4) % 62)) and 1L
+            rounds[k] = rounds[k - 4].inv() xor mixed xor (bit xor 3L)
+        }
+        var at = 0
+        while (at < data.size) {
+            var left = data.i64(at,true); var right = data.i64(at + 8,true)
+            for (round in rounds) {
+                val nextRight = left xor (java.lang.Long.rotateLeft(right,1) and java.lang.Long.rotateLeft(right,8)) xor java.lang.Long.rotateLeft(right,2) xor round
+                left = right; right = nextRight
+            }
+            le64(left).copyInto(data,at); le64(right).copyInto(data,at + 8)
+            at += 16
+        }
+        val mask = hex("d04ffdffd04ffdff")
+        for (n in data.indices) data[n] = (data[n].u() xor mask[n % 8].u()).toByte()
+        val combined = (mask + data).reversedArray()
+        val container = pad(hex("a6e783ee7001100918") + combined + hex("567b"))
+        val encrypted = Cipher.getInstance("AES/CBC/NoPadding").run {
+            init(Cipher.ENCRYPT_MODE,SecretKeySpec(digest("MD5",PLAYER_ARGUS_KEY.copyOfRange(0,16)),"AES"),IvParameterSpec(digest("MD5",PLAYER_ARGUS_KEY.copyOfRange(16,32))))
+            doFinal(container)
+        }
+        return (byteArrayOf(0x3c,0xcc.toByte()) + encrypted).base64()
+    }
+    private fun playerLadon(aid: String, ts: Long, prefix: ByteArray): String {
+        val ascii = digest("MD5",prefix + aid.toByteArray()).hex().toByteArray(Charsets.US_ASCII)
+        var num = ascii.i64(0,true); var value = ascii.i64(8,true)
+        val queue = ArrayDeque(listOf(ascii.i64(16,true),ascii.i64(24,true)))
+        val table = LongArray(34)
+        for (i in table.indices) {
+            table[i] = num
+            val num2 = (java.lang.Long.rotateRight(value,8) + num) xor i.toLong()
+            queue.addLast(num2)
+            num = num2 xor java.lang.Long.rotateLeft(num,3)
+            value = queue.removeFirst()
+        }
+        val data = pad("$ts-1611921764-$aid".toByteArray())
+        var at = 0
+        while (at < data.size) {
+            num = data.i64(at,true); value = data.i64(at + 8,true)
+            for (k in table) {
+                value = k xor (num + java.lang.Long.rotateRight(value,8))
+                num = value xor java.lang.Long.rotateLeft(num,3)
+            }
+            le64(num).copyInto(data,at); le64(value).copyInto(data,at + 8)
+            at += 16
+        }
+        return (prefix + data).base64()
+    }
+    private fun pad(data: ByteArray): ByteArray {
+        val n = 16 - data.size % 16
+        return data + ByteArray(n) { n.toByte() }
     }
     companion object {
         fun encode(values: Map<String,String>) = values.entries.joinToString("&") { (k,v) -> "${encode(k)}=${encode(v)}" }
         fun encode(value: String): String = URLEncoder.encode(value,"UTF-8").replace("+","%20").replace("%7E","~")
+        // PhoenixReadApi 播放签名常量
+        private val PLAYER_REQUEST_KEY = byteArrayOf(68,185.toByte(),185.toByte(),217.toByte(),164.toByte(),174.toByte(),249.toByte(),252.toByte(),164.toByte(),147.toByte(),170.toByte(),117.toByte(),124.toByte(),163.toByte(),194.toByte(),196.toByte(),164.toByte(),150.toByte(),147.toByte(),143.toByte())
+        private val PLAYER_ARGUS_KEY = hex("ac1adaae95a7af94a5114ab3b3a97dd80050aa0a39314c40528caec95256c28c")
+        private val PLAYER_ARGUS_DERIVED = sm3(PLAYER_ARGUS_KEY + hex("3ccc567b") + PLAYER_ARGUS_KEY)
     }
 }

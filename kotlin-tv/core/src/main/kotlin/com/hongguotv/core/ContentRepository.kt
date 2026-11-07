@@ -557,13 +557,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             .toString()
             .toByteArray()
     }
-    /** 2026-11-05 起播放接口必须带完整六头签名；查询串里的客户端版本同步到签名实测可用的 7.3.9.32。 */
+    /** 2026-11-05 起播放接口改用新五头签名；查询串客户端版本对齐签名内嵌的 7.3.5.32。 */
     private fun playbackValues(identity: PlaybackDeviceSession.Profile) = identity.values + mapOf(
-        "version_code" to "73932",
-        "manifest_version_code" to "73932",
-        "update_version_code" to "73932",
-        "pv_player" to "73932",
-        "version_name" to "7.3.9.32",
+        "version_code" to "73532",
+        "manifest_version_code" to "73532",
+        "update_version_code" to "73532",
+        "pv_player" to "73532",
+        "version_name" to "7.3.5.32",
     )
     private fun signedBuilder(signed: Signer.Request, identity: PlaybackDeviceSession.Profile): Request.Builder =
         Request.Builder().url(signed.url).apply {
@@ -704,8 +704,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
         private const val COMIC_WEB_GENRE="205"
         private const val SHORT_WEB_GENRE="203"
-        // 播放接口认的客户端版本与内容接口不同，沿用抓包样本里 7.1.5.32 + tt-ok 的 UA。
-        private const val PLAYBACK_UA="com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
+        // 播放链路指纹对齐新签名算法内嵌的 7.3.5.32 客户端版本。
+        private const val PLAYBACK_UA="com.phoenix.read/73532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
         // 首条路由的空响应重发次数与退避：网关抖动时先原地重试，再换下一条路由。
         private const val BLANK_RETRIES=2
         private const val BLANK_BACKOFF_MS=400L
