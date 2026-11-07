@@ -3,6 +3,7 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +20,7 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.widget.*
 import android.text.SpannableString
 import android.text.Spanned
@@ -487,8 +489,13 @@ class MainActivity: Activity() {
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
         updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && !tvTools.showing }
-        connectivity=getSystemService(ConnectivityManager::class.java)
-        runCatching { connectivity.registerDefaultNetworkCallback(networkCallback); networkRegistered=true }
+        connectivity=getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        // registerDefaultNetworkCallback 要 API 24，低版本退回全量回调
+        runCatching {
+            if(Build.VERSION.SDK_INT>=24) connectivity.registerDefaultNetworkCallback(networkCallback)
+            else connectivity.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),networkCallback)
+            networkRegistered=true
+        }
         favoriteMonitor=FavoriteMonitor(library,repository) { refreshFavoriteLabels() }
         mediaSession=TvMediaSession(this,{ if(foreground && screen=="player") requestPlayback(true) },{ if(foreground && screen=="player") requestPlayback(false) },{ position -> if(foreground && screen=="player") seekTo(position) },{ direction -> skipEpisode(direction) },{ if(foreground && screen=="player") returnToDetail() })
         message(base(),"正在读取本机记录…")
@@ -3162,7 +3169,10 @@ class MainActivity: Activity() {
             } catch(_: Exception) { remote?.close() }
         }
     }
-    private fun networkAvailable(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+    private fun networkAvailable(): Boolean {
+        if(Build.VERSION.SDK_INT>=23) return connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+        @Suppress("DEPRECATION") return connectivity.activeNetworkInfo?.isConnected==true
+    }
     private fun currentPosition(): Long = pendingSeek ?: player?.currentPosition?.takeIf { playbackReady } ?: startPosition
     private fun cancelRecovery() { main.removeCallbacks(retryRunnable); retryPending=false; autoRecovery=false }
     private fun scheduleRecovery() {
@@ -4638,7 +4648,7 @@ class MainActivity: Activity() {
         updater.resume()
         autoStartRemote()
         // 从「安装未知应用」授权页返回：同一个包继续安装，不用重新扫码
-        pendingQuickApk?.let { apk -> if(packageManager.canRequestPackageInstalls()) { pendingQuickApk=null; installQuickApk(apk) } }
+        pendingQuickApk?.let { apk -> if(Build.VERSION.SDK_INT<26 || packageManager.canRequestPackageInstalls()) { pendingQuickApk=null; installQuickApk(apk) } }
         if(library.isLoaded) {
             if(initialCatalogPending) showCatalog(load=true)
             else if(restoreStoppedPage) {

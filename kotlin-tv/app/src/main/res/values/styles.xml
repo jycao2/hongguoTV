@@ -1,4 +1,4 @@
-<resources><style name="AppTheme" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#FF8964</item><item name="android:windowBackground">#0B0F15</item><item name="android:windowLightStatusBar">false</item><item name="android:windowNoTitle">true</item><item name="android:alertDialogTheme">@style/TvAlertDialog</item></style>
+<resources><style name="AppTheme" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#FF8964</item><item name="android:windowBackground">#0B0F15</item><item name="android:windowNoTitle">true</item><item name="android:alertDialogTheme">@style/TvAlertDialog</item></style>
 <!-- 默认 Material 弹窗主题带 windowMinWidthMajor/Minor，DecorView 会把弹窗窗口最小撑到约半屏，
      我们算好的内容宽度全被顶掉，选项靠左、右侧大片空白。这里把最小宽度压掉，
      让 styleWindow 的自然测宽真正决定窗口宽度。

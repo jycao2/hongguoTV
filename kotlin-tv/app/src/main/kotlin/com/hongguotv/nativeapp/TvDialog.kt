@@ -170,8 +170,11 @@ object TvDialog {
         text = url
         textSize = 10f
         setTextColor(TvStyle.muted)
-        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+        // setBreakStrategy / setHyphenationFrequency 要 API 23，低版本本身就没有这两项排版策略
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+            hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+        }
     }
 
     /**

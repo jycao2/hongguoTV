@@ -4,6 +4,7 @@ package com.hongguotv.nativeapp
 // 账号状态与云端记录：登录凭证安全存储、云端历史只读拉取、本机记录手动同步到云端。
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
@@ -19,6 +20,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /** Credentials stay in an Android Keystore encrypted partition, outside library exports. */
 private class AccountStore(context: Context) {
@@ -26,6 +28,8 @@ private class AccountStore(context: Context) {
     private val alias = "hongguotv.cloud.account.v1"
 
     private fun key(): SecretKey {
+        // Android 5.x 的 Keystore 不提供 AES 密钥，退回应用私有的随机密钥，加解密格式与新版一致
+        if (Build.VERSION.SDK_INT < 23) return legacyKey()
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(alias, null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
@@ -41,6 +45,13 @@ private class AccountStore(context: Context) {
                 )
             }
             .generateKey()
+    }
+
+    private fun legacyKey(): SecretKey {
+        prefs.getString("legacy_key", null)?.let { return SecretKeySpec(Base64.decode(it, Base64.NO_WRAP), "AES") }
+        val raw = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        check(prefs.edit().putString("legacy_key", Base64.encodeToString(raw, Base64.NO_WRAP)).commit()) { "初始化本地密钥失败" }
+        return SecretKeySpec(raw, "AES")
     }
 
     fun read(): AccountCredentials? {

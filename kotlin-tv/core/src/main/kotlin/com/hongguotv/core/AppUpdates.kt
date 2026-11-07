@@ -44,10 +44,10 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
             val apk = o.getJSONObject("apk")
             val update = AppUpdate(o.getLong("versionCode"), o.getString("versionName"), o.getInt("minSdk"),
                 o.getString("tag"), apk.getString("name"), apk.getLong("size"), apk.getString("sha256").lowercase(), o.optString("notes").take(1500))
-            require(update.versionCode in 1..Int.MAX_VALUE.toLong() && update.minSdk in 26..100)
+            require(update.versionCode in 1..Int.MAX_VALUE.toLong() && update.minSdk in 21..100)
             require(update.versionName.matches(Regex("[0-9][0-9A-Za-z.+-]{0,63}")))
             require(update.tag.matches(Regex("kotlin-v[0-9][0-9A-Za-z.+-]{0,80}")))
-            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android8\\.apk")))
+            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android5\\.apk")))
             require(update.size in 1..MAX_APK_BYTES && update.sha256.matches(Regex("[0-9a-f]{64}")))
             return update
         }

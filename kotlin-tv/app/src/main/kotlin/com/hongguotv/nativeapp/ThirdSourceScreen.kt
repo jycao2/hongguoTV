@@ -20,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.TextViewCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -490,7 +491,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 setPadding(dp(14), dp(8), dp(16), dp(8))
                 setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0)
                 compoundDrawablePadding = dp(6)
-                setCompoundDrawableTintList(ColorStateList.valueOf(TvStyle.accent))
+                TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(TvStyle.accent))
                 focusStyle(this)
                 setOnClickListener { openSearch() }
             }
@@ -2973,7 +2974,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         setOnFocusChangeListener { _, focused ->
             background = rounded(if(focused) TvStyle.raised else TvStyle.surface, if(focused) TvStyle.accent else TvStyle.outline)
             if(focused) {
-                val manager = activity.getSystemService(InputMethodManager::class.java)
+                val manager = activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager
                 manager?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
             }
         }
