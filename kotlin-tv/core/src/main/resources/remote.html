@@ -24,7 +24,9 @@
   .dot.off{background:var(--dim)}
   .ip{font-size:12px;color:var(--muted);letter-spacing:.02em}
   .spacer{flex:1}
-  .more{background:transparent;border:0;color:var(--muted);font-size:18px;padding:4px 8px;border-radius:8px}
+  .more{background:transparent;border:0;color:var(--muted);font-size:18px;padding:4px 8px;border-radius:8px;
+    display:flex;align-items:center;justify-content:center}
+  .more svg{display:block;width:19px;height:19px}
   .more:active{background:var(--raised)}
 
   .menu{position:absolute;right:14px;top:46px;z-index:40;min-width:190px;
@@ -256,7 +258,7 @@
   <span class="dot" id="dot"></span>
   <span class="ip" id="ip">正在连接…</span>
   <span class="spacer"></span>
-  <button class="more" id="fs" title="全屏" hidden>⛶</button>
+  <button class="more" id="fs" title="全屏" hidden></button>
   <button class="more" id="more">···</button>
   <!-- 菜单放进 bar：宽屏把内容收窄居中后，绝对定位仍跟着「···」走 -->
   <div class="menu" id="menu">
@@ -893,9 +895,14 @@
     var btn = $("fs");
     var req = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
     if (!req) { btn.hidden = true; return; }
-    // HTML 里按钮默认带 hidden；只有确认支持全屏时才显示出来，否则永远看不见。
-    btn.hidden = false;
     function cur(){ return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement; }
+    // 四角向外=进全屏，向内=退出：一个字符的 ⛶ 看不出点下去会发生什么
+    var ICON_IN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg>';
+    var ICON_OUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M9 20v-5H4"/><path d="M15 20v-5h5"/></svg>';
+    // 全屏里按钮保持可见：之前进全屏就 hidden，等于把人锁在全屏里，只剩系统返回手势能出来
+    function paintFs(){ var on = !!cur(); btn.innerHTML = on ? ICON_OUT : ICON_IN; btn.title = on ? "退出全屏" : "全屏"; }
+    // HTML 里按钮默认带 hidden；只有确认支持全屏时才显示出来，否则永远看不见。
+    btn.hidden = false; paintFs();
     // 进全屏后浏览器会沿用手机当时的姿态，不少内核（国产浏览器尤其）在全屏时直接转成横向，
     // 而这一页是按竖屏手机排的。能锁就锁竖屏；锁不住的（桌面 Chrome、老内核）走上面的横屏两栏样式。
     function lockPortrait(){
@@ -917,12 +924,9 @@
         lockPortrait();
       }
     };
-    document.addEventListener("fullscreenchange", function(){
-      var on = !!cur();
-      btn.hidden = on;
-      if (on) lockPortrait(); else unlockOrientation();
-    });
-    document.addEventListener("webkitfullscreenchange", function(){ btn.hidden = !!cur(); });
+    function syncFs(){ paintFs(); if (cur()) lockPortrait(); else unlockOrientation(); }
+    document.addEventListener("fullscreenchange", syncFs);
+    document.addEventListener("webkitfullscreenchange", syncFs);
   })();
   $("lost-retry").onclick = function(){
     $("f-lost").classList.remove("on");
