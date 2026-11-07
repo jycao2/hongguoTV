@@ -191,6 +191,8 @@ class MainActivity: Activity() {
     private var autoRecovery=false
     /** 本次播放连续跳过的不兼容集数：成功后归零，最多自动跳 5 集。 */
     private var incompatibleSkips=0
+    /** 排着队的「不兼容自动跳下一集」定时任务：用户抢先点了上一集/选集时必须撤掉。 */
+    private var skipUnplayableJob: Runnable?=null
     private var startPosition=0L
     /**
      * 本次会话里每一集看到的位置，键为「剧 id:集 id」。
@@ -2897,8 +2899,12 @@ class MainActivity: Activity() {
             else -> play.requestFocus()
         }
     }
+    /** 撤掉还没执行的「不兼容自动跳下一集」：用户已经自己动手换集了，不能再被拖回去。 */
+    private fun cancelSkipUnplayable() {
+        skipUnplayableJob?.let { main.removeCallbacks(it) }; skipUnplayableJob=null
+    }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
-        updater.interrupt(); cancelWarm()
+        updater.interrupt(); cancelWarm(); cancelSkipUnplayable()
         val data=detail ?: return
         val playbackStarted=android.os.SystemClock.elapsedRealtime()
         // 从详情页重新进播放器时丢弃上一轮的临时设置；自动连播保持在同一条降档链上。
@@ -3256,16 +3262,23 @@ class MainActivity: Activity() {
         val actions=row(); controls.addView(actions)
         if(incompatible) {
             val hasNext=episodeIndex<detail?.episodes.orEmpty().lastIndex
+            val hasPrev=episodeIndex>0
+            // 本集放不出来时用户最想做的往往是退回上一集，只给「下一集」等于把人往前逼。
+            // 上一集按钮放在最前：点错了也能原路退回去，自动跳集期间同样可用来打断。
+            val prev=if(hasPrev) addButton(actions,"播放上一集") { playEpisode(episodeIndex-1,savedPosition(episodeIndex-1)) } else null
             if(hasNext && extras.autoSkipUnplayable && incompatibleSkips<5) {
                 // 整批集数可能都是不可解码片源：最多连跳 5 集，避免无限空转
                 incompatibleSkips++
                 playbackText.text="本集片源暂不兼容，自动跳过 · 已跳过 $incompatibleSkips 集"
                 addButton(actions,"返回选集") { returnToDetail(true) }
-                main.postDelayed({ if(foreground && screen=="player" && playError) playEpisode(episodeIndex+1) },1200)
+                val job=Runnable { skipUnplayableJob=null; if(foreground && screen=="player" && playError) playEpisode(episodeIndex+1) }
+                skipUnplayableJob=job
+                main.postDelayed(job,1200)
             } else {
-                if(hasNext) addButton(actions,"播放下一集") { playEpisode(episodeIndex+1) }.requestFocus()
+                val next=if(hasNext) addButton(actions,"播放下一集") { playEpisode(episodeIndex+1) } else null
                 val back=addButton(actions,"返回选集") { returnToDetail(true) }
-                if(!hasNext) back.requestFocus()
+                // 焦点优先仍给「下一集」；没有下一集时才退到上一集，最后才是返回选集。
+                (next ?: prev ?: back).requestFocus()
             }
         } else {
             addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
