@@ -2,9 +2,10 @@
 
 本文件记录红果 TV 面向使用者的改动。版本号为 Android `versionName`，括号内为 `versionCode`。
 
-## v0.30.8（10337）— 2026-11-08
+## v0.30.8+52（10452）— 2026-11-08
 
 自 v0.28.0 之后这一轮迭代的合并说明。中间版本未单独发布，统一并入本条。
+云端正式包：[kotlin-v0.30.8-build.52](https://github.com/jycao2/hongguoTV/releases/tag/kotlin-v0.30.8-build.52)，`versionCode` 基准由 10200 抬到 10400（本机调试包已到 10337，不抬会让电视判定「不是更新」）。
 
 ### 语音遥控（新增）
 
