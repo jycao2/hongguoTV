@@ -199,6 +199,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var seekBarView: View? = null
     private var playTime: TextView? = null
     private var overlayVisible = false
+    /** 顶部信息条右侧的鼠标退出按钮：只在最近一次操作来自鼠标时出现，见 [TvPointer]。 */
+    private var exitPlayButton: View? = null
+    /** 最近一次操作是不是鼠标做的：遥控一按就翻回 false，按钮随之收起。 */
+    private var pointerSeen = false
     // 平滑快进快退：按住左右键时虚拟位置按节奏推进并实时渲染关键帧预览，松开才精确定位
     private var scrubbing = false
     /** ExoPlayer 最近一次带宽估计（bps）：缓冲提示用它显示实时网速。 */
@@ -354,6 +358,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     /** 播放页按键接管；浏览态只接管网格上下翻行（RecyclerView 在固定高度容器里不会为焦点自动滚动）。 */
     fun onKey(event: KeyEvent): Boolean {
+        // 遥控一按就把鼠标专属的按钮收起来：最近一次操作已经换人了
+        if(pointerSeen && mode == Mode.PLAY) { pointerSeen = false; showExitForPointer() }
         if(event.action == KeyEvent.ACTION_DOWN && (mode == Mode.BROWSE || mode == Mode.HISTORY || mode == Mode.FAVORITE) && browseGridKey(event.keyCode)) return true
         // 历史/收藏页：菜单键删除当前聚焦的记录（遥控器长按行为不一致，这里用显式按键）
         if(event.action == KeyEvent.ACTION_DOWN && mode == Mode.HISTORY && event.keyCode == KeyEvent.KEYCODE_MENU) { deleteFocusedHistory(); return true }
@@ -2646,6 +2652,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         })
         host.setOnTouchListener { _, e ->
             if(mode != Mode.PLAY) return@setOnTouchListener false
+            // 鼠标点一下记住来源：退出按钮与控制层的手势提示跟着出现
+            if(TvPointer.isPointer(e) && !pointerSeen) { pointerSeen = true; showExitForPointer() }
             if(e.actionMasked == MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY) != 0) {
                 onBack()
                 return@setOnTouchListener true
@@ -2653,6 +2661,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             tapGestures.onTouchEvent(e)
         }
         buildOverlay(host, data, group.first)
+        // 鼠标一动就把退出按钮放出来；遥控一按（见 onKey）再收回去
+        TvPointer.onHover(host) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() } }
         (activity.findViewById(android.R.id.content) as FrameLayout).addView(host, FrameLayout.LayoutParams(-1, -1))
         scheduleSave()
         // 缓冲看门狗：打开任何一集都启动，长时间卡在缓冲时自动换线路/换源
@@ -2668,13 +2678,16 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         topBar.addView(text("${data.video.name} · ${data.groups.getOrNull(playGroup)?.second?.getOrNull(playEpisode)?.label.orEmpty()}", 15f), lp(0, -2).apply { weight = 1f })
         topBar.addView(text("${detailSource?.name.orEmpty()} · $groupName", 12f, muted))
-        // 插着鼠标的人下意识想到「点右上角关掉」；遥控用户仍按返回键，两条路都通
+        // 插着鼠标的人下意识想到「点右上角关掉」；遥控用户仍按返回键。
+        // 默认收起，鼠标真的动了/点了才放出来——遥控用户看到点不到的按钮只会更困惑。
         val exitPlay = text("✕ 退出", 13f).apply {
             isFocusable = false; isClickable = true
             setPadding(dp(12), dp(4), dp(12), dp(4))
             background = rounded(Color.argb(90, 0, 0, 0), radius = 8)
             setOnClickListener { onBack() }
+            visibility = View.GONE
         }
+        exitPlayButton = exitPlay
         topBar.addView(exitPlay, lp(-2, -2).apply { leftMargin = dp(12) })
         topBar.visibility = View.GONE
         host.addView(topBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
@@ -2919,8 +2932,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
+    /** 鼠标专属的入口只跟最近一次操作来源有关，与电视上插着什么设备无关。 */
+    private fun showExitForPointer() {
+        exitPlayButton?.visibility = if(pointerSeen) View.VISIBLE else View.GONE
+    }
+
     private fun showOverlay(focusButtons: Boolean = true) {
         overlayVisible = true
+        showExitForPointer()
         overlayTopView?.visibility = View.VISIBLE
         overlay?.visibility = View.VISIBLE
         updatePlayUi()

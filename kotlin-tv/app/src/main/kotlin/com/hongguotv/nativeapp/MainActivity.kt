@@ -397,6 +397,10 @@ class MainActivity: Activity() {
     private var panel=false
     private var transportPlay: TextView?=null
     private var sleepButton: TextView?=null
+    /** 播放页右上角的鼠标退出按钮：只在最近一次操作来自鼠标时出现，见 [TvPointer]。 */
+    private var playerExit: TextView?=null
+    /** 最近一次操作是不是鼠标做的：遥控一按就翻回 false，按钮随之收起。 */
+    private var mouseSeen=false
     private var speedDialog: AlertDialog?=null
     private var pendingSeek: Long?=null
     private var playError=false
@@ -3109,7 +3113,8 @@ class MainActivity: Activity() {
             root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }
-            // 标题行右侧留一个鼠标能点的退出：遥控用户按返回键，插鼠标的用户不该只剩键盘快捷键
+            // 标题行右侧留一个鼠标能点的退出：遥控用户按返回键，插鼠标的用户不该只剩键盘快捷键。
+            // 默认收起，等鼠标真的动了/点了才放出来——遥控用户看到一颗点不到的按钮只会更困惑。
             val titleRow=row().apply { gravity=Gravity.CENTER_VERTICAL }
             titleRow.addView(playbackTitle,lp(0,-2).apply { weight=1f })
             val exitPlay=text("✕ 退出",13f,muted).apply {
@@ -3117,7 +3122,9 @@ class MainActivity: Activity() {
                 setPadding(dp(12),dp(5),dp(12),dp(5))
                 background=rounded(Color.argb(96,0,0,0),TvStyle.outline)
                 setOnClickListener { returnToDetail() }
+                visibility=View.GONE
             }
+            playerExit=exitPlay
             titleRow.addView(exitPlay,lp(-2,-2))
             hud.addView(titleRow)
             playbackStatus=text("",14f,gold).apply { setPadding(0,dp(6),0,0); maxLines=1 }
@@ -3141,6 +3148,8 @@ class MainActivity: Activity() {
             progressBar.onScrollStep={ delta -> seekTo(currentPosition()+delta) }
             hud.addView(progressBar,lp(-1,dp(26)))
             keyHints=text(keyHintText(),13f,muted).apply { setPadding(0,dp(12),0,0) }; hud.addView(keyHints)
+            // 鼠标一动就把退出按钮与鼠标手势提示放出来；遥控一按（见 dispatchKeyEvent）再收回去
+            TvPointer.onHover(root) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() } }
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             // 转圈单独挂在根布局正中央，不占底部 HUD 空间；播放失败自动重试时才可见。
             recoverySpinner=ProgressBar(this,null,android.R.attr.progressBarStyle).apply { indeterminateTintList=android.content.res.ColorStateList.valueOf(accent); visibility=View.GONE }
@@ -3528,6 +3537,8 @@ class MainActivity: Activity() {
         val detector=GestureDetector(this,gestures)
         root.setOnTouchListener { _,e ->
             if(screen!="player") return@setOnTouchListener false
+            // 鼠标点一下就记住：控制条上的退出按钮与鼠标手势提示跟着出现
+            if(TvPointer.isPointer(e) && !mouseSeen) { mouseSeen=true; refreshPointerUi() }
             // 鼠标右键退出播放。TV 上很多遥控器把右键映射成 BACK（那条走 dispatchKeyEvent），
             // 这里接的是真正的鼠标次级键：插着鼠标的人下意识右键，不该什么反应都没有。
             if(e.actionMasked==MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY)!=0) {
@@ -3545,10 +3556,22 @@ class MainActivity: Activity() {
     /** 播放 hud 底部按键提示：跟随「遥控上下键」设置变化。 */
     private fun keyHintText(): String {
         val upDown=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "↓ 下一集    ↑ 上一集" else "↓ 选集    ↑ 更多"
-        return "确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    $upDown    长按菜单 快捷面板    鼠标 拖进度条定位 · 条上滚轮 ±10 秒 · 上下滑换集 · 右键或右上角退出    返回 收起 / 退出"
+        val parts=mutableListOf("确认 暂停/播放","左右 快退/快进","长按右键 3× 快进",upDown,"长按菜单 快捷面板")
+        // 没在用鼠标就不提鼠标手势：屏幕上写着「拖进度条」，人伸手去摸遥控器只会更迷糊
+        if(mouseSeen) parts+="鼠标 拖进度条定位 · 条上滚轮 ±10 秒 · 上下滑换集 · 右键或右上角退出"
+        parts+="返回 收起 / 退出"
+        return parts.joinToString("    ")
     }
+
+    /** 鼠标 / 遥控切换后刷新「只属于鼠标」的那部分界面：右上角退出与手势提示。 */
+    private fun refreshPointerUi() {
+        playerExit?.visibility=if(mouseSeen) View.VISIBLE else View.GONE
+        keyHints?.text=keyHintText()
+    }
+
     private fun showHud() {
         if(screen!="player") return
+        refreshPointerUi()
         hud.visibility=View.VISIBLE; updatePlaybackText(); main.removeCallbacks(hideHud)
         if(!panel && !ffActive && player?.isPlaying==true) main.postDelayed(hideHud,4500)
     }
@@ -5449,6 +5472,8 @@ class MainActivity: Activity() {
     @Deprecated("TV remote back is handled through the activity")
     override fun onBackPressed()=goBack()
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 遥控一按就把鼠标专属的东西收起来：最近一次操作已经换人了
+        if(mouseSeen && screen=="player") { mouseSeen=false; refreshPointerUi() }
         if(tab==6 && third?.onKey(event)==true) return true
         if(handleCatalogDown(event)) return true
         if(handleCatalogUp(event)) return true
