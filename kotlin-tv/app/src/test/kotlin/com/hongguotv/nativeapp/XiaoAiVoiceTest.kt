@@ -2,6 +2,7 @@
 package com.hongguotv.nativeapp
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -120,5 +121,32 @@ class XiaoAiVoiceTest {
         // 实测：私钥格式对但服务端不认时回的是 code=-1 和空 data
         assertEquals("巴法云没认出这把私钥", XiaoAiVoice.problem("""{"code":-1,"msg":"获取失败","data":""}"""))
         assertTrue(XiaoAiVoice.problem("oops").orEmpty().isNotEmpty())
+    }
+
+    @Test
+    fun `载荷里的剧名能直接读出来`() {
+        // 小爱技能把剧名写进 msg，这就是任意剧名的入口
+        assertEquals("黄石第五季", XiaoAiVoice.queryOf("黄石第五季"))
+        assertEquals("黄石第五季", XiaoAiVoice.queryOf("  黄石第五季\n"))
+        assertEquals("The Good Doctor", XiaoAiVoice.queryOf("The Good Doctor"))
+    }
+
+    @Test
+    fun `开关语义的载荷不当剧名`() {
+        // 米家只发 on/off，这些必须继续走「昵称 = 剧名/模块」的老路
+        listOf("on", "off", "ON", " Off ", "toggle", "true", "1", "开", "关").forEach {
+            assertNull("「$it」不该被当成剧名", XiaoAiVoice.queryOf(it))
+        }
+    }
+
+    @Test
+    fun `太短太长带控制字符的载荷都丢掉`() {
+        assertNull(XiaoAiVoice.queryOf(""))
+        assertNull(XiaoAiVoice.queryOf("   "))
+        // 单字：八成是噪声，猜错会直接开始播别的片
+        assertNull(XiaoAiVoice.queryOf("看"))
+        assertNull(XiaoAiVoice.queryOf("a".repeat(XiaoAiVoice.QUERY_MAX + 1)))
+        assertNull("换行以外的控制字符要拒绝", XiaoAiVoice.queryOf("黄石\u0000第五季"))
+        assertNotNull(XiaoAiVoice.queryOf("a".repeat(XiaoAiVoice.QUERY_MAX)))
     }
 }

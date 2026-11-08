@@ -56,6 +56,12 @@ object XiaoAiVoice {
         "设置" to "settings"
     )
 
+    /** 一次语音指令的关键词长度上限，与遥控命令的搜索框一致。 */
+    const val QUERY_MAX = 80
+
+    /** 开关语义的载荷：这些不是剧名，仍按「昵称 = 剧名/模块」的老规矩解释。 */
+    private val SWITCH_WORDS = setOf("on", "off", "toggle", "true", "false", "1", "0", "开", "关")
+
     /** 昵称里常见的装饰：念出来没意义，去掉以后才好匹配剧名。 */
     private val SEPARATORS = charArrayOf(' ', '\u3000', '·', '-', '_', '：', ':', '|', '/', '、')
 
@@ -86,6 +92,23 @@ object XiaoAiVoice {
                 break
             }
         }
+        return text
+    }
+
+    /**
+     * 消息载荷里的剧名。
+     *
+     * 巴法云的 `msg` 实测能带任意文本：米家只会发 `on`/`off`（所以老的「昵称 = 剧名」还得留着），
+     * 但小爱自定义技能可以把用户说的剧名原样写进来，于是同一个主题既能当开关、也能当输入框。
+     *
+     * 只做「像不像一句话」的判断，不做任何猜测：猜错会直接播别的片，比不响应更糟。
+     * 返回 null 表示这不是文本指令，交给开关语义那条老路。
+     */
+    fun queryOf(payload: String): String? {
+        val text = payload.trim()
+        if(text.length < 2 || text.length > QUERY_MAX) return null
+        if(text.lowercase() in SWITCH_WORDS) return null
+        if(text.any { it.isISOControl() }) return null
         return text
     }
 
@@ -305,10 +328,18 @@ class XiaoAiLink(
     }
 
     /**
-     * MQTT 收到的指令。载荷只有 `on` / `off`，昵称要查映射表——映射还没拉到就先记着，
-     * 等轮询补上；这种极端情况用户再喊一次即可。
+     * MQTT 收到的指令。
+     *
+     * 载荷有两种来源，靠内容区分：小爱技能送来的是剧名原文（任意文本），米家送来的是
+     * `on`/`off`。后者要靠映射表查昵称，映射还没拉到就先记着，等轮询补上——这种极端
+     * 情况用户再喊一次即可。
      */
     private fun onMqtt(topic: String, payload: String) {
+        XiaoAiVoice.queryOf(payload)?.let { query ->
+            handled[topic] = System.currentTimeMillis()
+            main.post { if(running) onAction(XiaoAiVoice.Action.Watch(query)) }
+            return
+        }
         if(!payload.equals("on", ignoreCase = true)) return
         val name = names[topic] ?: return
         val action = XiaoAiVoice.actionOf(name) ?: return
@@ -357,13 +388,19 @@ class XiaoAiLink(
         }
         val now = System.currentTimeMillis()
         for(topic in topics) {
-            if(!topic.msg.equals("on", ignoreCase = true)) continue
             if((seen[topic.topic] ?: 0L) >= topic.unix) continue
             seen[topic.topic] = topic.unix
             val recent = handled[topic.topic] ?: 0L
             if(now - recent < MQTT_GRACE_MS) continue
-            val action = XiaoAiVoice.actionOf(topic.name) ?: continue
-            onAction(action)
+            if(topic.msg.equals("on", ignoreCase = true)) {
+                val action = XiaoAiVoice.actionOf(topic.name) ?: continue
+                onAction(action)
+                continue
+            }
+            // 非开关载荷 = 技能写进来的剧名。轮询是兜底通道，这条也得认，否则 MQTT 一断
+            // 就只能喊固定昵称了。
+            val query = XiaoAiVoice.queryOf(topic.msg) ?: continue
+            onAction(XiaoAiVoice.Action.Watch(query))
         }
     }
 

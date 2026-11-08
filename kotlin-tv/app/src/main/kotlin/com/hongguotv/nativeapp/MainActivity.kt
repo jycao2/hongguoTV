@@ -4703,11 +4703,16 @@ class MainActivity: Activity() {
         runSearch(query,fromPhone=true)
         // AI 剧没有独立搜索入口（searchTab=null），放进候选只会白等一次超时
         val types=(listOf(library.contentType)+ContentType.entries).distinct().filter { it.searchTab!=null }
+        // 主站搜索按基名索引：喊「黄石第五季」常常一条都搜不到，去掉季号再试一次就够了。
+        // 原名优先，所以正常说法不会多花时间。
+        val words=listOf(query,ThirdCms.seriesBase(query)).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         io.execute {
-            val hit=types.firstNotNullOfOrNull { type ->
-                val items=runCatching { repository.search(query,1,type) }.getOrNull()?.items.orEmpty()
-                val index=TitleMatch.best(query,items)
-                if(index<0) null else type to items[index]
+            val hit=words.firstNotNullOfOrNull { word ->
+                types.firstNotNullOfOrNull { type ->
+                    val items=runCatching { repository.search(word,1,type) }.getOrNull()?.items.orEmpty()
+                    val index=TitleMatch.best(word,items)
+                    if(index<0) null else type to items[index]
+                }
             }
             main.post {
                 if(isDestroyed) return@post
