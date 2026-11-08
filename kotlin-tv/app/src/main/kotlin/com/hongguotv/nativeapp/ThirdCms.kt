@@ -41,7 +41,7 @@ data class ThirdSearchHit(val source: ThirdSource, val detail: ThirdDetail)
  *  播放地址格式实测：vod_play_from=`liangzi$$$lzm3u8`，vod_play_url=`第01集$https://a#第02集$https://b$$$第01集$https://c`。 */
 object ThirdCms {
     const val PAGE_LIMIT = 20          // 常规单页条目数，page/pagecount 缺失时按「返回条数 < 此值」判尾页
-    const val MAX_SOURCES = 30         // 源列表上限
+    const val MAX_SOURCES = 200        // 源列表上限
     const val SUGGEST_LIMIT = 10       // 联想词条数上限
     const val TIMEOUT_SECONDS = 10L
 
