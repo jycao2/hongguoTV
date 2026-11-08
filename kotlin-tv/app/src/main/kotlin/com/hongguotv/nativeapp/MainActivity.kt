@@ -157,6 +157,10 @@ class MainActivity: Activity() {
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
     private val scrollPositions=mutableMapOf<String,Int>()
+    /** 与 scrollPositions 配对的像素偏移（首个可见卡片 top 相对 RecyclerView 顶）：原位恢复视口用。 */
+    private val scrollOffsets=mutableMapOf<String,Int>()
+    /** 上次触发列表重建时的云端数据签名（登录态+云端记录数+云端收藏数）：状态文本变化不再重建页面。 */
+    private var lastCloudSig=0
     private var prefetchAttemptAt=0L
     private var prefetchAttempts=0
     private var homeScreen: HomeScreen?=null
@@ -540,11 +544,18 @@ class MainActivity: Activity() {
         accountManager=AccountManager(this,library)
         accountManager.onAccountChanged={
             accountButton?.text=accountManager.accountLabel
-            // 账号状态变化后，正在展示的记录/收藏页立即重建（登录后拉取云端历史与收藏、退出后清空云端区）。
-            // isLoaded 必须查：recreate()（换主题/缩放）会新建 AccountManager 并可能立刻回调，
-            // 此时本机记录还在异步加载，showCatalog 里 navHiddenAt 一碰 state() 就崩。
-            // 管理模式只操作本机收藏，不因云端刷新打断。
-            if(library.isLoaded && screen=="catalog" && (tab==4 || collection=="resume" || (tab==3 && !favoriteManage))) showCatalog()
+            // 账号事件只在云端数据实际变化时才重建列表页：读取过程的每条状态文本
+            // （正在读取/已读取 N 部/读取失败）都会触发 changed()，若全部重建，
+            // 用户在最近观看/收藏页往下滚的几秒内会被整页弹回顶部 2~3 次（issue #19.2）。
+            // 签名=登录态+云端记录数+云端收藏数；数据到达/清空时才变化。
+            val sig=if(accountManager.signedIn) 1+accountManager.cloudRows().size*1000+accountManager.cloudFavoriteRows().size else 0
+            if(sig!=lastCloudSig) {
+                lastCloudSig=sig
+                // isLoaded 必须查：recreate()（换主题/缩放）会新建 AccountManager 并可能立刻回调，
+                // 此时本机记录还在异步加载，showCatalog 里 navHiddenAt 一碰 state() 就崩。
+                // 管理模式只操作本机收藏，不因云端刷新打断。
+                if(library.isLoaded && screen=="catalog" && (tab==4 || collection=="resume" || (tab==3 && !favoriteManage))) showCatalog(keepViewport=true)
+            }
         }
         // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
         thirdStore=ThirdStore(this)
@@ -749,7 +760,19 @@ class MainActivity: Activity() {
     }
     private fun releaseCatalogViews() {
         homeScreen?.let { homePosition=it.capturePosition() }
-        (catalogRecycler?.layoutManager as? GridLayoutManager)?.let { scrollPositions[catalogPageKey]=it.findFirstVisibleItemPosition() }
+        // 保存首个可见卡片的 adapter 位置与像素偏移：账号事件等触发的整页重建用这对值原位恢复视口。
+        // 只存位置不带偏移，恢复后整屏内容会整体上移；只按 displayedIndex 换算则会被分节标题错位。
+        (catalogRecycler?.layoutManager as? GridLayoutManager)?.let { lm ->
+            val recycler=catalogRecycler ?: return
+            val child=lm.getChildAt(0)
+            if(child!=null) {
+                val pos=recycler.getChildAdapterPosition(child)
+                if(pos!=RecyclerView.NO_POSITION) {
+                    scrollPositions[catalogPageKey]=pos
+                    scrollOffsets[catalogPageKey]=child.top-recycler.paddingTop
+                }
+            }
+        }
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
         nav.clear(); segmentFirst=null; typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
@@ -856,7 +879,7 @@ class MainActivity: Activity() {
             }
         } else library.history().map { it.series }
     }
-    private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false) {
+    private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false) {
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null; pendingCloudResume=null
         // 当前模块被隐藏时回到首页，避免停留在不可见的页签
         if(navHiddenAt(tab)) tab=0
@@ -1451,11 +1474,16 @@ class MainActivity: Activity() {
                     if(resumeCards.isNotEmpty()) resumeCards.first().requestFocus()
                 }
             })
-        } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter)
+        } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter,keepViewport=keepViewport)
         // 页面重建后初始化联想区：回显点击联想词前的列表，或无词时收起中栏
         if(tab==1 && !advancedSearch) fetchSuggest()
     }
-    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false) {
+    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false) {
+        // keepViewport：后台事件（云端数据到达）触发的重建，用户可能正在浏览页面。
+        // 此时不走 catalogFocus 优先的常规恢复——鼠标滚轮不移动焦点，catalogFocus 停在进页首卡，
+        // 常规恢复会把整屏弹回顶部（issue #19.2）；改按 scrollPositions+scrollOffsets 原位恢复。
+        // hadGridFocus 必须在下方 gridFocusOwned=false 之前捕获：焦点原在网格内才回网格。
+        val hadGridFocus=gridFocusOwned
         if(tab==0 && page==1 && collection==null && genre==null) { renderHome(body,focusNav,focusType,loading); return }
         collectionBack=null; genreClear=null
         if(collection!=null) {
@@ -1598,11 +1626,21 @@ class MainActivity: Activity() {
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus()
         else {
-            val found=displayed.indexOfFirst { it.id==catalogFocus }
-            val target=if(found>=0) found else scrollPositions[catalogPageKey]?.coerceIn(0,displayed.size-1) ?: 0
-            val targetAdapter=adapter.adapterPosition(target)
-            grid.scrollToPositionWithOffset(targetAdapter,0)
-            recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(targetAdapter)?.itemView?.requestFocus() }
+            if(keepViewport) {
+                // 原位恢复：回到重建前同一位置、同一像素偏移。savedPos 是 adapter 位置（含分节标题），
+                // 不能再走 displayedIndex 换算；数据变短时夹到末尾。
+                val savedPos=scrollPositions[catalogPageKey]
+                val targetAdapter=if(savedPos!=null && savedPos>=0) savedPos.coerceIn(0,(adapter.itemCount-1).coerceAtLeast(0)) else 0
+                val focusPos=if(adapter.isHeader(targetAdapter) && targetAdapter+1<adapter.itemCount) targetAdapter+1 else targetAdapter
+                grid.scrollToPositionWithOffset(targetAdapter,scrollOffsets[catalogPageKey] ?: 0)
+                recycler.post { if(catalogRecycler===recycler && hadGridFocus) recycler.findViewHolderForAdapterPosition(focusPos)?.itemView?.requestFocus() }
+            } else {
+                val found=displayed.indexOfFirst { it.id==catalogFocus }
+                val target=if(found>=0) found else scrollPositions[catalogPageKey]?.coerceIn(0,displayed.size-1) ?: 0
+                val targetAdapter=adapter.adapterPosition(target)
+                grid.scrollToPositionWithOffset(targetAdapter,0)
+                recycler.post { if(catalogRecycler===recycler) recycler.findViewHolderForAdapterPosition(targetAdapter)?.itemView?.requestFocus() }
+            }
         }
     }
     private fun inCatalogGrid(view: View,recycler: RecyclerView): Boolean {
