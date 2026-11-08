@@ -170,6 +170,7 @@ val REMOTE_ACTIONS = setOf(
     "theme.set",        // 指定主题：arg = dark | light
     "clock.toggle",     // 顶栏系统时间
     "backdrop.reset",   // 恢复默认背景
+    "dialog.close",     // 关掉当前最上层的弹窗（没有弹窗时不执行）
     // 播放偏好（设置页里的开关）
     "autonext.toggle",  // 自动连播
     "autoseason.toggle",// 系列剧连播

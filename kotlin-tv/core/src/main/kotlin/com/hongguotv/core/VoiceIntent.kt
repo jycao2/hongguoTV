@@ -51,6 +51,11 @@ object VoiceIntent {
             RemoteCommand.Act("clock.toggle"), "已切换时间显示"),
         Rule(listOf("恢复默认背景", "默认背景", "恢复背景"),
             RemoteCommand.Act("backdrop.reset"), "已恢复默认背景"),
+        // 关弹窗。必须和「关弹幕」严格分开：两者只差一个字，早先没有这条规则时
+        // 「关闭弹窗」被模糊匹配吃成了切弹幕——喊关窗口结果把字幕评论开了。
+        Rule(listOf("关闭弹窗", "关掉弹窗", "关弹窗", "关闭弹框", "关掉弹框", "关弹框",
+            "关闭窗口", "关掉窗口", "关窗口", "关闭对话框", "关掉对话框", "关闭提示框"),
+            RemoteCommand.Act("dialog.close"), "关闭弹窗"),
         // 播放偏好
         Rule(listOf("自动连播", "自动播放下一集", "播完自动下一集"),
             RemoteCommand.Act("autonext.toggle"), "已切换自动连播"),
@@ -223,13 +228,17 @@ object VoiceIntent {
     }
 
     /**
-     * 模糊兜底。
+     * 模糊兜底：只容忍**多说**几个字，不容忍**少一个字**。
      *
-     * 判据是「别名的每一个不同字都在句子里出现过」，并且句子不能比别名长太多。
-     * 这样 `检查版本是否有更新` 能认出 `检查更新`，而 `我要看黄金时代` 不会因为
-     * 共用一个「看」字就误判成 `接着看`——因为「接着」两个字都不在句子里。
+     * 判据是「别名的每一个不同字都在句子里出现过」，也就是命中率必须是 100%。
+     * 这个门槛看似严格，实际正是想要的：`检查版本是否有更新` 里「检查」「更」「新」都在，
+     * 能认出 `检查更新`；而 `我要看黄金时代` 共用不到「接」「着」，认不出 `接着看`。
      *
-     * 两个不同动作的得分并列时宁可放弃：并列意味着这句话真的有两种解释。
+     * 曾经放过 0.75 的宽松档，结果 `关闭弹窗` 因为只差一个「幕」字被判成 `关闭弹幕`——
+     * 四个字错一个字，语义就可能整个拧了（关窗口 vs 开弹幕）。中文短词里没有「差一个字还算对」，
+     * 所以这里宁可退到剧名那一步，也不猜。
+     *
+     * 两个不同动作的得分并列时同样放弃：并列意味着这句话真的有两种解释。
      */
     private fun fuzzy(bare: String): Plan? {
         var bestScore = 0.0
@@ -241,10 +250,11 @@ object VoiceIntent {
                 if(bare.length > word.length * 2) continue
                 val distinct = word.toSet()
                 val hit = distinct.count { it in bare }
-                val score = hit.toDouble() / distinct.size
-                if(score < 0.75) continue
+                // 必须全覆盖：少一个字不猜。
+                if(hit < distinct.size) continue
+                val score = 1.0
                 if(score > bestScore) { bestScore = score; best = rule; tie = false }
-                else if(score == bestScore && best != null && best !== rule) tie = true
+                else if(best != null && best !== rule) tie = true
             }
         }
         if(best == null || tie) return null

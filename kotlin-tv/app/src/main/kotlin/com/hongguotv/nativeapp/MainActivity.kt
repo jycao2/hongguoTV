@@ -4731,6 +4731,13 @@ class MainActivity: Activity() {
                 voiceSay("已恢复默认背景")
                 true
             }
+            // 只关弹窗，不代替「返回」：没有弹窗时什么都不做，免得一句话把人从当前页退走。
+            "dialog.close" -> {
+                val dialog=TvDialog.topmostDialog() ?: return false
+                dialog.dismiss()
+                voiceSay("已关闭弹窗")
+                true
+            }
             "autonext.toggle" -> {
                 library.autoNext=!library.autoNext
                 voiceSay(if(library.autoNext) "自动连播已开启" else "自动连播已关闭")

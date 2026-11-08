@@ -81,6 +81,31 @@ class VoiceIntentTest {
         assertEquals("check.interface" to "", act("接口自检"))
     }
 
+    // ------------------------------------------------------------ 弹窗 vs 弹幕
+
+    /**
+     * `关闭弹窗` 曾经被模糊兜底吃成 `danmaku.toggle`：两者只差一个字，
+     * 而 0.75 的宽松阈值刚好放行。喊「关掉这个窗」结果开了弹幕，是最典型的听错型事故。
+     */
+    @Test
+    fun closeDialogIsNotCloseDanmaku() {
+        listOf("关闭弹窗", "关弹窗", "关掉弹窗", "关掉这个弹窗", "关闭弹框", "关掉窗口", "关闭对话框")
+            .forEach { assertEquals("「$it」应关弹窗", "dialog.close", act(it)?.first) }
+
+        listOf("关闭弹幕", "关弹幕", "关掉弹幕", "把弹幕关了", "开弹幕")
+            .forEach { assertEquals("「$it」应切弹幕", "danmaku.toggle", act(it)?.first) }
+    }
+
+    /** 模糊兜底只补「多说了几个字」，不再接受缺字：四个字错一个字，语义就可能整个拧。 */
+    @Test
+    fun fuzzyDoesNotGuessMissingCharacter() {
+        // 「关弹窗」三个字都在，能认出来（多说「一下」不影响）
+        assertEquals("dialog.close", act("关一下弹窗")?.first)
+        // 缺「闭」的「关闭弹窗」不能靠模糊猜；这里落到剧名都行，就是不能变成切弹幕
+        val loose = act("关闭窗")
+        assertTrue("不该猜成弹幕", loose == null || loose.first != "danmaku.toggle")
+    }
+
     // ------------------------------------------------------------ 列表序数
 
     @Test
@@ -140,7 +165,7 @@ class VoiceIntentTest {
     fun everyActIdIsInWhitelist() {
         val samples = listOf(
             "检查版本是否有更新", "切换主题", "换成白的", "显示时间", "恢复默认背景",
-            "自动连播", "系列剧连播", "关掉弹幕", "自动跳过", "下一集", "上一集",
+            "关闭弹窗", "自动连播", "系列剧连播", "关掉弹幕", "自动跳过", "下一集", "上一集",
             "暂停", "继续播放", "接着看", "收藏这个", "清理缓存", "观看统计", "备份",
             "手机快传", "遥控地址", "小爱同学设置", "登录账号", "接口自检", "恢复隐藏",
             "历史记录第二个", "第五集"
