@@ -211,7 +211,11 @@ val REMOTE_ACTIONS = setOf(
     "cache.clear",      // 清理缓存
     "stats.show",       // 观看统计
     "backup.show",      // 本地备份
-    "quick.send",       // 手机快传
+    "quick.send",       // 手机快传（打开面板并生成新二维码）
+    "transfer.refresh", // 刷新手机快传的二维码
+    "transfer.files",   // 打开快传文件列表
+    "transfer.clear",   // 清空快传收到的全部文件
+    "history.clear",    // 清空搜索历史（主站 + 片源）
     "remote.address",   // 遥控地址
     "xiaoai.show",      // 小爱同学设置
     "account.show",     // 账号

@@ -2979,6 +2979,19 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     /**
+     * 语音「清空搜索历史」：片源侧的搜索词一起清掉。
+     *
+     * 主站和片源各存一份历史，人不会记得自己是在哪一侧搜的，所以两条语音动作落下来
+     * 都会把两边都清掉（见 MainActivity 的 `history.clear`）。停在搜索页就顺手重绘，
+     * 让左栏那几行当场消失——说了清空还留着，比没说更让人怀疑没执行。
+     */
+    fun remoteClearSearches(): Boolean {
+        store.clearSearches()
+        if(mode == Mode.SEARCH) rebuild()
+        return true
+    }
+
+    /**
      * 遥控搜片：只把片源的聚合搜索结果摆出来，不起播。
      *
      * 和主站搜索同一条规矩——结果里混着预告和空壳条目，替用户挑一个的代价就是播错。

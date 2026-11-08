@@ -4292,6 +4292,16 @@ class MainActivity: Activity() {
         loadBackdrop()
         Toast.makeText(this,if(style=="forced") "已恢复为强制欣赏" else "已恢复默认背景",Toast.LENGTH_SHORT).show()
     }
+    /**
+     * 语音「打开快传文件」：与设置页里的入口同一条路，不另写一份列表。
+     *
+     * 列表里的确认键按类型分流到安装 / 预览 / 播放，那是「人已经选中了这一行」的确定意图，
+     * 所以 direct=true；列表为空时给的按钮是重新打开手机快传，也不另做一套。
+     */
+    private fun openQuickFiles(anchor: View?) {
+        tvTools.quickFiles(anchor,{ file,kind -> handleQuickTransfer(file,kind,true,anchor) },
+            { tvTools.quickTransfer(anchor,{ file,kind -> handleQuickTransfer(file,kind) },{},{ openQuickFiles(anchor) }) })
+    }
     /** 快传落盘后的分流：APK 引导安装，图片可预览并设为背景，视频可直接播放。
      *  [direct] 用于「快传文件」列表：用户已明确选中该行，直接进入预览/播放。 */
     private fun handleQuickTransfer(file: java.io.File,kind: TransferKind,direct: Boolean=false,anchor: View?=null) {
@@ -4844,7 +4854,32 @@ class MainActivity: Activity() {
             "stats.show" -> { showWatchStats(anchor); true }
             "backup.show" -> { showLocalBackupDialog(anchor); true }
             "quick.send" -> {
-                tvTools.quickTransfer(anchor,{ file,kind -> handleQuickTransfer(file,kind) },{},{})
+                tvTools.quickTransfer(anchor,{ file,kind -> handleQuickTransfer(file,kind) },{},{ openQuickFiles(anchor) })
+                true
+            }
+            // 「刷新二维码」在没开面板时就是打开面板：新码本来就要重新生成一次，
+            // 两条路合并成一条，行为对人是同一个结果（屏幕上出现一张能用的新码）。
+            "transfer.refresh" -> {
+                if(tvTools.lanAddress()==null) { voiceSay("电视还没连上局域网，先连 Wi-Fi 再试"); return true }
+                tvTools.quickTransfer(anchor,{ file,kind -> handleQuickTransfer(file,kind) },{},{ openQuickFiles(anchor) })
+                voiceSay("二维码已刷新")
+                true
+            }
+            "transfer.files" -> { openQuickFiles(anchor); true }
+            "transfer.clear" -> {
+                tvTools.clearQuickFiles { count,bytes ->
+                    voiceSay(if(count<=0) "快传文件本来就是空的"
+                        else "已清空 $count 个快传文件，腾出 ${TransferRules.humanBytes(bytes)}")
+                }
+                true
+            }
+            "history.clear" -> {
+                // 主站与片源各一份历史，一句话两边一起清：人只记得「我搜过」，不记得在哪搜的。
+                library.clearSearches()
+                third?.remoteClearSearches()
+                // 只有停在搜索页才重建：那是左栏历史真正可见的地方，别处重建会白跑一次请求
+                if(tab==1) showCatalog()
+                voiceSay("已清空搜索历史")
                 true
             }
             "remote.address" -> { showRemoteAddress(anchor); true }

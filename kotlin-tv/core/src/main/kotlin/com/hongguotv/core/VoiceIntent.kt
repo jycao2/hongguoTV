@@ -131,6 +131,17 @@ object VoiceIntent {
             RemoteCommand.Act("backup.show"), "本机备份"),
         Rule(listOf("手机快传", "快传", "传文件", "传apk"),
             RemoteCommand.Act("quick.send"), "手机快传"),
+        // 快传的三件事：换一张码、看收到的文件、把文件清掉。
+        // 「快传文件」刻意比「快传」长：说「打开快传文件」要落到文件列表，而不是再开一个上传面板。
+        Rule(listOf("刷新二维码", "二维码刷新", "换个二维码", "换一个二维码", "重新生成二维码", "刷新快传码"),
+            RemoteCommand.Act("transfer.refresh"), "二维码已刷新"),
+        Rule(listOf("打开快传文件", "快传文件", "查看快传文件", "看看快传文件", "打开收到的文件", "收到的文件", "传过来的文件"),
+            RemoteCommand.Act("transfer.files"), "快传文件"),
+        Rule(listOf("清空快传文件", "清空收到的文件", "清空传过来的文件", "删掉快传文件", "删除快传文件", "清空文件"),
+            RemoteCommand.Act("transfer.clear"), "清空快传文件"),
+        // 搜索历史主站与片源各存一份，一句话两边一起清——人不会记得自己在哪一栏搜过。
+        Rule(listOf("清空搜索历史", "清除搜索历史", "清空搜索记录", "清除搜索记录", "删掉搜索历史", "清空历史记录"),
+            RemoteCommand.Act("history.clear"), "已清空搜索历史"),
         Rule(listOf("遥控地址", "遥控器地址", "局域网地址", "遥控接口"),
             RemoteCommand.Act("remote.address"), "遥控地址"),
         Rule(listOf("小爱同学设置", "小爱设置", "语音设置", "小爱连接"),

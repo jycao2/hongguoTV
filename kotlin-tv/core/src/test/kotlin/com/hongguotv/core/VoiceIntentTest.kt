@@ -233,6 +233,36 @@ class VoiceIntentTest {
         assertEquals("account.show" to "", act("登录红果账户"))
     }
 
+    // ------------------------------------------------------------ 快传与历史
+
+    /**
+     * 快传的四句话各归各的：换码、看文件、清空文件。
+     *
+     * 最容易串的是「打开快传文件」——它同时含有 `快传`（手机快传面板）和 `快传文件`（文件列表），
+     * 长词优先的规则在这里必须真正生效，否则说「看文件」却又弹出一张二维码。
+     */
+    @Test
+    fun quickTransferVariants() {
+        assertEquals("transfer.refresh" to "", act("刷新二维码"))
+        assertEquals("transfer.refresh" to "", act("换个二维码"))
+        assertEquals("transfer.files" to "", act("打开快传文件"))
+        assertEquals("transfer.files" to "", act("快传文件"))
+        assertEquals("transfer.clear" to "", act("清空文件"))
+        assertEquals("transfer.clear" to "", act("清空快传文件"))
+        // 不带「文件」二字的仍是上传面板
+        assertEquals("quick.send" to "", act("手机快传"))
+        assertEquals("quick.send" to "", act("打开快传"))
+    }
+
+    @Test
+    fun clearSearchHistory() {
+        listOf("清空搜索历史", "清除搜索历史", "清空搜索记录", "清空历史记录").forEach {
+            assertEquals("「$it」应清搜索历史", "history.clear", act(it)?.first)
+        }
+        // 「历史记录」本身是导航，不能被清空规则吃掉
+        assertEquals(RemoteCommand.Open("history"), command("打开历史记录"))
+    }
+
     // ------------------------------------------------------------ 一致性
 
     /**
@@ -252,7 +282,9 @@ class VoiceIntentTest {
             // 新增：播放页动作、类型切换、随机推荐、音量、定时
             "从头播放", "退出播放", "打开选集", "跳过片头", "快一点", "慢一点",
             "半小时后关掉", "看完这集就关", "声音大一点", "声音小一点", "静音", "取消静音",
-            "随机推荐一部漫剧", "随机推荐", "切换短剧", "看漫剧"
+            "随机推荐一部漫剧", "随机推荐", "切换短剧", "看漫剧",
+            // 新增：快传三件事与搜索历史
+            "刷新二维码", "打开快传文件", "清空文件", "清空搜索历史"
         )
         for(text in samples) {
             val cmd = VoiceIntent.parse(text)?.command
