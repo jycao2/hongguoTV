@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.hongguotv.nativeapp
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** 小爱语音入口的纯逻辑：昵称怎么翻成动作、巴法返回怎么读。 */
+class XiaoAiVoiceTest {
+
+    @Test
+    fun `剧名原样当搜索词`() {
+        assertEquals(XiaoAiVoice.Action.Watch("黄石第五季"), XiaoAiVoice.actionOf("黄石第五季"))
+    }
+
+    @Test
+    fun `红果前缀后面是模块名就跳模块`() {
+        assertEquals(XiaoAiVoice.Action.Open("source"), XiaoAiVoice.actionOf("红果片源"))
+        assertEquals(XiaoAiVoice.Action.Open("home"), XiaoAiVoice.actionOf("红果首页"))
+    }
+
+    @Test
+    fun `红果前缀后面是剧名就开播`() {
+        assertEquals(XiaoAiVoice.Action.Watch("黄石第五季"), XiaoAiVoice.actionOf("红果黄石第五季"))
+    }
+
+    @Test
+    fun `前缀不区分大小写也允许带空格`() {
+        assertEquals(XiaoAiVoice.Action.Open("home"), XiaoAiVoice.actionOf("Hongguo 首页"))
+        assertEquals(XiaoAiVoice.Action.Watch("文盲修仙"), XiaoAiVoice.actionOf("红果TV 文盲修仙"))
+    }
+
+    @Test
+    fun `单个字不猜`() {
+        assertNull(XiaoAiVoice.actionOf("看"))
+        assertNull(XiaoAiVoice.actionOf(""))
+        assertNull(XiaoAiVoice.actionOf("   "))
+    }
+
+    @Test
+    fun `只有前缀没有内容不响应`() {
+        assertNull(XiaoAiVoice.actionOf("红果"))
+        assertNull(XiaoAiVoice.actionOf("hongguo"))
+    }
+
+    @Test
+    fun `两端装饰符去掉`() {
+        assertEquals(XiaoAiVoice.Action.Watch("黄石第五季"), XiaoAiVoice.actionOf("· 黄石第五季 ·"))
+    }
+
+    @Test
+    fun `模块别名齐全`() {
+        assertEquals(XiaoAiVoice.Action.Open("history"), XiaoAiVoice.actionOf("最近观看"))
+        assertEquals(XiaoAiVoice.Action.Open("history"), XiaoAiVoice.actionOf("观看历史"))
+        assertEquals(XiaoAiVoice.Action.Open("rank"), XiaoAiVoice.actionOf("排行榜"))
+        assertEquals(XiaoAiVoice.Action.Open("favorite"), XiaoAiVoice.actionOf("收藏"))
+        assertEquals(XiaoAiVoice.Action.Open("library"), XiaoAiVoice.actionOf("本地库"))
+        assertEquals(XiaoAiVoice.Action.Open("settings"), XiaoAiVoice.actionOf("设置"))
+    }
+
+    private val payload = """
+        {"code":0,"message":"OK","data":[
+          {"topic":"hghs001","msg":"on","name":"黄石第五季","online":true,"unix":1762500000},
+          {"topic":"hgmod1001","msg":"off","name":"红果片源","online":true,"unix":1762500100},
+          {"topic":"lamp002","msg":"on","name":"台灯","online":true,"unix":1762500200}
+        ]}
+    """.trimIndent()
+
+    @Test
+    fun `只认 hg 开头的主题`() {
+        val topics = XiaoAiVoice.parse(payload)
+        assertEquals(2, topics.size)
+        assertEquals(listOf("hghs001", "hgmod1001"), topics.map { it.topic })
+        assertEquals("黄石第五季", topics[0].name)
+        assertEquals("on", topics[0].msg)
+        assertEquals(1762500000L, topics[0].unix)
+    }
+
+    @Test
+    fun `私钥错时返回空列表而不是抛异常`() {
+        assertTrue(XiaoAiVoice.parse("""{"code":40003,"message":"openID error"}""").isEmpty())
+        assertTrue(XiaoAiVoice.parse("not json").isEmpty())
+    }
+
+    @Test
+    fun `错误码翻成人话`() {
+        assertNull(XiaoAiVoice.problem("""{"code":0,"message":"OK"}"""))
+        assertEquals("巴法云私钥不对", XiaoAiVoice.problem("""{"code":40003}"""))
+        assertEquals("巴法云参数有误", XiaoAiVoice.problem("""{"code":10002}"""))
+        // 实测：私钥格式对但服务端不认时回的是 code=-1 和空 data
+        assertEquals("巴法云没认出这把私钥", XiaoAiVoice.problem("""{"code":-1,"msg":"获取失败","data":""}"""))
+        assertTrue(XiaoAiVoice.problem("oops").orEmpty().isNotEmpty())
+    }
+}

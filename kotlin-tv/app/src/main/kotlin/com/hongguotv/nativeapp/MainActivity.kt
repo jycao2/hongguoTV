@@ -517,6 +517,7 @@ class MainActivity: Activity() {
         setupMouseGestures()
         // 永久遥控的密钥/端口落盘，必须先于任何 PhoneRemoteSession 构造
         RemoteAccess.init(this)
+        XiaoAiAccess.init(this)
         accountManager=AccountManager(this,library)
         accountManager.onAccountChanged={
             accountButton?.text=accountManager.accountLabel
@@ -2161,6 +2162,8 @@ class MainActivity: Activity() {
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
         lateinit var remoteAddressButton: TextView
         remoteAddressButton=setting(device,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
+        lateinit var xiaoAiButton: TextView
+        xiaoAiButton=setting(device,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
         lateinit var backup: TextView
         backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -4718,6 +4721,135 @@ class MainActivity: Activity() {
         return true
     }
 
+    /** 小爱语音入口（巴法云中转）。没配私钥时为 null。 */
+    private var xiaoAi: XiaoAiLink? = null
+    private var xiaoAiState: String = ""
+
+    private fun xiaoAiLabel(): String = if(XiaoAiAccess.uid.isBlank()) "小爱同学  ·  未连接"
+        else "小爱同学  ·  已配置 ${XiaoAiAccess.masked()}"
+
+    /**
+     * 只在电视前台轮询巴法云。
+     *
+     * 后台常驻既费流量又会被系统的省电策略掐断，而语音入口的实际场景就是
+     * 「电视开着、人懒得找遥控器」，前台够用。
+     */
+    private fun startXiaoAi() {
+        if(XiaoAiAccess.uid.isBlank()) return
+        val link=xiaoAi ?: XiaoAiLink(
+            { action -> runVoiceAction(action) },
+            { state -> xiaoAiState=state }
+        ).also { xiaoAi=it }
+        link.start()
+    }
+
+    private fun stopXiaoAi() { xiaoAi?.stop() }
+
+    /**
+     * 换私钥后重开：基线要按新账号重算，否则旧主题的时间戳会挡住第一次触发。
+     */
+    private fun restartXiaoAi() {
+        xiaoAi?.destroy(); xiaoAi=null; xiaoAiState=""
+        startXiaoAi()
+    }
+
+    /** 语音动作落到界面：与手机遥控同一套入口，行为保持一致。 */
+    private fun runVoiceAction(action: XiaoAiVoice.Action) {
+        val ok=when(action) {
+            is XiaoAiVoice.Action.Open -> remoteOpenModule(action.module)
+            is XiaoAiVoice.Action.Watch -> remoteWatch(action.query)
+        }
+        val what=when(action) {
+            is XiaoAiVoice.Action.Open -> "打开「${moduleLabel(action.module)}」"
+            is XiaoAiVoice.Action.Watch -> "播放「${action.query}」"
+        }
+        Toast.makeText(this,if(ok) "小爱同学：$what" else "小爱同学：$what 没生效（当前页面不支持）",Toast.LENGTH_SHORT).show()
+    }
+
+    private fun moduleLabel(module: String): String = when(module) {
+        "home" -> "首页"; "search" -> "搜索"; "rank" -> "排行榜"; "favorite" -> "收藏"
+        "history" -> "最近观看"; "settings" -> "设置"; "source" -> "片源"; "library" -> "本地库"
+        else -> module
+    }
+
+    /**
+     * 小爱同学配置。
+     *
+     * 私钥是 32 位十六进制，用遥控器在电视上敲基本不可能，所以主入口是手机扫码填写
+     * （与「添加片源」共用 PhoneInputServer）。
+     */
+    private fun showXiaoAiDialog(anchor: View) {
+        val content=column()
+        content.addView(TvDialog.title(this,"小爱同学  ·  语音开播"))
+        content.addView(TextView(this).apply {
+            textSize=14f; setTextColor(TvStyle.muted); setLineSpacing(dp(5).toFloat(),1f)
+            text=buildString {
+                appendLine("小爱只会说「打开 / 关闭某个设备」，不会把整句传出来，所以约定：")
+                appendLine("巴法云里一个主题就是一个动作，主题昵称就是小爱要喊的名字。")
+                appendLine()
+                appendLine("① cloud.bemfa.com 新建主题，如 hghs001、hgmod1001")
+                appendLine("    主题名只能字母数字，末三位是设备类型（001 插座），否则不会同步到米家")
+                appendLine("② 进主题「更多设置」把昵称改成要喊的话")
+                appendLine("    剧名直接写「黄石第五季」；跳模块写「红果片源」「红果首页」")
+                appendLine("③ 米家 → 我的 → 其他平台设备 → 添加 → 巴法，登录同一个账号")
+                appendLine("④ 把控制台首页那串私钥填进来（扫码最省事），电视在前台时生效")
+            }
+        })
+        val status=TextView(this).apply {
+            textSize=14f; setTextColor(TvStyle.text); setPadding(0,dp(10),0,0)
+            text=xiaoAiStatusText()
+        }
+        content.addView(status)
+        val actions=row().apply { setPadding(0,dp(12),0,0) }
+        lateinit var dialog: AlertDialog
+        val scan=TvDialog.capsuleButton(this,"扫码填写") { }
+        val test=TvDialog.capsuleButton(this,"立即检查") {
+            if(XiaoAiAccess.uid.isBlank()) status.text="私钥  ${XiaoAiAccess.masked()}\n状态  先填私钥"
+            else { restartXiaoAi(); status.text="私钥  ${XiaoAiAccess.masked()}\n状态  正在连接…" }
+        }
+        val clear=TvDialog.capsuleButton(this,"清除") {
+            XiaoAiAccess.setUid(""); xiaoAi?.destroy(); xiaoAi=null; xiaoAiState=""
+            status.text=xiaoAiStatusText()
+            Toast.makeText(this,"已清除小爱配置",Toast.LENGTH_SHORT).show()
+        }
+        val close=TvDialog.capsuleButton(this,"关闭") { dialog.dismiss() }
+        actions.addView(scan,lp(-2,-2).apply { rightMargin=dp(10) })
+        actions.addView(test,lp(-2,-2).apply { rightMargin=dp(10) })
+        actions.addView(clear,lp(-2,-2).apply { rightMargin=dp(10) })
+        actions.addView(close,lp(-2,-2))
+        content.addView(actions)
+        dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog,widthDp=520)
+        scan.setOnClickListener {
+            tvTools.phoneForm(scan,PhoneForm(
+                heading="小爱同学 · 巴法云私钥",
+                description="巴法云控制台首页那串 32 位私钥。它既能读主题列表也能代表账号，只存在电视本机。",
+                fields=listOf(PhoneField("uid","巴法云私钥","控制台首页的 32 位十六进制",64)),
+                doneHint="回到电视即可看到连接状态。",
+                invalidMessage="请填写巴法云控制台首页那串私钥（20 位以上字母数字）"
+            )) { values ->
+                val uid=values["uid"].orEmpty().trim()
+                if(uid.length>=20) {
+                    XiaoAiAccess.setUid(uid); restartXiaoAi()
+                    status.text=xiaoAiStatusText()
+                    Toast.makeText(this,"已保存，正在连巴法云",Toast.LENGTH_SHORT).show()
+                } else status.text="私钥短了，巴法云的是 32 位；请重新扫码填写"
+            }
+        }
+        dialog.show()
+        test.requestFocus()
+    }
+
+    private fun xiaoAiStatusText(): String {
+        val live=xiaoAi?.state() ?: xiaoAiState
+        val state=when {
+            XiaoAiAccess.uid.isBlank() -> "未填写私钥"
+            live.isNotBlank() -> live
+            else -> "等电视开始轮询"
+        }
+        return "私钥  ${XiaoAiAccess.masked()}\n状态  $state"
+    }
+
     /** 方向键走焦点搜索，不做 KeyEvent 注入：注入会撞上播放屏的专用语义（↓选集、↑更多）。 */
     private fun remoteDpad(key: String): Boolean {
         // 弹窗是独立窗口，盖上来以后 Activity.currentFocus 恒为 null，下面的 focusSearch 全部落空。
@@ -4893,6 +5025,7 @@ class MainActivity: Activity() {
         super.onResume(); foreground=true; main.removeCallbacks(tick); main.post(tick)
         updater.resume()
         autoStartRemote()
+        startXiaoAi()
         // 从「安装未知应用」授权页返回：同一个包继续安装，不用重新扫码
         pendingQuickApk?.let { apk -> if(Build.VERSION.SDK_INT<26 || packageManager.canRequestPackageInstalls()) { pendingQuickApk=null; installQuickApk(apk) } }
         if(library.isLoaded) {
@@ -4924,6 +5057,7 @@ class MainActivity: Activity() {
     }
     override fun onStop() {
         restoreStoppedPage=true; generation++; cancelWork(); tvTools.close()
+        stopXiaoAi()
         third?.stop()
         if(screen=="player") { startPosition=currentPosition(); saveProgress(); releasePlayer() }
         artwork.cancelPage(clearMemory=true); library.flush()
@@ -4940,6 +5074,7 @@ class MainActivity: Activity() {
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
         favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); releasePlayer(); accountManager.destroy(); library.close()
         closeRemote()
+        xiaoAi?.destroy()
         third?.release()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
         io.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
