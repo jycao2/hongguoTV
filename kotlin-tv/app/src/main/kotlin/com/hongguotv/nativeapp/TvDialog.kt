@@ -27,6 +27,9 @@ object TvDialog {
 
     private fun dp(activity: Activity, value: Int) = (value * activity.resources.displayMetrics.density).toInt()
 
+    /** 弹窗正文滚动区的标记：遥控上下键靠它找到该滚哪一块（见 [dispatchRemoteKey]）。 */
+    private const val TAG_BODY = "tvdialog:body"
+
     /** 当前存活的弹窗，后进的在最上层。遥控要作用在它上面，见 [topmostDialog]。
      *  用 Dialog 而非 AlertDialog 登记：选集面板（EpisodePanel）和 NAS 播放器是独立 Dialog 窗口，同样要能被遥控。 */
     private val live = ArrayList<Dialog>()
@@ -70,6 +73,15 @@ object TvDialog {
             "right" -> View.FOCUS_RIGHT
             else -> return false
         }
+        // 正文超高的弹窗：上下键翻正文，翻到头再放焦点走。
+        // 实体遥控那条路在 bindScrollKeys，这里管的是手机遥控。
+        val body = decor.findViewWithTag<android.widget.ScrollView>(TAG_BODY)
+        if(body != null && (direction == View.FOCUS_UP || direction == View.FOCUS_DOWN)
+            && (body.canScrollVertically(1) || body.canScrollVertically(-1))) {
+            val page = (body.height * 2 / 3).coerceAtLeast(1)
+            body.scrollBy(0, if(direction == View.FOCUS_DOWN) page else -page)
+            return true
+        }
         val next = (focus ?: decor).focusSearch(direction) ?: decor.focusSearch(direction)
         return next != null && next.requestFocus()
     }
@@ -106,6 +118,44 @@ object TvDialog {
         setTextColor(TvStyle.muted)
         setLineSpacing(0f, 1.25f)
         setPadding(0, 0, 0, dp(activity, 12))
+    }
+
+    /**
+     * 正文滚动区。内容短时高度跟着内容走，和直接放 TextView 没区别；
+     * 内容超过卡片上限时由 [styleWindow] 的 capPx 压高度，再靠方向键翻。
+     */
+    private fun scrollBody(activity: Activity, text: String): android.widget.ScrollView {
+        val label = body(activity, text)
+        return android.widget.ScrollView(activity).apply {
+            // 滚动条常显：默认几秒就淡出，电视遥控器没有滚轮，看不见就等于没有
+            isVerticalScrollBarEnabled = true
+            isScrollbarFadingEnabled = false
+            scrollBarStyle = View.SCROLLBARS_INSIDE_INSET
+            tag = TAG_BODY
+            addView(label, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+    }
+
+    /**
+     * 让遥控器的上下键直接翻正文，而不是先要求焦点落到滚动区上。
+     *
+     * 实体遥控器的按键走 Dialog.dispatchKeyEvent，压根不经过 [dispatchRemoteKey]，
+     * 而正文区里没有可聚焦子项，ScrollView 自己永远等不到焦点——遥控按下去就是没反应。
+     * 这里在弹窗层拦截：焦点停在「知道了」上也能滚，代价是这条弹窗里上下键不再用于移动焦点
+     * （只有一个按钮，本来也没别的去处）。内容不超高时不拦截。
+     */
+    private fun bindScrollKeys(dialog: Dialog, scroll: android.widget.ScrollView) {
+        if(!scroll.canScrollVertically(1) && !scroll.canScrollVertically(-1)) return
+        dialog.setOnKeyListener { _, keyCode, event ->
+            if(event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            // 步长按键时再算：show 之后 scroll 才量出高度
+            val page = (scroll.height * 2 / 3).coerceAtLeast(1)
+            when(keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> { scroll.scrollBy(0, -page); true }
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> { scroll.scrollBy(0, page); true }
+                else -> false
+            }
+        }
     }
 
     /** 胶囊按钮：默认 surface 底，焦点 accent 填充 + 深色文字。 */
@@ -299,11 +349,17 @@ object TvDialog {
         return dialog
     }
 
-    /** 信息弹窗：标题 + 正文 + 单按钮。 */
+    /**
+     * 信息弹窗：标题 + 正文 + 单按钮。
+     *
+     * 正文包在滚动区里并给卡片设了高度上限：720p 这类小屏电视上，长说明（如遥控地址）
+     * 原本会把按钮顶出屏幕，现在是正文自己滚，按钮始终可见。
+     */
     fun info(activity: Activity, title: String, message: String): AlertDialog {
         val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         content.addView(title(activity, title))
-        content.addView(body(activity, message))
+        val scroll = scrollBody(activity, message)
+        content.addView(scroll)
         val buttons = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
@@ -313,7 +369,12 @@ object TvDialog {
         buttons.addView(ok, LinearLayout.LayoutParams(-2, -2))
         content.addView(buttons)
         val dialog = AlertDialog.Builder(activity).setView(card(activity, content)).create()
-        styleWindow(activity, dialog) { ok.requestFocus() }
+        // 卡片总高封顶约六成屏高：内容多就让正文自己滚，标题和按钮永远在屏内
+        val cap = (activity.resources.displayMetrics.heightPixels * 0.65f).toInt()
+        styleWindow(activity, dialog, capPx = cap) {
+            ok.requestFocus()
+            bindScrollKeys(dialog, scroll)
+        }
         ok.setOnClickListener { dialog.dismiss() }
         return dialog
     }
