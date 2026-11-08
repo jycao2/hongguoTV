@@ -404,4 +404,100 @@ class ThirdCmsTest {
         val limited = source.copy(categories = listOf("1", "3"))
         assertEquals(listOf("1", "3"), ThirdCms.filterCategories(limited, cats).map { it.id })
     }
+
+    // ---------- CMS v1 XML（type 0） ----------
+
+    private fun xmlBody(listPage: Int = 1, pageCount: Int = 2, recordCount: Int = 3, withDl: Boolean = true) = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="5.1">
+          <class><ty id="1">电影</ty><ty id="2">剧集</ty></class>
+          <list page="$listPage" pagecount="$pageCount" recordcount="$recordCount">
+            <video>
+              <id>101</id><name><![CDATA[测试片]]></name><type>电影</type>
+              <pic>http://p/1.jpg</pic><note>HD</note><year>2024</year><area>大陆</area>
+              <des><![CDATA[<p>简介文字</p>]]></des>
+              ${if(withDl) """
+              <dl>
+                <dd flag="m3u8"><![CDATA[第01集${'$'}https://a/1.m3u8#第02集${'$'}https://a/2.m3u8]]></dd>
+                <dd flag="mp4"><![CDATA[第01集${'$'}https://b/1.mp4]]></dd>
+              </dl>
+              """.trimIndent() else ""}
+            </video>
+            <video><id>102</id><name>第二部</name></video>
+          </list>
+        </rss>
+    """.trimIndent()
+
+    @Test
+    fun `parseXmlList 解析分类条目与分页`() {
+        val page = ThirdCms.parseXmlList(xmlBody())
+        assertEquals(listOf("1" to "电影", "2" to "剧集"), page.categories.map { it.id to it.name })
+        assertEquals(2, page.videos.size)
+        assertEquals("测试片", page.videos[0].name)
+        assertEquals("HD", page.videos[0].remarks)
+        assertEquals("http://p/1.jpg", page.videos[0].cover)
+        assertTrue(page.hasMore)
+        assertEquals(3, page.total)
+        val last = ThirdCms.parseXmlList(xmlBody(listPage = 2, pageCount = 2))
+        assertFalse(last.hasMore)
+    }
+
+    @Test
+    fun `parseXmlDetailList 解析播放线路与简介`() {
+        val details = ThirdCms.parseXmlDetailList(xmlBody())
+        assertEquals(2, details.size)
+        val first = details[0]
+        assertEquals(2, first.groups.size)
+        assertEquals("m3u8", first.groups[0].first)
+        assertEquals(listOf("第01集" to "https://a/1.m3u8", "第02集" to "https://a/2.m3u8"),
+            first.groups[0].second.map { it.label to it.url })
+        assertEquals("mp4", first.groups[1].first)
+        assertEquals("电影", first.typeName)
+        assertEquals("2024", first.year)
+        assertEquals("大陆", first.area)
+        assertEquals("简介文字", first.synopsis)
+    }
+
+    @Test
+    fun `parseXmlDetailList 无 dl 的条目不产生线路`() {
+        val details = ThirdCms.parseXmlDetailList(xmlBody())
+        assertTrue(details[1].groups.isEmpty())
+    }
+
+    @Test
+    fun `parseXmlDetailPage 分页属性进结果`() {
+        val page = ThirdCms.parseXmlDetailPage(xmlBody())
+        assertEquals(1, page.page)
+        assertTrue(page.hasMore)
+        assertEquals(3, page.total)
+        assertEquals(2, page.details.size)
+    }
+
+    @Test
+    fun `parseXmlSuggestions 取片名去重限条数`() {
+        val names = ThirdCms.parseXmlSuggestions(xmlBody(recordCount = 20))
+        assertEquals(listOf("测试片", "第二部"), names)
+    }
+
+    @Test
+    fun `xmlProbeTotal 有效结构返回总数 纯文本返回null`() {
+        assertEquals(3, ThirdCms.xmlProbeTotal(xmlBody()))
+        // 纯文本响应（未开启搜索的站）无列表结构，client 层据 null 判为不可用
+        assertNull(ThirdCms.xmlProbeTotal("暂不支持搜索"))
+    }
+
+    @Test
+    fun `parseTvboxConfig 收纳 type 0 XML 源并跳过 spider`() {
+        val body = """
+            {"sites":[
+              {"name":"XML老源","api":"https://c/api.php/provide/vod","type":0},
+              {"name":"JSON源","api":"https://a/vod","type":1},
+              {"name":"jar源","api":"csp_XPath","type":3}
+            ]}
+        """.trimIndent()
+        val parsed = ThirdCms.parseTvboxConfig(body)
+        assertEquals(2, parsed.candidates.size)
+        assertEquals(0, parsed.candidates[0].type)
+        assertEquals(1, parsed.skipped)
+    }
 }

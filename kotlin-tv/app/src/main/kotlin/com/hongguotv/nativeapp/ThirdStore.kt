@@ -297,6 +297,7 @@ class ThirdStore(context: Context) {
             val id = item.optString("id"); val api = item.optString("api")
             if(id.isEmpty() || api.isEmpty()) null
             else ThirdSource(id, item.optString("name"), api, readHeaders(item),
+                item.optInt("type", 1),
                 item.optBoolean("searchable", true), item.optBoolean("quickSearch", true),
                 item.optBoolean("filterable", true), readCategories(item), item.optInt("timeoutSeconds", 0))
         }
@@ -307,6 +308,7 @@ class ThirdStore(context: Context) {
         list.forEach { source ->
             val item = JSONObject().put("id", source.id).put("name", source.name).put("api", source.api)
             if(source.headers.isNotEmpty()) item.put("headers", JSONObject(source.headers))
+            if(source.type != 1) item.put("type", source.type)
             if(!source.searchable) item.put("searchable", false)
             if(!source.quickSearch) item.put("quickSearch", false)
             if(!source.filterable) item.put("filterable", false)

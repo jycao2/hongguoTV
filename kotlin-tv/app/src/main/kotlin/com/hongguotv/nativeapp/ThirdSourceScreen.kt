@@ -1879,7 +1879,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             if(existing[index]) return@forEachIndexed
             val gen = generation
             executor.execute {
-                val probe = client.probe(site.api, site.headers)
+                val probe = client.probe(site.api, site.headers, site.timeoutSeconds, site.type)
                 main.post {
                     if(gen != generation) return@post
                     statusViews[index]?.let { view ->
@@ -1906,7 +1906,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 room <= 0 -> {}
                 else -> {
                     val id = "u" + site.api.hashCode().toUInt().toString()
-                    added += ThirdSource(id, site.name, site.api, site.headers, site.searchable, site.quickSearch,
+                    added += ThirdSource(id, site.name, site.api, site.headers, site.type, site.searchable, site.quickSearch,
                         site.filterable, site.categories, site.timeoutSeconds)
                     existingApis += site.api; room--; imported++
                 }

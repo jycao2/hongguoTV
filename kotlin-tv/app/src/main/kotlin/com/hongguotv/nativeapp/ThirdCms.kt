@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 data class ThirdSource(
     val id: String, val name: String, val api: String,
     val headers: Map<String, String> = emptyMap(),
+    val type: Int = 1,
     val searchable: Boolean = true,
     val quickSearch: Boolean = true,
     val filterable: Boolean = true,
@@ -48,6 +49,7 @@ data class ThirdProbe(val ok: Boolean, val total: Int, val reason: String?)
 data class ThirdTvboxSite(
     val name: String, val api: String,
     val headers: Map<String, String> = emptyMap(),
+    val type: Int = 1,
     val searchable: Boolean = true, val quickSearch: Boolean = true, val filterable: Boolean = true,
     val categories: List<String> = emptyList(), val timeoutSeconds: Int = 0
 )
@@ -295,8 +297,143 @@ object ThirdCms {
         else -> emptyMap()
     }
 
-    /** TVBox 明文配置提取：只取 type=1 且 api 为 http(s) 链接的 CMS 源，携带 site.header 专用请求头
-     *  与 searchable/quickSearch/filterable/categories/timeout 元数据；
+    // ---------- CMS v1（type 0）XML 协议 ----------
+    // 结构：rss > class > ty(id=1 文本)；rss > list(page/pagecount/recordcount 属性) > video >
+    //       id/name/type/pic/note/year/area/des 文本节点 + dl > dd(flag=线路名) 播放地址。
+    // 播放地址内容与 JSON 版 vod_play_url 同格式（第01集$url#第02集$url，$$$ 分线路），复用 parsePlayGroups。
+
+    private class XmlVideo {
+        var id = ""; var name = ""; var pic = ""; var note = ""
+        var typeName = ""; var year = ""; var area = ""; var synopsis = ""
+        val playEntries = mutableListOf<Pair<String?, String>>()
+    }
+
+    private class XmlRss(
+        val categories: List<ThirdCategory>, val videos: List<XmlVideo>,
+        val page: Int, val pageCount: Int, val total: Int
+    )
+
+    /** CMS v1 XML 全量解析：分类、条目（含播放地址）、分页属性一次读出；坏 XML 抛异常由调用方兜底。 */
+    private fun parseXmlRss(body: String): XmlRss {
+        val parser = org.xmlpull.v1.XmlPullParserFactory.newInstance().newPullParser()
+        // XML 声明前不允许空白/BOM（kxml 会把 <?xml 当处理指令拒掉），源响应常带，先剥掉
+        parser.setInput(java.io.StringReader(body.trimStart().removePrefix("\uFEFF")))
+        val categories = mutableListOf<ThirdCategory>()
+        val videos = mutableListOf<XmlVideo>()
+        var page = 1; var pageCount = 0; var total = -1
+        var video: XmlVideo? = null
+        var textTag: String? = null; var categoryId: String? = null; var flag: String? = null
+        val text = StringBuilder()
+        var sawList = false
+        while(parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+            when(parser.eventType) {
+                org.xmlpull.v1.XmlPullParser.START_TAG -> when(parser.name.lowercase()) {
+                    "list" -> { sawList = true
+                        page = parser.attrInt("page", 1); pageCount = parser.attrInt("pagecount", 0)
+                        total = parser.attrInt("recordcount", -1) }
+                    "video" -> video = XmlVideo()
+                    "ty" -> { categoryId = parser.attrOrNull("id"); textTag = "ty"; text.setLength(0) }
+                    "dd", "dt" -> { flag = parser.attrOrNull("flag"); textTag = "dd"; text.setLength(0) }
+                    "id" -> if(video != null) { textTag = "id"; text.setLength(0) }
+                    "name" -> if(video != null) { textTag = "name"; text.setLength(0) }
+                    "pic" -> if(video != null) { textTag = "pic"; text.setLength(0) }
+                    "note" -> if(video != null) { textTag = "note"; text.setLength(0) }
+                    "type" -> if(video != null) { textTag = "type"; text.setLength(0) }
+                    "year" -> if(video != null) { textTag = "year"; text.setLength(0) }
+                    "area" -> if(video != null) { textTag = "area"; text.setLength(0) }
+                    "des" -> if(video != null) { textTag = "des"; text.setLength(0) }
+                }
+                org.xmlpull.v1.XmlPullParser.TEXT -> if(textTag != null) text.append(parser.text)
+                org.xmlpull.v1.XmlPullParser.END_TAG -> when(parser.name.lowercase()) {
+                    "ty" -> { val name = text.toString().trim(); val id = categoryId.orEmpty().trim()
+                        if(id.isNotEmpty() && name.isNotEmpty()) categories += ThirdCategory(id, name)
+                        textTag = null; categoryId = null }
+                    "dd", "dt" -> { video?.playEntries += flag?.trim()?.ifEmpty { null } to text.toString().trim()
+                        textTag = null; flag = null }
+                    "video" -> { video?.let { videos += it }; video = null }
+                    "id" -> { video?.id = text.toString().trim(); textTag = null }
+                    "name" -> { video?.name = text.toString().trim(); textTag = null }
+                    "pic" -> { video?.pic = text.toString().trim(); textTag = null }
+                    "note" -> { video?.note = text.toString().trim(); textTag = null }
+                    "type" -> { video?.typeName = text.toString().trim(); textTag = null }
+                    "year" -> { video?.year = text.toString().trim(); textTag = null }
+                    "area" -> { video?.area = text.toString().trim(); textTag = null }
+                    "des" -> { video?.synopsis = text.toString(); textTag = null }
+                }
+            }
+            parser.next()
+        }
+        if(total < 0) total = videos.size
+        return XmlRss(categories, videos, page, pageCount, total)
+    }
+
+    private fun org.xmlpull.v1.XmlPullParser.attrOrNull(name: String): String? {
+        for(index in 0 until attributeCount) if(getAttributeName(index).equals(name, ignoreCase = true)) return getAttributeValue(index)
+        return null
+    }
+    private fun org.xmlpull.v1.XmlPullParser.attrInt(name: String, fallback: Int): Int =
+        attrOrNull(name)?.trim()?.toIntOrNull() ?: fallback
+
+    /** XML 分类（class > ty）。 */
+    fun parseXmlCategories(body: String): List<ThirdCategory> = parseXmlRss(body).categories
+
+    /** XML 列表页（ac=videolist 响应）。 */
+    fun parseXmlList(body: String): ThirdListPage {
+        val rss = parseXmlRss(body)
+        val videos = rss.videos.mapNotNull { video ->
+            if(video.id.isEmpty() || video.name.isEmpty()) null
+            else ThirdVideo(video.id, video.name, video.pic, video.note)
+        }
+        val hasMore = if(rss.pageCount > 0) rss.page < rss.pageCount else videos.size >= PAGE_LIMIT
+        return ThirdListPage(rss.categories, videos, rss.page, rss.pageCount, hasMore && videos.isNotEmpty(), rss.total)
+    }
+
+    /** XML 详情/搜索列表（条目直接带播放地址）。 */
+    fun parseXmlDetailList(body: String): List<ThirdDetail> = parseXmlRss(body).videos.mapNotNull { video ->
+        if(video.id.isEmpty() || video.name.isEmpty()) return@mapNotNull null
+        // 简介与 JSON 版同口径：剥 HTML 标签、解常见实体
+        val synopsis = video.synopsis
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<")
+            .replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
+            .trim()
+        ThirdDetail(
+            ThirdVideo(video.id, video.name, video.pic, video.note),
+            video.typeName.ifEmpty { null }, video.year.ifEmpty { null }, video.area.ifEmpty { null },
+            synopsis.ifEmpty { null },
+            video.playEntries.mapIndexed { index, (flag, content) ->
+                parsePlayGroups(flag.orEmpty(), content).firstOrNull()
+                    ?.takeIf { it.second.isNotEmpty() }
+                    ?: ("线路${index + 1}" to emptyList())
+            }.filter { it.second.isNotEmpty() }
+        )
+    }
+
+    /** XML 单条详情。 */
+    fun parseXmlDetail(body: String): ThirdDetail? = parseXmlDetailList(body).firstOrNull()
+
+    /** XML 搜索分页。 */
+    fun parseXmlDetailPage(body: String): ThirdSearchPage {
+        val rss = parseXmlRss(body)
+        val details = parseXmlDetailList(body)
+        val hasMore = if(rss.pageCount > 0) rss.page < rss.pageCount else details.size >= PAGE_LIMIT
+        return ThirdSearchPage(details, rss.page, hasMore && details.isNotEmpty(), rss.total)
+    }
+
+    /** XML 搜索联想（只取片名，去重限条数）。 */
+    fun parseXmlSuggestions(body: String): List<String> = parseXmlRss(body).videos
+        .map { it.name }.filter { it.isNotEmpty() }
+        .let { LinkedHashSet(it).toList() }
+        .take(SUGGEST_LIMIT)
+
+    /** XML 探活：能解出 rss/list 结构即通过；返回条目总数，非 CMS XML 返回 null。 */
+    fun xmlProbeTotal(body: String): Int? {
+        val rss = parseXmlRss(body)
+        return if(rss.categories.isNotEmpty() || rss.videos.isNotEmpty() || rss.pageCount > 0) rss.total else null
+    }
+
+    /** TVBox 明文配置提取：取 type=1（CMS v10 JSON）与 type=0（CMS v1 XML）且 api 为 http(s) 的源，
+     *  携带 site.header 专用请求头与 searchable/quickSearch/filterable/categories/timeout 元数据；
      *  spider jar（type=3）与加密 app 源（type=4）自动跳过并计数。 */
     fun parseTvboxConfig(body: String): ThirdTvboxParse {
         val sites = JSONObject(body).optJSONArray("sites") ?: return ThirdTvboxParse(emptyList(), 0)
@@ -307,14 +444,14 @@ object ThirdCms {
             val name = item.optString("name").trim()
             val api = item.optString("api").trim()
             val type = item.optInt("type", -1)
-            if(type == 1 && api.startsWith("http")) {
+            if((type == 0 || type == 1) && api.startsWith("http")) {
                 val categoryIds = item.optJSONArray("categories")?.let { array ->
                     (0 until array.length()).mapNotNull { i ->
                         when(val v = array.opt(i)) { is Number -> v.toString(); is String -> v.trim().ifEmpty { null }; else -> null }
                     }
                 }.orEmpty()
                 candidates += ThirdTvboxSite(
-                    name.ifEmpty { "未命名源" }, api, parseHeaders(item.opt("header")),
+                    name.ifEmpty { "未命名源" }, api, parseHeaders(item.opt("header")), type,
                     searchable = tvboxFlag(item, "searchable"),
                     quickSearch = tvboxFlag(item, "quickSearch"),
                     filterable = tvboxFlag(item, "filterable"),
@@ -416,17 +553,21 @@ class ThirdCmsClient {
         }
     }
 
-    /** 分类列表（ac=list 首页响应含完整 class[]；videolist 响应不返回分类）。 */
+    /** 分类列表：JSON 用 ac=list（首页响应含完整 class[]）；XML 用 ac=videolist（class 随列表返回）。 */
     fun categories(source: ThirdSource): List<ThirdCategory> {
         val key = "${source.api}|categories"
         @Suppress("UNCHECKED_CAST")
         (cached(key) as? List<ThirdCategory>)?.let { return it }
-        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "list", "pg" to "1")), headers = source.headers, timeoutSeconds = source.timeoutSeconds, catalog = true)
-        val parsed = response.body?.let { body -> try { ThirdCms.parseList(body).categories } catch (_: Exception) { null } } ?: emptyList()
+        val xml = source.type == 0
+        val params = if(xml) listOf("ac" to "videolist", "pg" to "1") else listOf("ac" to "list", "pg" to "1")
+        val response = get(ThirdCms.apiUrl(source.api, params), headers = source.headers, timeoutSeconds = source.timeoutSeconds, catalog = true)
+        val parsed = response.body?.let { body -> try {
+            if(xml) ThirdCms.parseXmlCategories(body) else ThirdCms.parseList(body).categories
+        } catch (_: Exception) { null } } ?: emptyList()
         store(key, parsed); return parsed
     }
 
-    /** 分类列表与条目分页（ac=videolist，含封面与角标；ac=list 是轻量响应缺 vod_pic）。 */
+    /** 分类列表与条目分页（ac=videolist，含封面与角标；JSON 版 ac=list 是轻量响应缺 vod_pic）。 */
     fun list(source: ThirdSource, categoryId: String?, page: Int): ThirdListPage? {
         val key = "${source.api}|list|$categoryId|$page"
         (cached(key) as? ThirdListPage)?.let { return it }
@@ -436,38 +577,48 @@ class ThirdCmsClient {
             add("pg" to page.toString())
         }
         val response = get(ThirdCms.apiUrl(source.api, params), headers = source.headers, timeoutSeconds = source.timeoutSeconds, catalog = true)
-        val parsed = response.body?.let { body -> try { ThirdCms.parseList(body) } catch (_: Exception) { null } } ?: return null
+        val parsed = response.body?.let { body -> try {
+            if(source.type == 0) ThirdCms.parseXmlList(body) else ThirdCms.parseList(body)
+        } catch (_: Exception) { null } } ?: return null
         store(key, parsed); return parsed
     }
 
-    /** 单条详情（ac=detail&ids=）。 */
+    /** 单条详情：JSON 用 ac=detail&ids=；XML 用 ac=videolist&ids=（CMS v1 无 detail 动作）。 */
     fun detail(source: ThirdSource, id: String): ThirdDetail? {
         val key = "${source.api}|detail|$id"
         (cached(key) as? ThirdDetail)?.let { return it }
-        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "detail", "ids" to id)), headers = source.headers, timeoutSeconds = source.timeoutSeconds)
-        val parsed = response.body?.let { body -> try { ThirdCms.parseDetail(body) } catch (_: Exception) { null } } ?: return null
+        val params = if(source.type == 0) listOf("ac" to "videolist", "ids" to id) else listOf("ac" to "detail", "ids" to id)
+        val response = get(ThirdCms.apiUrl(source.api, params), headers = source.headers, timeoutSeconds = source.timeoutSeconds)
+        val parsed = response.body?.let { body -> try {
+            if(source.type == 0) ThirdCms.parseXmlDetail(body) else ThirdCms.parseDetail(body)
+        } catch (_: Exception) { null } } ?: return null
         store(key, parsed); return parsed
     }
 
-    /** 搜索联想（ac=list&wd=，轻量响应只有片名）；接口不支持搜索或网络失败时静默返回空。 */
+    /** 搜索联想：接口不支持搜索或网络失败时静默返回空。 */
     fun suggest(source: ThirdSource, word: String): List<String> {
         val key = "${source.api}|suggest|$word"
         @Suppress("UNCHECKED_CAST")
         (cached(key) as? List<String>)?.let { return it }
-        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "list", "wd" to word, "pg" to "1")), headers = source.headers, timeoutSeconds = source.timeoutSeconds)
-        val parsed = response.body?.let { body -> try { ThirdCms.parseSuggestions(body) } catch(_: Exception) { null } } ?: emptyList()
+        val action = if(source.type == 0) "videolist" else "list"
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to action, "wd" to word, "pg" to "1")), headers = source.headers, timeoutSeconds = source.timeoutSeconds)
+        val parsed = response.body?.let { body -> try {
+            if(source.type == 0) ThirdCms.parseXmlSuggestions(body) else ThirdCms.parseSuggestions(body)
+        } catch(_: Exception) { null } } ?: emptyList()
         store(key, parsed); return parsed
     }
 
-    /** 片源内搜索分页（ac=detail&wd=，结果直接含封面与播放地址）。
+    /** 片源内搜索分页（结果直接含封面与播放地址）。
      *  部分源未开启搜索时会返回「暂不支持搜索」等纯文本，这里给出明确原因而不是笼统的加载失败。 */
     fun searchPage(source: ThirdSource, word: String, page: Int): ThirdSearchResult {
         val key = "${source.api}|search|$word|$page"
         (cached(key) as? ThirdSearchPage)?.let { return ThirdSearchResult(it, null) }
-        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())), headers = source.headers, timeoutSeconds = source.timeoutSeconds, search = true)
+        val action = if(source.type == 0) "videolist" else "detail"
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to action, "wd" to word, "pg" to page.toString())), headers = source.headers, timeoutSeconds = source.timeoutSeconds, search = true)
         response.body ?: return ThirdSearchResult(null, response.error ?: "连接失败")
-        val parsed = try { ThirdCms.parseDetailPage(response.body!!) } catch(_: Exception) { null }
-            ?: return ThirdSearchResult(null, "该片源未开启搜索")
+        val parsed = try {
+            if(source.type == 0) ThirdCms.parseXmlDetailPage(response.body!!) else ThirdCms.parseDetailPage(response.body!!)
+        } catch(_: Exception) { null } ?: return ThirdSearchResult(null, "该片源未开启搜索")
         store(key, parsed); return ThirdSearchResult(parsed, null)
     }
 
@@ -483,15 +634,17 @@ class ThirdCmsClient {
         store(key, details); return details
     }
 
-    /** 探活：HTTP 200 + JSON 含 list 字段即通过，返回条目数；失败带明确原因。 */
-    fun probe(source: ThirdSource): ThirdProbe = probe(source.api, source.headers, source.timeoutSeconds)
+    /** 探活：HTTP 200 + 响应含 list 结构即通过，返回条目数；失败带明确原因。 */
+    fun probe(source: ThirdSource): ThirdProbe = probe(source.api, source.headers, source.timeoutSeconds, source.type)
 
     /** 裸地址探活（TVBox 导入预览用，源尚未建立时只拿得到 api 与 header）。 */
-    fun probe(api: String, headers: Map<String, String> = emptyMap(), timeoutSeconds: Int = 0): ThirdProbe {
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "pg" to "1")), headers = headers, timeoutSeconds = timeoutSeconds)
+    fun probe(api: String, headers: Map<String, String> = emptyMap(), timeoutSeconds: Int = 0, type: Int = 1): ThirdProbe {
+        val action = if(type == 0) "videolist" else "list"
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to action, "pg" to "1")), headers = headers, timeoutSeconds = timeoutSeconds)
         response.body ?: return ThirdProbe(false, 0, response.error ?: "连接失败")
-        val total = response.body?.let { body -> try { ThirdCms.probeTotal(body) } catch (_: Exception) { null } }
-            ?: return ThirdProbe(false, 0, "非 CMS 接口（缺少 list 字段）")
+        val total = response.body?.let { body -> try {
+            if(type == 0) ThirdCms.xmlProbeTotal(body) else ThirdCms.probeTotal(body)
+        } catch (_: Exception) { null } } ?: return ThirdProbe(false, 0, "非 CMS 接口（响应不包含列表结构）")
         return ThirdProbe(true, total, null)
     }
 
