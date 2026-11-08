@@ -11,8 +11,13 @@ import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-/** 三方片源数据模型：与红果内容体系完全隔离，不进 Library/收藏/历史/备份。 */
-data class ThirdSource(val id: String, val name: String, val api: String)
+/** 三方片源数据模型：与红果内容体系完全隔离，不进 Library/收藏/历史/备份。
+ *  headers：该源的专用请求头（UA/Referer 等），来自 TVBox 配置 site.header，
+ *  API 请求与播放器取流都带上——部分小站校验 UA/防盗链，不带就连不上。 */
+data class ThirdSource(
+    val id: String, val name: String, val api: String,
+    val headers: Map<String, String> = emptyMap()
+)
 data class ThirdCategory(val id: String, val name: String)
 data class ThirdVideo(val id: String, val name: String, val cover: String, val remarks: String)
 data class ThirdEpisode(val label: String, val url: String)
@@ -32,7 +37,7 @@ data class ThirdSearchPage(
 /** 搜索请求结果：page 为空时 error 给出可读原因（该片源未开启搜索 / 网络失败）。 */
 data class ThirdSearchResult(val page: ThirdSearchPage?, val error: String?)
 data class ThirdProbe(val ok: Boolean, val total: Int, val reason: String?)
-data class ThirdTvboxSite(val name: String, val api: String)
+data class ThirdTvboxSite(val name: String, val api: String, val headers: Map<String, String> = emptyMap())
 data class ThirdTvboxParse(val candidates: List<ThirdTvboxSite>, val skipped: Int)
 /** 聚合搜索命中：详情与来源源一起保留，跨源展示、换源与收藏都依赖它。 */
 data class ThirdSearchHit(val source: ThirdSource, val detail: ThirdDetail)
@@ -258,8 +263,27 @@ object ThirdCms {
         return if(total >= 0) total else json.optJSONArray("list")?.length() ?: 0
     }
 
-    /** TVBox 明文配置提取：只取 type=1 且 api 为 http(s) 链接的 CMS 源；
-     *  spider jar（type=0）与加密 app 源（type=3/4）自动跳过并计数。 */
+    /** site.header 解析：TVBox 配置里 header 有两种形态——JSON 对象（{"User-Agent":"..."}）
+     *  或 "User-Agent=xxx;Referer=yyy" 字符串。键值都 trim，空键/空值丢弃。 */
+    fun parseHeaders(raw: Any?): Map<String, String> = when(raw) {
+        is JSONObject -> runCatching {
+            raw.keys().asSequence().mapNotNull { key ->
+                val value = raw.optString(key).trim()
+                key.trim().takeIf { it.isNotEmpty() && value.isNotEmpty() }?.let { it to value }
+            }.toMap()
+        }.getOrDefault(emptyMap())
+        is String -> raw.split(';', ',', '\n').mapNotNull { pair ->
+            val sep = pair.indexOf('=')
+            if(sep <= 0) null else {
+                val key = pair.substring(0, sep).trim(); val value = pair.substring(sep + 1).trim()
+                if(key.isEmpty() || value.isEmpty()) null else key to value
+            }
+        }.toMap()
+        else -> emptyMap()
+    }
+
+    /** TVBox 明文配置提取：只取 type=1 且 api 为 http(s) 链接的 CMS 源，携带 site.header 专用请求头；
+     *  spider jar（type=3）与加密 app 源（type=4）自动跳过并计数。 */
     fun parseTvboxConfig(body: String): ThirdTvboxParse {
         val sites = JSONObject(body).optJSONArray("sites") ?: return ThirdTvboxParse(emptyList(), 0)
         val candidates = mutableListOf<ThirdTvboxSite>()
@@ -269,7 +293,9 @@ object ThirdCms {
             val name = item.optString("name").trim()
             val api = item.optString("api").trim()
             val type = item.optInt("type", -1)
-            if(type == 1 && api.startsWith("http")) candidates += ThirdTvboxSite(name.ifEmpty { "未命名源" }, api)
+            if(type == 1 && api.startsWith("http")) {
+                candidates += ThirdTvboxSite(name.ifEmpty { "未命名源" }, api, parseHeaders(item.opt("header")))
+            }
             else skipped += 1
         }
         return ThirdTvboxParse(candidates, skipped)
@@ -305,11 +331,13 @@ class ThirdCmsClient {
         synchronized(searchCalls) { searchCalls.forEach { it.cancel() }; searchCalls.clear() }
     }
 
-    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。catalog/search 时登记可取消。 */
-    fun get(url: String, catalog: Boolean = false, search: Boolean = false): ThirdHttp {
-        val call = http.newCall(Request.Builder().url(url)
+    /** 单请求：区分 HTTP 错误、空响应与网络异常，给出明确原因。catalog/search 时登记可取消。
+     *  headers：源专用请求头，在默认 UA 之上逐条覆盖（OkHttp 头名不区分大小写）。 */
+    fun get(url: String, headers: Map<String, String> = emptyMap(), catalog: Boolean = false, search: Boolean = false): ThirdHttp {
+        val builder = Request.Builder().url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; TV) AppleWebKit/537.36")
-            .build())
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        val call = http.newCall(builder.build())
         if(catalog) catalogCalls += call
         if(search) searchCalls += call
         return try {
@@ -334,54 +362,54 @@ class ThirdCmsClient {
     }
 
     /** 分类列表（ac=list 首页响应含完整 class[]；videolist 响应不返回分类）。 */
-    fun categories(api: String): List<ThirdCategory> {
-        val key = "$api|categories"
+    fun categories(source: ThirdSource): List<ThirdCategory> {
+        val key = "${source.api}|categories"
         @Suppress("UNCHECKED_CAST")
         (cached(key) as? List<ThirdCategory>)?.let { return it }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "pg" to "1")), catalog = true)
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "list", "pg" to "1")), headers = source.headers, catalog = true)
         val parsed = response.body?.let { body -> try { ThirdCms.parseList(body).categories } catch (_: Exception) { null } } ?: emptyList()
         store(key, parsed); return parsed
     }
 
     /** 分类列表与条目分页（ac=videolist，含封面与角标；ac=list 是轻量响应缺 vod_pic）。 */
-    fun list(api: String, categoryId: String?, page: Int): ThirdListPage? {
-        val key = "$api|list|$categoryId|$page"
+    fun list(source: ThirdSource, categoryId: String?, page: Int): ThirdListPage? {
+        val key = "${source.api}|list|$categoryId|$page"
         (cached(key) as? ThirdListPage)?.let { return it }
         val params = buildList {
             add("ac" to "videolist")
             if(!categoryId.isNullOrBlank()) add("t" to categoryId)
             add("pg" to page.toString())
         }
-        val response = get(ThirdCms.apiUrl(api, params), catalog = true)
+        val response = get(ThirdCms.apiUrl(source.api, params), headers = source.headers, catalog = true)
         val parsed = response.body?.let { body -> try { ThirdCms.parseList(body) } catch (_: Exception) { null } } ?: return null
         store(key, parsed); return parsed
     }
 
     /** 单条详情（ac=detail&ids=）。 */
-    fun detail(api: String, id: String): ThirdDetail? {
-        val key = "$api|detail|$id"
+    fun detail(source: ThirdSource, id: String): ThirdDetail? {
+        val key = "${source.api}|detail|$id"
         (cached(key) as? ThirdDetail)?.let { return it }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "ids" to id)))
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "detail", "ids" to id)), headers = source.headers)
         val parsed = response.body?.let { body -> try { ThirdCms.parseDetail(body) } catch (_: Exception) { null } } ?: return null
         store(key, parsed); return parsed
     }
 
     /** 搜索联想（ac=list&wd=，轻量响应只有片名）；接口不支持搜索或网络失败时静默返回空。 */
-    fun suggest(api: String, word: String): List<String> {
-        val key = "$api|suggest|$word"
+    fun suggest(source: ThirdSource, word: String): List<String> {
+        val key = "${source.api}|suggest|$word"
         @Suppress("UNCHECKED_CAST")
         (cached(key) as? List<String>)?.let { return it }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "wd" to word, "pg" to "1")))
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "list", "wd" to word, "pg" to "1")), headers = source.headers)
         val parsed = response.body?.let { body -> try { ThirdCms.parseSuggestions(body) } catch(_: Exception) { null } } ?: emptyList()
         store(key, parsed); return parsed
     }
 
     /** 片源内搜索分页（ac=detail&wd=，结果直接含封面与播放地址）。
      *  部分源未开启搜索时会返回「暂不支持搜索」等纯文本，这里给出明确原因而不是笼统的加载失败。 */
-    fun searchPage(api: String, word: String, page: Int): ThirdSearchResult {
-        val key = "$api|search|$word|$page"
+    fun searchPage(source: ThirdSource, word: String, page: Int): ThirdSearchResult {
+        val key = "${source.api}|search|$word|$page"
         (cached(key) as? ThirdSearchPage)?.let { return ThirdSearchResult(it, null) }
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())), search = true)
+        val response = get(ThirdCms.apiUrl(source.api, listOf("ac" to "detail", "wd" to word, "pg" to page.toString())), headers = source.headers, search = true)
         response.body ?: return ThirdSearchResult(null, response.error ?: "连接失败")
         val parsed = try { ThirdCms.parseDetailPage(response.body!!) } catch(_: Exception) { null }
             ?: return ThirdSearchResult(null, "该片源未开启搜索")
@@ -390,19 +418,22 @@ class ThirdCmsClient {
 
     /** 系列剧候选：按片名主名在同一片源里搜一次，结果自带封面与播放地址，切季可直接播。
      *  按「源 + 主名」缓存，同一系列的多季来回切不重复请求；源站关闭搜索或网络失败时返回空。 */
-    fun seriesCandidates(api: String, name: String): List<ThirdDetail> {
+    fun seriesCandidates(source: ThirdSource, name: String): List<ThirdDetail> {
         val base = ThirdCms.seriesBase(name)
         if(base.isEmpty()) return emptyList()
-        val key = "$api|series|$base"
+        val key = "${source.api}|series|$base"
         @Suppress("UNCHECKED_CAST")
         (cached(key) as? List<ThirdDetail>)?.let { return it }
-        val details = searchPage(api, base, 1).page?.details.orEmpty()
+        val details = searchPage(source, base, 1).page?.details.orEmpty()
         store(key, details); return details
     }
 
     /** 探活：HTTP 200 + JSON 含 list 字段即通过，返回条目数；失败带明确原因。 */
-    fun probe(api: String): ThirdProbe {
-        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "pg" to "1")))
+    fun probe(source: ThirdSource): ThirdProbe = probe(source.api, source.headers)
+
+    /** 裸地址探活（TVBox 导入预览用，源尚未建立时只拿得到 api 与 header）。 */
+    fun probe(api: String, headers: Map<String, String> = emptyMap()): ThirdProbe {
+        val response = get(ThirdCms.apiUrl(api, listOf("ac" to "list", "pg" to "1")), headers = headers)
         response.body ?: return ThirdProbe(false, 0, response.error ?: "连接失败")
         val total = response.body?.let { body -> try { ThirdCms.probeTotal(body) } catch (_: Exception) { null } }
             ?: return ThirdProbe(false, 0, "非 CMS 接口（缺少 list 字段）")

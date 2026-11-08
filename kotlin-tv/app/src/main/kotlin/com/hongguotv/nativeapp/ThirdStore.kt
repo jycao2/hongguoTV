@@ -296,16 +296,27 @@ class ThirdStore(context: Context) {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val id = item.optString("id"); val api = item.optString("api")
             if(id.isEmpty() || api.isEmpty()) null
-            else ThirdSource(id, item.optString("name"), api)
+            else ThirdSource(id, item.optString("name"), api, readHeaders(item))
         }
     }
 
     private fun writeSources(list: List<ThirdSource>): String {
         val array = JSONArray()
         list.forEach { source ->
-            array.put(JSONObject().put("id", source.id).put("name", source.name).put("api", source.api))
+            val item = JSONObject().put("id", source.id).put("name", source.name).put("api", source.api)
+            if(source.headers.isNotEmpty()) item.put("headers", JSONObject(source.headers))
+            array.put(item)
         }
         return array.toString()
+    }
+
+    /** 旧格式（无 headers 键）与损坏内容都安全回落为空表。 */
+    private fun readHeaders(item: JSONObject): Map<String, String> {
+        val obj = item.optJSONObject("headers") ?: return emptyMap()
+        return obj.keys().asSequence().mapNotNull { key ->
+            val value = obj.optString(key).trim()
+            if(key.isNotBlank() && value.isNotEmpty()) key.trim() to value else null
+        }.toMap()
     }
 
     companion object {

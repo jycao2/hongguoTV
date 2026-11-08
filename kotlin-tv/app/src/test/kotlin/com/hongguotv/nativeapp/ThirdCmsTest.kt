@@ -328,4 +328,47 @@ class ThirdCmsTest {
         )
         assertEquals(listOf("1", "2"), ThirdCms.series(current, candidates).map { it.video.id })
     }
+
+    // ---------- 每源 header ----------
+
+    @Test
+    fun `parseHeaders JSON 对象形态`() {
+        val headers = ThirdCms.parseHeaders(org.json.JSONObject("""{"User-Agent":"okhttp/4.9","Referer":"https://a.com/"}"""))
+        assertEquals("okhttp/4.9", headers["User-Agent"])
+        assertEquals("https://a.com/", headers["Referer"])
+    }
+
+    @Test
+    fun `parseHeaders 字符串形态支持分号与逗号分隔`() {
+        val headers = ThirdCms.parseHeaders("User-Agent=okhttp/4.9; Referer=https://a.com/,X-Token=abc")
+        assertEquals(mapOf("User-Agent" to "okhttp/4.9", "Referer" to "https://a.com/", "X-Token" to "abc"), headers)
+    }
+
+    @Test
+    fun `parseHeaders 空键值与非字符串返回空表`() {
+        assertTrue(ThirdCms.parseHeaders("=v;User-Agent=").isEmpty())
+        assertTrue(ThirdCms.parseHeaders(null).isEmpty())
+        assertTrue(ThirdCms.parseHeaders(42).isEmpty())
+    }
+
+    @Test
+    fun `parseTvboxConfig 提取 site header 到导入候选`() {
+        val body = """
+            {"sites":[
+              {"name":"带UA源","api":"https://a/vod","type":1,"header":{"User-Agent":"okhttp/4.9","Referer":"https://a.com/"}},
+              {"name":"无头源","api":"https://b/vod","type":1},
+              {"name":"spider","api":"csp_XPath","type":3}
+            ]}
+        """.trimIndent()
+        val parsed = ThirdCms.parseTvboxConfig(body)
+        assertEquals(2, parsed.candidates.size)
+        assertEquals(mapOf("User-Agent" to "okhttp/4.9", "Referer" to "https://a.com/"), parsed.candidates[0].headers)
+        assertTrue(parsed.candidates[1].headers.isEmpty())
+        assertEquals(1, parsed.skipped)
+    }
+
+    @Test
+    fun `ThirdSource headers 默认为空表不破坏既有构造`() {
+        assertEquals(emptyMap<String, String>(), ThirdSource("a", "A源", "https://a/vod").headers)
+    }
 }
