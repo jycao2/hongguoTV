@@ -521,8 +521,10 @@ class MainActivity: Activity() {
         accountManager=AccountManager(this,library)
         accountManager.onAccountChanged={
             accountButton?.text=accountManager.accountLabel
-            // 账号状态变化后，正在展示的记录页立即重建（登录后拉取云端历史、退出后清空云端区）
-            if(screen=="catalog" && (tab==4 || collection=="resume")) showCatalog()
+            // 账号状态变化后，正在展示的记录页立即重建（登录后拉取云端历史、退出后清空云端区）。
+            // isLoaded 必须查：recreate()（换主题/缩放）会新建 AccountManager 并可能立刻回调，
+            // 此时本机记录还在异步加载，showCatalog 里 navHiddenAt 一碰 state() 就崩。
+            if(library.isLoaded && screen=="catalog" && (tab==4 || collection=="resume")) showCatalog()
         }
         // 三方片源配置与观看历史随主备份一起保存/恢复：本地已有的保留，不覆盖
         thirdStore=ThirdStore(this)

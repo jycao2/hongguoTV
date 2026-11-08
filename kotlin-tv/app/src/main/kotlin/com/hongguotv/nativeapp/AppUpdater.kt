@@ -173,6 +173,18 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         fitStatus()
         action.post { if (dialog === next) action.requestFocus() }
     }
+    /**
+     * 语音/外部指令入口：打开面板并立刻查一次。
+     *
+     * 已经发现新版（`available != null`）时什么都不做——面板上摆着「下载新版」，
+     * 要不要装是用户的决定，一句「检查更新」不该替人按下下载。
+     * 正在下载或已下载完（busy / ready）时同样跳过，避免把进行中的流程打断。
+     */
+    fun checkNow(from: View?) {
+        show(from)
+        if (available == null && !busy && !ready) check(true)
+    }
+
     private fun <T> work(action: () -> T, done: (T) -> Unit) {
         busy = true; renderActions(); val ticket = ++generation
         task = worker.submit {
@@ -189,7 +201,10 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     }
     /** @return true when the request actually started; callers may retry later otherwise. */
     private fun check(manual: Boolean): Boolean {
-        if (busy || !active || !idle()) return false
+        if (busy || !active) return false
+        // 「不打扰」只约束自动检查（前台、目录页、无弹窗）。手动/语音检查是用户当场要的，
+        // 停在播放页也该立刻执行——以前把 idle() 一刀切，语音喊「检查更新」只会开个空面板。
+        if (!manual && !idle()) return false
         preferences.edit().putLong("last_attempt", System.currentTimeMillis()).apply()
         updateStatus("正在检查新版…")
         work({ repository.latest() }) { update ->
