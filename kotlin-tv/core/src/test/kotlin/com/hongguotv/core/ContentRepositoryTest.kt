@@ -685,4 +685,18 @@ class ContentRepositoryTest {
         assertTrue(repo.suggest("a".repeat(21)).isEmpty())
         assertEquals(0,requests)
     }
+
+    @Test fun seriesTitleKeepsOnlyTheName() {
+        // 实测：详情接口把简介拼进了 series_name，标题栏只有一行高，第二行被裁成半截字
+        assertEquals("《黄石第五季》",seriesTitle("《黄石第五季》\n蒙大拿荒野深处，达顿家族世代守护的黄石牧场迎来终极考验"))
+        assertEquals("狂飙",seriesTitle("狂飙"))
+        assertEquals("狂飙",seriesTitle("  狂飙  "))
+        // 首行是空的时候往下一行找，不能整个丢空
+        assertEquals("狂飙",seriesTitle("\n\n狂飙\n第二行"))
+        // 行内多余空白压成一个空格，免得标题栏里出现大段空隙
+        assertEquals("The Good Doctor",seriesTitle("The  Good\tDoctor"))
+        assertEquals("",seriesTitle(""))
+        // 超长标题截断，避免撑出标题栏
+        assertEquals(48,seriesTitle("剧".repeat(120)).length)
+    }
 }
