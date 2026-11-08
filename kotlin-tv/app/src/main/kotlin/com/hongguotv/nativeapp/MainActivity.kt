@@ -487,7 +487,10 @@ class MainActivity: Activity() {
         val h=if(compact) 32 else 36
         val ts=if(compact) 14f else 15f
         val view=text(label,ts,white).apply {
-            gravity=Gravity.CENTER; isFocusable=true; isClickable=true; includeFontPadding=false
+            gravity=Gravity.CENTER; isFocusable=true; isFocusableInTouchMode=true; isClickable=true; includeFontPadding=false
+            // isFocusableInTouchMode 必须有：这台电视的 IR 鼠标棒事件带 SOURCE_TOUCHSCREEN，
+            // 点一下窗口就进触摸模式，普通 view 的 requestFocus 全部静默失败——
+            // 鼠标侧键返回到列表页后，goBack 想把焦点收回导航栏会失败，返回键从此没反应。
             if(iconRes != 0) { setCompoundDrawablesWithIntrinsicBounds(iconRes,0,0,0); compoundDrawablePadding=dp(drawPad) }
             setPadding(dp(padH),dp(padV),dp(padH),dp(padV)); minHeight=dp(h); setOnClickListener { onClick() }
         }
@@ -3512,10 +3515,12 @@ class MainActivity: Activity() {
             override fun onScroll(e1: MotionEvent?,e2: MotionEvent,dx: Float,dy: Float): Boolean {
                 if(screen!="player" || locked) return true
                 total+=dy
-                // 累计位移超过屏幕高 20% 触发一次，本手势内不再重复触发（防慢慢拖动连切）
+                // 累计位移超过屏幕高 20% 触发一次，本手势内不再重复触发（防慢慢拖动连切）。
+                // 注意 onScroll 的 dy 是「上次坐标−当前坐标」（AOSP 反号约定）：指针上移 dy>0，
+                // 所以 total>0 才是上滑=下一集；onFling 用的是速度原始符号（上滑为负），两条路不要混。
                 if(Math.abs(total)>resources.displayMetrics.heightPixels*0.2f) {
                     locked=true
-                    skipEpisode(if(total<0) 1 else -1)
+                    skipEpisode(if(total>0) 1 else -1)
                 }
                 return true
             }
@@ -5466,7 +5471,7 @@ class MainActivity: Activity() {
         when(screen) {
             "player" -> if(player?.playbackState==Player.STATE_ENDED) returnToDetail() else if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
-            else -> if(tab==1 && advancedSearch) { switchAdvanced(false); filterToggle?.post { filterToggle?.requestFocus() } } else if(tab==6 && third?.onBack()==true) {} else if(tab==3 && favoriteManage) { favoriteManage=false; favoriteSelected.clear(); showCatalog() } else if(tab==2 && newRelease) { newRelease=false; page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""; discoveryCursor=null; discoverySelection=DiscoverySelection(); tabState.remove(2); tabFocus.remove(2); pendingNewReleaseFocus="back"; showCatalog(true) } else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else nav.getOrNull(tab)?.requestFocus()
+            else -> if(tab==1 && advancedSearch) { switchAdvanced(false); filterToggle?.post { filterToggle?.requestFocus() } } else if(tab==6 && third?.onBack()==true) {} else if(tab==3 && favoriteManage) { favoriteManage=false; favoriteSelected.clear(); showCatalog() } else if(tab==2 && newRelease) { newRelease=false; page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""; discoveryCursor=null; discoverySelection=DiscoverySelection(); tabState.remove(2); tabFocus.remove(2); pendingNewReleaseFocus="back"; showCatalog(true) } else if(tab==2 && aiCatalog) { aiCatalog=false; aiGenre=null; page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true); aiEntry?.post { if(aiEntry?.isAttachedToWindow==true) aiEntry?.requestFocus() } } else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else showExitConfirm() } else if(nav.getOrNull(tab)?.requestFocus()!=true) showExitConfirm()
         }
     }
     @Deprecated("TV remote back is handled through the activity")
