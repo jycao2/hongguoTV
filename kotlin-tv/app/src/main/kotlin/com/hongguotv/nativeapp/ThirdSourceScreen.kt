@@ -148,6 +148,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var searchRequested = false
     /** 「一句话开播」待办关键字：搜索结果第一条到达就起播，只消费一次。 */
     private var watchPending: String? = null
+    /** 待办里说清的集号（1 起），0 表示没说，按续播逻辑走。 */
+    private var watchPendingEpisode = 0
     private var searchPage = 1
     private var searchHasMore = false
     private var searchTotal = 0
@@ -1177,6 +1179,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 不清掉的话下一次手动搜索的首条结果会被它误起播。
         val missed = watchPending
         watchPending = null
+        watchPendingEpisode = 0
         searchLoading = false
         if(searchHits.isEmpty()) {
             loadError = searchFailures.values.firstOrNull()?.let { "所有片源均未返回结果（$it）" }
@@ -2123,6 +2126,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         searchWord = clean; searchInput = clean
         // 手动发起的新搜索取消上一次没跑完的语音开播待办
         watchPending = null
+        watchPendingEpisode = 0
         store.rememberSearch(clean)
         searchAllOverride = allSources
         searchDetails = emptyList(); searchHits = emptyList(); searchHitByVideoId.clear(); searchIndex.clear()
@@ -2975,13 +2979,29 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     }
 
     /**
+     * 遥控搜片：只把片源的聚合搜索结果摆出来，不起播。
+     *
+     * 和主站搜索同一条规矩——结果里混着预告和空壳条目，替用户挑一个的代价就是播错。
+     * 没配源时返回 false，让主站搜索兜底。
+     */
+    fun remoteSearchTitle(word: String): Boolean {
+        if(currentSource() == null) return false
+        if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
+        submitSearch(word)
+        return true
+    }
+
+    /**
      * 「一句话开播」：按片名搜当前片源，命中就直接进播放器（有进度就续播）。
+     *
+     * 只有两种调用者：说清了集号的语音（[episode] > 0），以及小爱「主题昵称就是剧名」那条老路。
+     * 普通搜剧名走 [remoteSearchTitle]，别替人挑。
      *
      * 不自己再发一次搜索：片源的聚合搜索本来就会把首个返回的源结果落到 [searchDetails]，
      * 两边同时请求既浪费一次往返，也会和模块自己的 rebuild 抢时序（结果回来时人已经在播放页，
      * 又被搜索页盖回去）。这里只挂一个待办关键字，由搜索结果到达的路径接手。
      */
-    fun remotePlayTitle(word: String): Boolean {
+    fun remotePlayTitle(word: String, episode: Int = 0): Boolean {
         if(currentSource() == null) {
             Toast.makeText(activity, "先选一个片源，再搜「$word」", Toast.LENGTH_SHORT).show()
             return false
@@ -2990,6 +3010,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         submitSearch(word)
         // 必须放在 submitSearch 之后：新版搜索会清掉上一次没跑完的待办
         watchPending = word
+        watchPendingEpisode = episode
         return true
     }
 
@@ -3002,7 +3023,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 待办也先留着——另一个源可能马上返回同一部片且带正片。
         val picked = ThirdCms.pickBest(word, searchDetails.filter { detail -> detail.groups.any { it.second.isNotEmpty() } })
             ?: return false
+        val wantEpisode = watchPendingEpisode
         watchPending = null
+        watchPendingEpisode = 0
         // 接管后把在途的聚合搜索作废：否则剩余源陆续返回还会 rebuild 一次搜索页，把人从播放器顶回去
         searchSeq++
         searchLoading = false; searchRequested = false; searchAggregating = false
@@ -3010,11 +3033,20 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val hit = searchHits.firstOrNull { it.detail.video.id == picked.video.id }
         val source = hit?.source ?: currentSource()
         openDetail(picked, source)
-        val progress = store.progress(source?.id.orEmpty(), picked.video.id)
-        val group = progress?.group?.takeIf { picked.groups.getOrNull(it) != null }
-            ?: ThirdCms.defaultGroupIndex(picked.groups)
+        val group = ThirdCms.defaultGroupIndex(picked.groups)
         detailReturnMode = Mode.BROWSE
-        playEpisode(group, progress?.episode ?: 0, progress?.positionMs ?: 0L)
+        if(wantEpisode > 0) {
+            val count = picked.groups.getOrNull(group)?.second?.size ?: 0
+            if(wantEpisode > count) {
+                Toast.makeText(activity, "「${picked.video.name}」只有 $count 集", Toast.LENGTH_SHORT).show()
+                return true
+            }
+            playEpisode(group, wantEpisode - 1, 0L)
+            return true
+        }
+        val progress = store.progress(source?.id.orEmpty(), picked.video.id)
+        val resumeGroup = progress?.group?.takeIf { picked.groups.getOrNull(it) != null } ?: group
+        playEpisode(resumeGroup, progress?.episode ?: 0, progress?.positionMs ?: 0L)
         return true
     }
 

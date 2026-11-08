@@ -346,7 +346,7 @@
       <input id="q" placeholder="说出剧名或指令" maxlength="80" autocomplete="off" enterkeyhint="send">
       <button id="go">发送</button>
     </div>
-    <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就开播，说「检查更新」「历史记录第二个」就照做。</div>
+    <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就把结果摆出来、自己点；说「文盲修仙第七集」「快进30秒」「返回上一级」「随机推荐一部漫剧」也照做。</div>
   </div>
   <div class="quick" id="quick"></div>
   <button class="openlist" id="openlist">选集 · 加载中</button>
@@ -377,7 +377,7 @@
         <input id="qb" placeholder="说出剧名或指令" maxlength="80" autocomplete="off" enterkeyhint="send">
         <button id="gob">发送</button>
       </div>
-      <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就开播，说「检查更新」「历史记录第二个」就照做。</div>
+      <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就把结果摆出来、自己点；说「文盲修仙第七集」「快进30秒」「返回上一级」「随机推荐一部漫剧」也照做。</div>
     </div>
     <div class="resume">
       <div class="rhead">
@@ -689,9 +689,10 @@
   window.addEventListener("mousemove", moveDrag);
   window.addEventListener("mouseup", endDrag);
 
-  // 一句话：输入的可能是剧名，也可能是指令（「检查更新」「历史记录第二个」「清理缓存」）。
-  // 统一发给电视端理解——认不出动作时会自动退化成「当剧名搜并开播」，
-  // 所以这里不需要让人先选类型。遥控面板与浏览形态各有一个输入框，共用提交逻辑。
+  // 一句话：输入的可能是剧名，也可能是指令（「检查更新」「历史记录第二个」「快进30秒」）。
+  // 统一发给电视端理解——认不出动作时会自动退化成「当剧名搜」，
+  // 搜到之后只把结果摆出来，由人自己点，所以这里不需要让人先选类型。
+  // 遥控面板与浏览形态各有一个输入框，共用提交逻辑。
   function submitSay(value){
     value = (value || "").trim();
     if(!value) return;

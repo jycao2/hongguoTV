@@ -153,6 +153,86 @@ class VoiceIntentTest {
         assertNull(VoiceIntent.parse("  "))
     }
 
+    // ------------------------------------------------------------ 剧名 + 集数
+
+    /**
+     * 「我要看文盲修仙的第七集」：剧名和集号必须一起留下。
+     *
+     * 早先的序数规则会把「第七集」当成「当前这部剧的第 7 集」，剧名整段丢掉；
+     * 反过来只当剧名又会去搜「文盲修仙的第七集」这种搜不到的长句。
+     */
+    @Test
+    fun titleWithEpisodeKeepsBoth() {
+        assertEquals(RemoteCommand.Watch("文盲修仙", 7), command("我要看文盲修仙的第七集"))
+        assertEquals(RemoteCommand.Watch("文盲修仙", 7), command("文盲修仙第七集"))
+        assertEquals(RemoteCommand.Watch("文盲修仙", 12), command("看《文盲修仙》第12集"))
+        // 季号属于片名，不能当集号吃掉
+        assertEquals(RemoteCommand.Watch("黄石第五季", 3), command("我要看黄石第五季第3集"))
+        // 只说集号：那是「当前这部剧的第 7 集」，不是剧名
+        assertEquals("list.play" to "episodes:7", act("我要看第七集"))
+    }
+
+    // ------------------------------------------------------------ 进度定位
+
+    @Test
+    fun seekByVoice() {
+        assertEquals(RemoteCommand.Step(30_000), command("快进30秒"))
+        assertEquals(RemoteCommand.Step(-60_000), command("快退一分钟"))
+        assertEquals(RemoteCommand.Step(-15_000), command("后退十五秒"))
+        assertEquals(RemoteCommand.Step(90_000), command("快进九十秒"))
+        // 不说时长按 15 秒走
+        assertEquals(RemoteCommand.Step(15_000), command("快进"))
+        // 超过 10 分钟的「快进」没有意义，按上限截断
+        assertEquals(RemoteCommand.Step(600_000), command("快进一小时"))
+    }
+
+    @Test
+    fun backAndExit() {
+        assertEquals(RemoteCommand.Back, command("返回上一级"))
+        assertEquals(RemoteCommand.Back, command("返回"))
+        // 带模块词的「返回」是导航，不是返回上一级
+        assertEquals(RemoteCommand.Open("home"), command("返回首页"))
+        assertEquals(RemoteCommand.Open("rank"), command("返回排行榜"))
+        assertEquals("player.close" to "", act("退出播放"))
+    }
+
+    @Test
+    fun speedAndVolume() {
+        assertEquals(RemoteCommand.Speed(1.5f), command("1.5倍速"))
+        assertEquals(RemoteCommand.Speed(2f), command("两倍速"))
+        assertEquals("speed.up" to "", act("快一点"))
+        assertEquals("speed.down" to "", act("慢一点"))
+        assertEquals("volume.up" to "", act("声音大一点"))
+        assertEquals("volume.down" to "", act("声音小一点"))
+        assertEquals("volume.mute" to "on", act("静音"))
+        assertEquals("volume.mute" to "off", act("取消静音"))
+        // 《八倍镜》这类片名不能被当倍速
+        assertEquals(RemoteCommand.Watch("八倍镜"), command("八倍镜"))
+    }
+
+    @Test
+    fun sleepTimer() {
+        assertEquals("sleep.set" to "min:30", act("半小时后关掉"))
+        assertEquals("sleep.set" to "min:60", act("一小时后关机"))
+        assertEquals("sleep.set" to "ep:1", act("看完这集就关"))
+        assertEquals("sleep.set" to "min:30", act("定时30分钟"))
+        // 「关掉弹幕」不能被定时吃掉
+        assertEquals("danmaku.toggle", act("关掉弹幕")?.first)
+    }
+
+    // ------------------------------------------------------------ 推荐与类型
+
+    @Test
+    fun randomPickAndTypeSwitch() {
+        assertEquals("random.pick" to "comic", act("给我随机推荐一部漫剧"))
+        assertEquals("random.pick" to "short", act("随机推荐一部短剧"))
+        assertEquals("random.pick" to "", act("随便来一部"))
+        assertEquals("type.set" to "short", act("切换短剧"))
+        assertEquals("type.set" to "comic", act("看漫剧"))
+        assertEquals("panel.episodes" to "", act("打开选集"))
+        assertEquals("account.show" to "", act("登录红果账户"))
+    }
+
     // ------------------------------------------------------------ 一致性
 
     /**
@@ -168,7 +248,11 @@ class VoiceIntentTest {
             "关闭弹窗", "自动连播", "系列剧连播", "关掉弹幕", "自动跳过", "下一集", "上一集",
             "暂停", "继续播放", "接着看", "收藏这个", "清理缓存", "观看统计", "备份",
             "手机快传", "遥控地址", "小爱同学设置", "登录账号", "接口自检", "恢复隐藏",
-            "历史记录第二个", "第五集"
+            "历史记录第二个", "第五集",
+            // 新增：播放页动作、类型切换、随机推荐、音量、定时
+            "从头播放", "退出播放", "打开选集", "跳过片头", "快一点", "慢一点",
+            "半小时后关掉", "看完这集就关", "声音大一点", "声音小一点", "静音", "取消静音",
+            "随机推荐一部漫剧", "随机推荐", "切换短剧", "看漫剧"
         )
         for(text in samples) {
             val cmd = VoiceIntent.parse(text)?.command

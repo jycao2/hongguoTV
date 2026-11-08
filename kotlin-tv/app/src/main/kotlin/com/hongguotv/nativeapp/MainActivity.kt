@@ -17,6 +17,7 @@ import android.view.*
 import android.view.inputmethod.InputMethodManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -4670,12 +4671,19 @@ class MainActivity: Activity() {
             appendLine()
             appendLine("② 在地址末尾加 /cmd，用 POST 发一段 JSON：")
             appendLine("""{"cmd":"open","module":"source"}   跳到片源页""")
-            appendLine("""{"cmd":"watch","query":"黄石"}   搜到并起播""")
+            appendLine("""{"cmd":"watch","query":"黄石"}   搜出来摆好，自己点""")
+            appendLine("""{"cmd":"watch","query":"文盲修仙","episode":7}   直接看第 7 集""")
+            appendLine("""{"cmd":"say","text":"快进30秒"}   整句话交给电视理解""")
             appendLine()
             appendLine("③ 完整示例（bash / Git Bash 可直接跑）：")
             appendLine("curl -X POST \"$base/cmd\" \\")
             appendLine("  -H \"Content-Type: application/json\" \\")
-            appendLine("""  -d '{"cmd":"watch","query":"黄石"}'""")
+            appendLine("""  -d '{"cmd":"say","text":"给我随机推荐一部漫剧"}'""")
+            appendLine()
+            appendLine("④ say 能听懂的说法（节选）：")
+            appendLine("剧名 / 文盲修仙第七集 / 快进30秒 / 快退一分钟 / 返回上一级")
+            appendLine("1.5倍速 / 静音 / 声音大一点 / 半小时后关掉")
+            appendLine("随机推荐一部漫剧 / 切换短剧 / 登录红果账户 / 检查更新")
             appendLine()
             append("module 可选：home / search / rank / favorite / history / settings / source / library")
         }
@@ -4774,6 +4782,46 @@ class MainActivity: Activity() {
             "play.toggle" -> if(screen=="player") { togglePlayback(); true } else false
             "play.next" -> skipEpisode(1)
             "play.prev" -> skipEpisode(-1)
+            // 从头播放：只影响当前这一集，不改全局「续播」记忆
+            "play.replay" -> if(screen=="player") { seekTo(0); requestPlayback(true); true } else false
+            "player.close" -> when {
+                screen=="player" -> { returnToDetail(); true }
+                tab==6 -> third?.onBack()==true
+                else -> false
+            }
+            "panel.episodes" -> when {
+                screen=="player" -> { showEpisodePanel(hud); true }
+                tab==6 -> third?.remoteMenu()==true
+                else -> false
+            }
+            "skip.intro" -> {
+                if(screen!="player") return false
+                val minutes=detail?.series?.id?.let { library.skipMark(it)?.introSeconds } ?: 0
+                if(minutes<=0) { voiceSay("这部剧还没设片头"); return true }
+                seekTo(minutes*1000L)
+                voiceSay("已跳过片头 ${minutes} 秒")
+                true
+            }
+            "speed.up" -> adjustSpeed(1)
+            "speed.down" -> adjustSpeed(-1)
+            "sleep.set" -> sleepTarget(cmd.arg)?.let { (kind,value) ->
+                // 界面上的定时只有 1..180 分钟 / 1..10 集，越界会被 SleepTimer 直接拒掉
+                if(kind=="min") sleepTimer.afterMinutes(value.coerceIn(1,180))
+                else sleepTimer.afterEpisodes(value.coerceIn(1,10))
+                voiceSay("定时 · ${sleepTimer.label()}")
+                updatePlaybackText()
+                true
+            } ?: false
+            "volume.up" -> adjustVolume(1)
+            "volume.down" -> adjustVolume(-1)
+            "volume.mute" -> adjustMute(cmd.arg)
+            "type.set" -> {
+                val type=ContentType.fromStored(cmd.arg)
+                switchContentType(type)
+                voiceSay("已切到${type.label}")
+                true
+            }
+            "random.pick" -> remoteRandomPick(cmd.arg)
             "resume.latest" -> remoteResumeList().firstOrNull()?.let { remoteResumePlay(it.id) } ?: false
             "list.play" -> listTarget(cmd.arg)?.let { (kind,index) -> remoteListPlay(kind,index) } ?: false
             "favorite.toggle" -> {
@@ -4846,6 +4894,125 @@ class MainActivity: Activity() {
         Toast.makeText(this,message,Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * 一条命令落到界面。
+     *
+     * 遥控页输入框、小爱语音、局域网脚本三个入口共用这里：谁都不用再各自 when 一遍命令类型。
+     * 播放类命令交给当前播放器适配器（官方/三方各一份），其余交给界面。
+     */
+    private fun remoteDo(cmd: RemoteCommand): Boolean = when(cmd) {
+        is RemoteCommand.Act -> remoteAct(cmd)
+        is RemoteCommand.Open -> remoteOpenModule(cmd.module)
+        is RemoteCommand.Watch -> remoteWatch(cmd.query,cmd.episode)
+        is RemoteCommand.Say -> remoteSay(cmd.text)
+        else -> if(cmd.isPlayback) remoteTarget()?.apply(cmd)==true else remoteController.navigate(cmd)
+    }
+
+    /** 倍速加减一档。播放中说就只改当前这一部，别处改的是「默认倍速」。 */
+    private fun adjustSpeed(direction: Int): Boolean {
+        val options=PlaybackSpeed.options
+        fun shift(current: Float): Float {
+            val index=options.indexOfFirst { it>=current-0.001f }.let { if(it<0) options.lastIndex else it }
+            return options[(index+direction).coerceIn(0,options.lastIndex)]
+        }
+        if(screen=="player") {
+            val next=shift(effectiveSpeed())
+            sessionSpeed=next; player?.setPlaybackSpeed(next)
+            showHud(); updatePlaybackText()
+            voiceSay("倍速 ${PlaybackSpeed.label(next)}")
+            return true
+        }
+        val snap=if(tab==6) third?.remoteSnapshot() else null
+        if(snap!=null) {
+            val next=shift(snap.speed)
+            third?.remoteApply(RemoteCommand.Speed(next))
+            voiceSay("倍速 ${PlaybackSpeed.label(next)}")
+            return true
+        }
+        val next=shift(library.playbackSpeed)
+        library.playbackSpeed=next
+        voiceSay("默认倍速 ${PlaybackSpeed.label(next)}")
+        return true
+    }
+
+    /**
+     * 音量走系统媒体音量，不走播放器内部音量：没在播放时也能调，
+     * 而且调完退出去看别的 App 也是这个音量，符合「电视音量」的直觉。
+     */
+    private fun audioManager(): AudioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    private fun adjustVolume(direction: Int): Boolean {
+        val manager=audioManager()
+        manager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+            if(direction>0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+            AudioManager.FLAG_SHOW_UI)
+        val max=manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val now=manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        voiceSay("音量 ${now*100/max}%")
+        return true
+    }
+
+    /**
+     * 「静音 / 取消静音」。
+     *
+     * 播放器在跑就走播放器内部静音：遥控快照里的 muted 字段会同步变化，
+     * 手机端能看见「静音」亮起来，跟摇控器上按静音键的行为一致。
+     * 没在播放才落到系统媒体音量——那时「静音」指的是整台电视。
+     */
+    private fun adjustMute(mode: String): Boolean {
+        val wanted=when(mode) {
+            "on" -> true
+            "off" -> false
+            else -> null
+        }
+        val snapshot=if(tab==6) third?.remoteSnapshot() else if(screen=="player") officialSnapshot() else null
+        if(snapshot!=null && snapshot.controllable) {
+            val target=wanted ?: !snapshot.muted
+            if(remoteTarget()?.apply(RemoteCommand.Muted(target))!=true) return false
+            voiceSay(if(target) "已静音" else "已取消静音")
+            return true
+        }
+        val manager=audioManager()
+        val muted=runCatching { manager.isStreamMute(AudioManager.STREAM_MUSIC) }.getOrDefault(false)
+        val target=wanted ?: !muted
+        manager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+            if(target) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE,0)
+        voiceSay(if(target) "已静音" else "已取消静音")
+        return true
+    }
+
+    /**
+     * 随机推荐一部：从该内容类型的首页推荐里随机取一部，**打开详情页**而不是直接播。
+     *
+     * 推荐的意义是「看看有什么」，直接起播反而把人架在那儿；详情页有简介和选集，
+     * 不合口味退回来再喊一次就行。也顺手对齐了「搜索只出结果」的原则。
+     */
+    private fun remoteRandomPick(arg: String): Boolean {
+        val type=if(arg.isBlank()) library.contentType else ContentType.fromStored(arg)
+        voiceSay("正在挑一部${type.label}…")
+        io.execute {
+            val items=runCatching { repository.home(1,type) }.getOrNull()?.items.orEmpty()
+                .filterNot { it.id in library.hidden() }
+            if(items.isEmpty()) {
+                main.post { if(!isDestroyed) voiceSay("没取到${type.label}推荐，稍后再试") }
+                return@execute
+            }
+            val pick=items.random()
+            main.post {
+                if(isDestroyed) return@post
+                // 片源页盖在主界面上，先回首页再开详情，否则详情被片源视图挡住
+                if(tab==6) remoteOpenModule("home")
+                if(library.contentType!=type) {
+                    library.contentType=type
+                    for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) }
+                }
+                openDetail(pick,resume=false,autoplay=false)
+                voiceSay("随机推荐《${pick.title}》")
+            }
+        }
+        return true
+    }
+
     private fun remoteOpenModule(module: String): Boolean {
         val target=remoteTabOf(module) ?: return false
         if(navHiddenAt(target)) return false
@@ -4868,24 +5035,25 @@ class MainActivity: Activity() {
      */
     private fun remoteSay(text: String): Boolean {
         val plan=VoiceIntent.parse(text) ?: return remoteWatch(text)
-        return when(val cmd=plan.command) {
-            is RemoteCommand.Act -> remoteAct(cmd).also {
-                if(!it) Toast.makeText(this,"${plan.echo}：当前页面做不到",Toast.LENGTH_SHORT).show()
-            }
-            is RemoteCommand.Open -> remoteOpenModule(cmd.module)
-            is RemoteCommand.Watch -> remoteWatch(cmd.query)
-            else -> false
-        }
+        val ok=remoteDo(plan.command)
+        // 做不到就补一句：否则屏幕上什么都没变，人只会怀疑手机掉线了
+        if(!ok) Toast.makeText(this,"${plan.echo}：当前页面做不到",Toast.LENGTH_SHORT).show()
+        return ok
     }
 
     /**
-     * 「一句话开播」：按剧名搜一次，命中就直接进播放器。
+     * 「按名字找剧」。
      *
-     * 停在片源页时交给片源模块自己搜（那边有独立的源与内容库），其余页面搜红果主站。
-     * 当前内容类型搜不到时再试另一种（漫剧/短剧分库），避免「在漫剧里搜短剧」直接搜空。
-     * 起播走 resume=true：有观看记录就接着上次的位置，没有则从第 1 集开始。
+     * 默认**只把搜索结果摆出来，不替用户挑**：结果里混着预告、空壳和同名不同内容，
+     * 猜错一次的代价是「喊了 A 结果播了 B」，比让人多点一下烦得多。所以停在结果页，
+     * 由人自己选——搜索页面本来就把「搜的是什么、有哪些结果」放在屏幕上。
+     *
+     * 三个例外才允许自动落到播放器：
+     * - 嘴上已经说清集号（`文盲修仙第七集`）——意图足够明确；
+     * - [autoplay] 为 true（小爱主题昵称那条路，一个主题就是一个动作）；
+     * - 停在片源页 —— 交给片源模块自己的搜索与聚合，那边有独立的源列表。
      */
-    private fun remoteWatch(query: String): Boolean {
+    private fun remoteWatch(query: String, episode: Int = 0, autoplay: Boolean = false): Boolean {
         // 停在片源模块时交给片源自己的搜索：那一侧有自己的源列表和聚合结果页，
         // 用主站搜索会搜出「主站有、当前片源没有」的片子，点开还是放不出来。
         if(tab==6) {
@@ -4894,14 +5062,20 @@ class MainActivity: Activity() {
                 Toast.makeText(this,"片源模块还没准备好，稍后再试",Toast.LENGTH_SHORT).show()
                 return false
             }
-            return module.remotePlayTitle(query)
+            return if(episode>0 || autoplay) module.remotePlayTitle(query,episode) else module.remoteSearchTitle(query)
         }
         if(screen=="player") {
             resetPlaybackSession(); sleepTimer.cancel(); sleepStopped=false
             saveProgress(); library.flush(); releasePlayer()
         }
-        // 先切到搜索结果页：万一没搜到，人也能看到搜的是什么、有哪些近似结果
+        // 先切到搜索结果页：结果本身就是要看的东西
         runSearch(query,fromPhone=true)
+        if(episode<=0 && !autoplay) {
+            // 当前内容库搜不到时换一个库再搜一次（漫剧/短剧分库），别把人晾在空列表上。
+            // 只换库，不替人挑剧——挑还是让人自己点。
+            searchOtherLibrary(query)
+            return true
+        }
         // AI 剧没有独立搜索入口（searchTab=null），放进候选只会白等一次超时
         val types=(listOf(library.contentType)+ContentType.entries).distinct().filter { it.searchTab!=null }
         // 主站搜索按基名索引：喊「黄石第五季」常常一条都搜不到，去掉季号再试一次就够了。
@@ -4933,10 +5107,42 @@ class MainActivity: Activity() {
                 }
                 val (type,series,loaded)=ready
                 if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
-                openDetail(series,resume=true,preloaded=loaded)
+                if(episode>0) {
+                    if(episode>loaded.episodes.size) {
+                        openDetail(series,resume=false,autoplay=false,preloaded=loaded)
+                        Toast.makeText(this,"《${series.title}》只有 ${loaded.episodes.size} 集",Toast.LENGTH_SHORT).show()
+                        return@post
+                    }
+                    // 说了集号就落到那一集：先摆详情页，再从那一集起播（不续播旧进度）
+                    openDetail(series,resume=false,autoplay=false,preloaded=loaded)
+                    playEpisode(episode-1,savedPosition(episode-1))
+                } else openDetail(series,resume=true,preloaded=loaded)
             }
         }
         return true
+    }
+
+    /**
+     * 「这个库里没有，就换个库看一眼」。
+     *
+     * 漫剧与短剧是两个独立搜索池，人在漫剧模式下喊一部短剧的名字，结果页会是一片空白——
+     * 屏幕上看不出「是没这部」还是「搜错库了」。这里只负责换库并重搜，
+     * 命中的结果照样由人自己点。
+     */
+    private fun searchOtherLibrary(query: String) {
+        val current=library.contentType
+        val types=(listOf(current)+ContentType.entries).distinct().filter { it.searchTab!=null }
+        io.execute {
+            val found=types.firstNotNullOfOrNull { type ->
+                val items=runCatching { repository.search(query,1,type) }.getOrNull()?.items.orEmpty()
+                if(items.isEmpty()) null else type to items.size
+            } ?: return@execute
+            main.post {
+                if(isDestroyed || found.first==library.contentType) return@post
+                runSearch(query,found.first,fromPhone=true)
+                Toast.makeText(this,"${found.first.label}里找到 ${found.second} 条「$query」",Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** 小爱语音入口（巴法云中转）。没配私钥时为 null。 */
@@ -4975,14 +5181,14 @@ class MainActivity: Activity() {
     private fun runVoiceAction(action: XiaoAiVoice.Action) {
         // 通用指令自己会出回执（「已切换弹幕」），只有做不到时才需要在这里补一句
         if(action is XiaoAiVoice.Action.Do) {
-            val cmd=action.command as? RemoteCommand.Act
-            if(cmd==null || !remoteAct(cmd))
+            if(!remoteDo(action.command))
                 Toast.makeText(this,"小爱同学：${action.echo}，但当前页面做不到",Toast.LENGTH_SHORT).show()
             return
         }
         val ok=when(action) {
             is XiaoAiVoice.Action.Open -> remoteOpenModule(action.module)
-            is XiaoAiVoice.Action.Watch -> remoteWatch(action.query)
+            // 小爱这条路的约定是「一个主题 = 一个动作」，喊剧名就是开播，所以照旧自动起播
+            is XiaoAiVoice.Action.Watch -> remoteWatch(action.query,0,autoplay=true)
             is XiaoAiVoice.Action.Do -> false
         }
         val what=when(action) {
@@ -5147,7 +5353,7 @@ class MainActivity: Activity() {
             }
             is RemoteCommand.Resume -> remoteResumePlay(cmd.id)
             is RemoteCommand.Open -> remoteOpenModule(cmd.module)
-            is RemoteCommand.Watch -> remoteWatch(cmd.query)
+            is RemoteCommand.Watch -> remoteWatch(cmd.query,cmd.episode)
             is RemoteCommand.Say -> remoteSay(cmd.text)
             is RemoteCommand.Act -> remoteAct(cmd)
             else -> false

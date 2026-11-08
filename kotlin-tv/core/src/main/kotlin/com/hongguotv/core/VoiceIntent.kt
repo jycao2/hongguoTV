@@ -9,12 +9,16 @@ package com.hongguotv.core
  * 所以这里每一步匹配不上就往下退，最终退到「当剧名去搜」，退无可退才返回 null。
  *
  * 匹配顺序（顺序本身就是语义优先级）：
- * 1. 列表 + 序数：`历史记录第二个` → `list.play history:2`
- * 2. 动作词表：`检查有没有更新` → `update.check`
- * 3. 模块导航：`进去排行榜` → `open rank`
- * 4. 光有序数：`第五集` → 选集第 5 集
- * 5. 模糊兜底：说错几个字也能认（`检查版本是否有更新`）
- * 6. 剧名：剩下的话当搜索词
+ * 1. 剧名 + 集数：`文盲修仙第七集` → `watch(文盲修仙, 7)`
+ * 2. 列表 + 序数：`历史记录第二个` → `list.play history:2`
+ * 3. 时间定位：`快进30秒` → `step(+30000)`；`跳到5分钟` 同理
+ * 4. 倍速：`1.5倍速` → `speed(1.5)`
+ * 5. 定时：`半小时后关掉` → `sleep.set min:30`
+ * 6. 动作词表：`检查有没有更新` → `update.check`
+ * 7. 模块导航：`进去排行榜` → `open rank`
+ * 8. 返回与退出：`返回上一级` → `back`
+ * 9. 模糊兜底：说错几个字也能认（`检查版本是否有更新`）
+ * 10. 剧名：剩下的话当搜索词
  *
  * 纯函数，没有任何 Android 依赖，可单测。
  */
@@ -70,16 +74,54 @@ object VoiceIntent {
             RemoteCommand.Act("play.next"), "下一集"),
         Rule(listOf("上一集", "回上一集", "放上一集"),
             RemoteCommand.Act("play.prev"), "上一集"),
+        Rule(listOf("从头播放", "从头看", "重新播放", "重播这一集", "重新开始"),
+            RemoteCommand.Act("play.replay"), "从头播放"),
+        Rule(listOf("退出播放", "退出播放器", "关掉播放", "关闭播放", "退出观看", "回到详情", "回到详情页"),
+            RemoteCommand.Act("player.close"), "退出播放"),
+        Rule(listOf("打开选集", "选集面板", "换一集", "看看选集", "选集"),
+            RemoteCommand.Act("panel.episodes"), "选集"),
+        Rule(listOf("跳过片头", "片头跳过"),
+            RemoteCommand.Act("skip.intro"), "跳过片头"),
         Rule(listOf("暂停", "停一下", "先停", "别放了"),
             RemoteCommand.Act("play.toggle"), "已暂停"),
         Rule(listOf("继续播放", "接着放", "恢复播放", "继续"),
             RemoteCommand.Act("play.toggle"), "继续播放"),
+        // 倍速。数字倍速由 speedOf 处理，这里只管「相对快慢」。
+        Rule(listOf("快一点", "快一些", "加快播放", "播放快点", "加速播放"),
+            RemoteCommand.Act("speed.up"), "倍速加快"),
+        Rule(listOf("慢一点", "慢一些", "放慢播放", "播放慢点", "减速播放"),
+            RemoteCommand.Act("speed.down"), "倍速放慢"),
         // 继续观看
         Rule(listOf("接着看", "继续看", "继续观看", "上次看到哪", "没看完的", "看到哪了"),
             RemoteCommand.Act("resume.latest"), "继续上次观看"),
         // 详情页
-        Rule(listOf("收藏这个", "收藏它", "收藏当前", "加收藏", "取消收藏"),
+        Rule(listOf("收藏这个", "收藏它", "收藏当前", "加收藏", "取消收藏", "收藏一下"),
             RemoteCommand.Act("favorite.toggle"), "已切换收藏"),
+        // 音量：走系统媒体音量，不依赖播放器是否在跑
+        Rule(listOf("声音大一点", "音量大一点", "音量调大", "声音调大", "大声一点", "大声点", "声音大点", "大点声"),
+            RemoteCommand.Act("volume.up"), "音量调大"),
+        Rule(listOf("声音小一点", "音量小一点", "音量调小", "声音调小", "小声一点", "小声点", "声音小点", "小点声"),
+            RemoteCommand.Act("volume.down"), "音量调小"),
+        Rule(listOf("取消静音", "解除静音", "打开声音", "关掉静音"),
+            RemoteCommand.Act("volume.mute", "off"), "取消静音"),
+        Rule(listOf("静音", "关掉声音", "关闭声音", "没声音了"),
+            RemoteCommand.Act("volume.mute", "on"), "已静音"),
+        // 内容类型。放在随机推荐之后：`随机推荐一部漫剧` 里也有「漫剧」，
+        // 让更长的「随机推荐一部漫剧」先命中。
+        Rule(listOf("随机推荐一部漫剧", "随机来个漫剧", "随机一部漫剧", "随便来个漫剧"),
+            RemoteCommand.Act("random.pick", "comic"), "随机一部漫剧"),
+        Rule(listOf("随机推荐一部短剧", "随机来个短剧", "随机一部短剧", "随便来个短剧"),
+            RemoteCommand.Act("random.pick", "short"), "随机一部短剧"),
+        Rule(listOf("随机推荐一部ai剧", "随机一部ai剧", "随机推荐一部ai"),
+            RemoteCommand.Act("random.pick", "ai"), "随机一部 AI 剧"),
+        Rule(listOf("随机推荐", "随便来一部", "随机一部", "来点随机的", "随便看看", "推荐一部", "有什么好看的", "换一部看看"),
+            RemoteCommand.Act("random.pick"), "随机推荐"),
+        Rule(listOf("切换漫剧", "换成漫剧", "看漫剧", "漫剧"),
+            RemoteCommand.Act("type.set", "comic"), "漫剧"),
+        Rule(listOf("切换短剧", "换成短剧", "看短剧", "短剧"),
+            RemoteCommand.Act("type.set", "short"), "短剧"),
+        Rule(listOf("切换ai剧", "换成ai剧", "看ai剧", "ai剧"),
+            RemoteCommand.Act("type.set", "ai"), "AI 剧"),
         // 关于与工具
         Rule(listOf("清理缓存", "清缓存", "释放空间", "缓存清理"),
             RemoteCommand.Act("cache.clear"), "正在清理缓存"),
@@ -93,7 +135,7 @@ object VoiceIntent {
             RemoteCommand.Act("remote.address"), "遥控地址"),
         Rule(listOf("小爱同学设置", "小爱设置", "语音设置", "小爱连接"),
             RemoteCommand.Act("xiaoai.show"), "小爱同学"),
-        Rule(listOf("我的账号", "登录账号", "账号登录", "登录"),
+        Rule(listOf("登录红果账户", "登录红果账号", "红果账号", "我的账号", "登录账号", "账号登录", "扫码登录", "登录"),
             RemoteCommand.Act("account.show"), "账号"),
         Rule(listOf("接口自检", "自检", "检查接口"),
             RemoteCommand.Act("check.interface"), "接口自检"),
@@ -146,6 +188,25 @@ object VoiceIntent {
     /** 标点与装饰：书名号/引号会夹在剧名里，统一当分隔符处理。 */
     private val PUNCTUATION = Regex("[，。！？；：、“”‘’（）《》〈〉【】…—·,.!?;:\"'()\\[\\]<>]+")
 
+    /** 「快进」「快退」这类相对定位的动词。 */
+    private val SEEK_FORWARD = listOf("快进", "前进", "往前")
+    private val SEEK_BACKWARD = listOf("快退", "后退", "倒退", "往回倒", "倒回去", "往后")
+
+    /** 返回与退出。`返回首页` 这类带模块词的说法由模块先吃掉，走不到这里。 */
+    private val BACK_WORDS = listOf(
+        "返回上一级", "返回上级", "返回上一层", "返回上一页", "回到上一级",
+        "上一级", "退一步", "返回", "退回"
+    )
+
+    /** 定时停止的触发词。 */
+    private val SLEEP_WORDS = listOf("定时", "睡眠", "自动关机", "关电视", "关机", "看完这集", "看完这一集")
+
+    /** 弱触发词：只有带上时长才当定时（`半小时后关掉`），单独出现多半是在说「关掉弹幕」。 */
+    private val SLEEP_LOOSE = listOf("后关掉", "就关", "再关", "然后关")
+
+    /** 剧名位置不能是这些「列表/导航」词，否则 `选集第3集` 会被当成搜「选集」。 */
+    private val NOT_TITLES = setOf("选集", "列表", "历史", "首页", "收藏", "排行榜", "搜索", "片源", "设置", "这里", "当前")
+
     // ---------------------------------------------------------------- 入口
 
     /**
@@ -161,7 +222,10 @@ object VoiceIntent {
         val bare = stripPoliteness(text)
         if(bare.isEmpty()) return null
 
-        // 1. 列表 + 序数：`历史记录第二个` / `收藏第 3 个`
+        // 1. 剧名 + 集数：`文盲修仙第七集` / `我要看黄石第五季第3集`
+        titleWithEpisode(text)?.let { return it }
+
+        // 2. 列表 + 序数：`历史记录第二个` / `收藏第 3 个`
         val ordinal = ordinalOf(bare)
         if(ordinal != null) {
             val kind = listKindOf(bare)
@@ -176,21 +240,49 @@ object VoiceIntent {
             }
         }
 
-        // 2. 动作词表（精确包含，长词优先）
+        // 3. 时间定位：`快进30秒` / `后退一分钟`（放在倍速之前：`快进` 与 `1.5倍` 不会同时出现）
+        seekOf(bare)?.let { return it }
+
+        // 4. 倍速：`1.5倍速`。用未规范化的原文，normalize 会把小数点当标点删掉
+        speedOf(raw)?.let { return it }
+
+        // 5. 定时停止：`半小时后关掉` / `播完这集就关`
+        sleepOf(bare)?.let { return it }
+
+        // 6. 动作词表（精确包含，长词优先）
         exact(bare)?.let { return it }
 
-        // 3. 模块导航
+        // 7. 模块导航
         moduleOf(bare)?.let { rule -> return Plan(RemoteCommand.Open(rule.module), "打开${rule.label}") }
 
-        // 4. 模糊兜底：允许说错/多说几个字
+        // 8. 返回 / 退出
+        backOf(bare)?.let { return it }
+
+        // 9. 模糊兜底：允许说错/多说几个字
         fuzzy(bare)?.let { return it }
 
-        // 5. 剩下的当剧名
+        // 10. 剩下的当剧名
         titleOf(text)?.let { return Plan(RemoteCommand.Watch(it), "搜索「$it」") }
         return null
     }
 
     // ---------------------------------------------------------------- 各步实现
+
+    /**
+     * 「剧名 + 集数」：`我要看文盲修仙的第七集` → `Watch(文盲修仙, 7)`。
+     *
+     * 只说集数不说剧名（`我要看第七集`）不在这里处理——交给后面的序数规则，
+     * 那是「当前这部剧的第 7 集」，两种语义不能混。
+     */
+    private fun titleWithEpisode(text: String): Plan? {
+        val match = EPISODE.find(text) ?: return null
+        val episode = chineseNumber(match.groupValues[1]) ?: return null
+        if(episode !in 1..999) return null
+        val head = (text.substring(0, match.range.first) + " " + text.substring(match.range.last + 1)).trim()
+        val title = cleanTitle(head) ?: return null
+        if(title in NOT_TITLES) return null
+        return Plan(RemoteCommand.Watch(title, episode), "《$title》第 $episode 集")
+    }
 
     /** 精确匹配：任意别名是句子的子串。返回命中的最长别名对应的规则。 */
     private fun exact(bare: String): Plan? {
@@ -225,6 +317,58 @@ object VoiceIntent {
             }
         }
         return best?.first
+    }
+
+    /**
+     * 快进 / 快退 / 跳到某个时间点。
+     *
+     * 只说「快进」不说时长时按 15 秒走——这是遥控器上最常见的步长，
+     * 模糊的指令给一个确定的默认值，比反问一句「快进多少」更接近人的预期。
+     */
+    private fun seekOf(bare: String): Plan? {
+        val dir = (SEEK_BACKWARD + SEEK_FORWARD).sortedByDescending { it.length }.firstOrNull { bare.contains(it) } ?: return null
+        val forward = dir in SEEK_FORWARD
+        val seconds = secondsIn(bare) ?: 15
+        val ms = if(forward) seconds * 1000L else -seconds * 1000L
+        return Plan(RemoteCommand.Step(ms), (if(forward) "快进 " else "快退 ") + durationLabel(seconds))
+    }
+
+    /** 倍速：`1.5倍速` / `两倍`。数值必须落在播放器支持的档位上，取最近的一档。 */
+    private fun speedOf(text: String): Plan? {
+        val match = SPEED.find(text) ?: return null
+        val token = match.groupValues[1]
+        val value: Float? = when {
+            token == "半" -> 0.5f
+            token.firstOrNull()?.isDigit() == true -> token.toFloatOrNull()
+            else -> chineseNumber(token)?.toFloat()
+        }
+        val speed = value ?: return null
+        // 「八倍镜」「三倍人生」是片名：倍数只认出 0.5～3 之间的说法
+        if(speed !in 0.5f..3f) return null
+        // 不带「倍速」的句子，要求「倍」正好落在句尾，否则仍按片名处理
+        if(!text.contains("倍速") && match.range.last != text.lastIndex) return null
+        val nearest = PlaybackSpeed.options.minByOrNull { kotlin.math.abs(it - speed) } ?: return null
+        return Plan(RemoteCommand.Speed(nearest), "倍速 ${PlaybackSpeed.label(nearest)}")
+    }
+
+    /** 定时停止：`半小时后关掉` → `sleep.set min:30`；`看完这集就关` → `sleep.set ep:1`。 */
+    private fun sleepOf(bare: String): Plan? {
+        val explicit = SLEEP_WORDS.any { bare.contains(it) }
+        val loose = SLEEP_LOOSE.any { bare.contains(it) }
+        if(!explicit && !loose) return null
+        if(bare.contains("这集") || bare.contains("这一集")) {
+            return Plan(RemoteCommand.Act("sleep.set", "ep:1"), "看完这集就停")
+        }
+        // 弱触发词必须带时长：`关掉` 这种两个字在别的指令里到处都是
+        val seconds = secondsIn(bare, 3600) ?: (if(explicit) 1800 else return null)
+        val minutes = (seconds / 60).coerceIn(1, 180)
+        return Plan(RemoteCommand.Act("sleep.set", "min:$minutes"), "定时 $minutes 分钟后停止")
+    }
+
+    /** 返回上一级。只说「返回」也算——它是这组里唯一没有歧义的解释。 */
+    private fun backOf(bare: String): Plan? {
+        val hit = BACK_WORDS.firstOrNull { bare.contains(it) } ?: return null
+        return Plan(RemoteCommand.Back, if(hit == "返回" || hit == "退回") "返回上一级" else hit)
     }
 
     /**
@@ -267,14 +411,26 @@ object VoiceIntent {
      * 用原句 [text] 而不是剥过语气词的 bare：`请回答1988` 这类片名一旦被剥掉「请」
      * 就再也搜不到了。剥完剩下的长度不足 2 就放弃（一个字的搜索词没有意义）。
      */
-    private fun titleOf(text: String): String? {
+    private fun titleOf(text: String): String? = cleanTitle(text)
+
+    /** 剥掉句首动词与句末「的」，得到干净的片名；不合格返回 null。 */
+    private fun cleanTitle(text: String): String? {
         var title = text.trim()
-        for(lead in TITLE_LEADS) {
-            if(title.startsWith(lead) && title.length > lead.length) {
-                title = title.substring(lead.length).trim()
-                break
+        var changed = true
+        while(changed) {
+            changed = false
+            for(lead in TITLE_LEADS) {
+                // 不要求「剩下还有字」：`我要看第七集` 里剥完是空的，说明没有片名，
+                // 这时该由序数规则接手「当前这部剧的第 7 集」，而不是把「我要看」当地剧名。
+                if(title.startsWith(lead)) {
+                    title = title.substring(lead.length).trim()
+                    changed = true
+                    break
+                }
             }
         }
+        title = title.trim(*SEPARATORS).trim()
+        while(title.length > 2 && title.endsWith("的")) title = title.dropLast(1).trim()
         title = title.trim(*SEPARATORS).trim()
         if(title.length < 2 || title.length > 80) return null
         return title
@@ -300,6 +456,36 @@ object VoiceIntent {
     }
 
     private data class Ordinal(val value: Int, val end: Int)
+
+    /**
+     * 句子里出现的时长，单位秒。
+     *
+     * 支持 `30秒` / `一分钟` / `半小时` / `一刻钟` / `1个半小时`。上限 10 分钟，
+     * 与 [REMOTE_STEP_MAX_MS] 对齐——超出的说法多半不是想「快进」。
+     */
+    private fun secondsIn(bare: String, limit: Int = 600): Int? {
+        if(bare.contains("半小时")) return 1800.coerceAtMost(limit)
+        if(bare.contains("一刻钟")) return 900.coerceAtMost(limit)
+        val match = DURATION.find(bare) ?: return null
+        val token = match.groupValues[1]
+        // 第 2 组是「个」，单位在第 3 组
+        val unit = match.groupValues[3]
+        val value = if(token == "半") 0.5 else chineseNumber(token)?.toDouble() ?: return null
+        val seconds = when(unit.first()) {
+            '秒' -> value
+            '分' -> value * 60
+            '小' -> value * 3600
+            '钟' -> if(unit == "钟头") value * 3600 else value * 60
+            else -> return null
+        }
+        return seconds.toInt().coerceIn(1, limit)
+    }
+
+    private fun durationLabel(seconds: Int): String = when {
+        seconds % 3600 == 0 -> "${seconds / 3600} 小时"
+        seconds % 60 == 0 -> "${seconds / 60} 分钟"
+        else -> "$seconds 秒"
+    }
 
     /** 中文数字 → 整数。支持「两」「十」「十二」「二十」「九十九」。 */
     private fun chineseNumber(text: String): Int? {
@@ -358,7 +544,16 @@ object VoiceIntent {
         return out
     }
 
-    private val ORDINAL = Regex("第\\s*([0-9]+|[零一二两三四五六七八九十]+)\\s*(?:个|条|部|集|项|号)?")
+    private val ORDINAL = Regex("第\\s*([0-9]+|[零一二两三四五六七八九十]+)\\s*(?:个|条|部|项|号|集|话|期|回)?")
+
+    /** 剧名里的集号：`第七集` / `第 12 话` / `第3期`。 */
+    private val EPISODE = Regex("第\\s*([0-9]+|[零一二两三四五六七八九十]+)\\s*(?:集|话|期|回)")
+
+    /** 时长：`30秒` / `一分钟` / `半分钟` / `两小时`。 */
+    private val DURATION = Regex("([0-9]+|[零一二两三四五六七八九十]+|半)\\s*(个)?\\s*(秒钟|秒|分钟|分|小时|钟头|刻钟)")
+
+    /** 倍速：`1.5倍` / `两倍` / `半倍`。 */
+    private val SPEED = Regex("([0-9]+(?:\\.[0-9]+)?|[零一二两三四五六七八九十]+|半)\\s*倍")
 
     private val SEPARATORS = charArrayOf(' ', '\u3000', '·', '-', '_', '：', ':', '|', '/', '、')
 }

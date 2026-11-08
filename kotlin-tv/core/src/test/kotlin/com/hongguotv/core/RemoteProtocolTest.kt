@@ -41,6 +41,30 @@ class RemoteProtocolTest {
         assertNull(parse("""{"cmd":"watch"}"""))
     }
 
+    @Test fun `watch can carry an episode number`() {
+        // 说清集号才允许直接落到那一集；0 表示没说，界面只出搜索结果
+        assertEquals(RemoteCommand.Watch("文盲修仙", 7), parse("""{"cmd":"watch","query":"文盲修仙","episode":7}"""))
+        assertEquals(0, (parse("""{"cmd":"watch","query":"文盲修仙"}""") as RemoteCommand.Watch).episode)
+        assertNull("集号越界不该被夹到合法值", parse("""{"cmd":"watch","query":"x","episode":10000}"""))
+        assertNull(parse("""{"cmd":"watch","query":"x","episode":-1}"""))
+        assertNull(parse("""{"cmd":"watch","query":"x","episode":1.5}"""))
+    }
+
+    @Test fun `new acts validate their arguments at the edge`() {
+        assertEquals(RemoteCommand.Act("type.set", "short"), parse("""{"cmd":"act","id":"type.set","arg":"short"}"""))
+        assertEquals(RemoteCommand.Act("random.pick", ""), parse("""{"cmd":"act","id":"random.pick"}"""))
+        assertEquals(RemoteCommand.Act("sleep.set", "min:30"), parse("""{"cmd":"act","id":"sleep.set","arg":"min:30"}"""))
+        assertEquals(RemoteCommand.Act("volume.mute", "on"), parse("""{"cmd":"act","id":"volume.mute","arg":"on"}"""))
+        assertEquals(RemoteCommand.Act("player.close"), parse("""{"cmd":"act","id":"player.close"}"""))
+        // 参数校验：类型键、定时格式、静音参数都只收认识的值
+        assertNull(parse("""{"cmd":"act","id":"type.set","arg":"porn"}"""))
+        assertNull(parse("""{"cmd":"act","id":"type.set"}"""))
+        assertNull(parse("""{"cmd":"act","id":"sleep.set","arg":"min:0"}"""))
+        assertNull(parse("""{"cmd":"act","id":"sleep.set","arg":"30"}"""))
+        assertNull(parse("""{"cmd":"act","id":"volume.mute","arg":"maybe"}"""))
+        assertNull(parse("""{"cmd":"act","id":"nope"}"""))
+    }
+
     @Test fun `out of range and malformed commands are rejected instead of clamped`() {
         // 越界一律拒绝：把 seek 夹到合法区间会让用户拖到片尾却毫无反应
         assertNull(parse("""{"cmd":"seek","to":-1}"""))

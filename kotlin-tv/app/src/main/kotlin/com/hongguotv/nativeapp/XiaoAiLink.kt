@@ -136,7 +136,9 @@ object XiaoAiVoice {
         val plan = VoiceIntent.parse(text) ?: return null
         return when(val cmd = plan.command) {
             is RemoteCommand.Open -> Action.Open(cmd.module)
-            is RemoteCommand.Watch -> Action.Watch(cmd.query)
+            // 整句话一律走通用分发（[Action.Do]）：影射到界面上的行为和遥控页一模一样，
+            // 包括「搜索只出结果、说清集数才落到那一集」这条规矩。
+            // 只有「主题昵称就是剧名」那条老路（[actionOf]）才默认开播。
             else -> Action.Do(cmd, plan.echo)
         }
     }

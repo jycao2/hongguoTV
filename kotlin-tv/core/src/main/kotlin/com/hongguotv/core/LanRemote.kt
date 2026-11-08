@@ -80,12 +80,17 @@ sealed class RemoteCommand {
     data class Open(val module: String) : RemoteCommand()
 
     /**
-     * 「一句话开播」：按剧名搜一次，命中就直接起播，没命中只在电视上提示。
+     * 「按名字找剧」。
      *
-     * 与 [Search] 的区别是要落到播放器，所以由界面侧决定优先搜哪套内容
-     * （停在片源页就搜片源，否则搜红果主站）。
+     * 默认**只出结果、不起播**：搜索结果里混着预告、同名不同内容、空壳条目，
+     * 替用户挑一个的代价是「喊了《X》结果播了《Y》」。停在结果页让人点一下，比猜可靠。
+     *
+     * [episode] 是显式说的集号（`文盲修仙第七集` → 7）。说了集号意图就够明确了，
+     * 此时才允许直接落到那一集；0 表示没指定。
+     *
+     * 界面侧决定优先搜哪套内容（停在片源页就搜片源，否则搜红果主站）。
      */
-    data class Watch(val query: String) : RemoteCommand()
+    data class Watch(val query: String, val episode: Int = 0) : RemoteCommand()
 
     /**
      * 把整句话交给电视自己理解（[VoiceIntent.parse]）。
@@ -180,12 +185,26 @@ val REMOTE_ACTIONS = setOf(
     "play.toggle",      // 暂停 / 继续
     "play.next",        // 下一集
     "play.prev",        // 上一集
+    "play.replay",      // 从头播放本集
+    "player.close",     // 退出播放器，回到详情页
+    "panel.episodes",   // 呼出选集面板（电视播放页 / 片源播放页）
+    "skip.intro",       // 按本剧片头标记跳过片头
+    "speed.up",         // 倍速 +1 档（播放页只作用于本剧）
+    "speed.down",       // 倍速 -1 档
+    "sleep.set",        // 定时停止：arg = min:<分钟> | ep:<集数>
     // 列表定位：arg = "<列表>:<序号>"，序号从 1 开始，见 [REMOTE_LIST_KINDS]
     "list.play",
     // 继续观看
     "resume.latest",    // 接着看最近一条
     // 详情页
     "favorite.toggle",  // 收藏 / 取消收藏当前剧
+    // 浏览
+    "type.set",         // 切内容类型：arg = comic | short | ai
+    "random.pick",      // 随机推荐一部并打开详情：arg = comic | short | ai（空=当前类型）
+    // 设备音量（系统媒体音量，不是播放器内部音量）
+    "volume.up",
+    "volume.down",
+    "volume.mute",      // arg = on | off（空=切换）
     // 关于与工具
     "update.check",     // 检查版本更新
     "check.interface",  // 接口自检
@@ -201,6 +220,26 @@ val REMOTE_ACTIONS = setOf(
 
 /** `list.play` 的列表键：`history` 最近观看、`favorite` 收藏、`catalog` 当前列表、`episodes` 选集。 */
 val REMOTE_LIST_KINDS = setOf("history", "favorite", "catalog", "episodes", "current")
+
+/** `type.set` / `random.pick` 的类型键，直接对应 [ContentType.storedValue]。 */
+val REMOTE_TYPE_KEYS = ContentType.entries.map { it.storedValue }.toSet()
+
+/**
+ * `sleep.set` 的参数：`min:30` 三十分钟后停，`ep:1` 看完这一集就停。
+ *
+ * 只开放界面上已有的那几档（15/30/60/90 分钟、1/3/5 集），
+ * 语音说「四十分钟」会被归到最近的档，而不是造出一个界面里选不到的状态。
+ */
+fun sleepTarget(arg: String): Pair<String, Int>? {
+    val parts = arg.split(':', limit = 2)
+    if(parts.size != 2) return null
+    val value = parts[1].toIntOrNull() ?: return null
+    return when(parts[0]) {
+        "min" -> value.takeIf { it in 1..600 }?.let { "min" to it }
+        "ep" -> value.takeIf { it in 1..99 }?.let { "ep" to it }
+        else -> null
+    }
+}
 
 /** 动作参数的长度上限；正常只有 `history:12` 这种。 */
 const val REMOTE_ACT_ARG_MAX = 48
@@ -281,8 +320,9 @@ object RemoteProtocol {
                 .takeIf { it in REMOTE_MODULES }?.let { RemoteCommand.Open(it) }
             "watch" -> {
                 val query = json.optString("query").trim()
+                val episode = if(json.has("episode")) int(json, "episode")?.takeIf { it in 0..9999 } ?: return null else 0
                 if(query.isEmpty() || query.length > SEARCH_MAX || query.any { it.isISOControl() }) null
-                else RemoteCommand.Watch(query)
+                else RemoteCommand.Watch(query, episode)
             }
             "say" -> {
                 val text = json.optString("text").trim()
@@ -298,6 +338,11 @@ object RemoteProtocol {
                     // 列表定位必须带一个合法的列表键：一个不带参数的 list.play 没有意义，
                     // 与其让界面层去猜「你说的是哪个列表」，不如在入口就拒掉。
                     id == "list.play" && listTarget(arg) == null -> null
+                    // 带参数的键同样在入口校验：界面层只该收到自己认识的值
+                    id == "type.set" && arg !in REMOTE_TYPE_KEYS -> null
+                    id == "random.pick" && arg.isNotEmpty() && arg !in REMOTE_TYPE_KEYS -> null
+                    id == "volume.mute" && arg !in setOf("", "on", "off") -> null
+                    id == "sleep.set" && sleepTarget(arg) == null -> null
                     else -> RemoteCommand.Act(id, arg)
                 }
             }
