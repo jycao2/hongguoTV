@@ -72,6 +72,9 @@ jobs:
       - name: Build Android 5-7 variant (minSdk 21) and attach to release
         env:
           GH_TOKEN: ${{ github.token }}
+          HONGGUOTV_STORE_PASSWORD: ${{ secrets.HONGGUOTV_STORE_PASSWORD }}
+          HONGGUOTV_KEY_ALIAS: ${{ secrets.HONGGUOTV_KEY_ALIAS }}
+          HONGGUOTV_KEY_PASSWORD: ${{ secrets.HONGGUOTV_KEY_PASSWORD }}
         run: |
           ./kotlin-tv/gradlew -p kotlin-tv -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease --console=plain
           mkdir -p outputs
