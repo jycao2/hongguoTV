@@ -10,9 +10,10 @@ APK_SRC = "kotlin-tv/app/build/outputs/apk/release/app-release.apk"
 # 改成 -android5.apk 会让所有旧客户端报「更新信息格式不正确」而无法自动更新
 # （0.30.9 起新客户端两种后缀都认）。等存量旧客户端消化完再考虑改回 android5。
 APK_NAME = f"hongguotv-kotlin-{VERSION_NAME}-android8.apk"
-# 清单 minSdk 报 26（而非 APK 实际的 21）：旧客户端解析要求 minSdk in 26..100。
-# 现存用户全部装着 minSdk 26 时代的包（都已在 Android 8+），声明 26 不会拦到任何人；
-# 实际包 minSdk 21 ≤ 声明值，覆盖安装校验只挡「声明低于实际」，安全。旧客户端消化完后可改回 21。
+# 清单 minSdk 与更新通道 APK 的实际 minSdk 必须一致（MANIFEST_MIN_SDK=26 配合默认构建）：
+# 0.28.0 起的客户端安装前校验 `candidate.minSdkVersion != update.minSdk` 即拦截，
+# 且旧客户端解析要求 minSdk in 26..100，声明 21 连清单都过不了。
+# Android 5-7 兼容包（实际 minSdk 21）只挂 Release 页供手动安装，不进更新通道。
 MANIFEST_MIN_SDK = int(os.environ.get("HONGGUOTV_MANIFEST_MIN_SDK", "26"))
 OUTPUTS = "outputs"
 os.makedirs(OUTPUTS, exist_ok=True)

@@ -9,10 +9,12 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "com.hongguotv.nativeapp"
-        minSdk = 21
+        // 更新通道包默认 minSdk 26（旧客户端安装校验要求实际值与清单声明一致）；
+        // Android 5-7 兼容包用 -PHONGGUOTV_MIN_SDK=21 出 android5 变体
+        minSdk = findProperty("HONGGUOTV_MIN_SDK")?.toString()?.toInt() ?: 26
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.30.9"
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.30.10"
     }
     buildFeatures { buildConfig = true }
     signingConfigs {

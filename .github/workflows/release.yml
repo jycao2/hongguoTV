@@ -32,11 +32,11 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "HONGGUOTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "HONGGUOTV_VERSION_CODE=$((10400 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "HONGGUOTV_VERSION_NAME=0.30.9+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "UPDATE_TAG=kotlin-v0.30.9-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "HONGGUOTV_VERSION_NAME=0.30.10+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "UPDATE_TAG=kotlin-v0.30.10-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_END"
-            echo "- **自动更新链路修复（0.30.8 用户必升）**：0.30.8 的更新清单改用了新 APK 命名（-android5）且声明 minSdk 21，而 0.28.0 及更早客户端的解析器只认 -android8 命名与 minSdk≥26，导致存量用户检查更新报「更新信息格式不正确」、永远收不到新版。本版起清单恢复 -android8 命名与 minSdk 26 声明（实际包仍支持 Android 5.0），并放宽新客户端解析为两种命名兼容"
+            echo "- **自动更新链路修复（0.30.8/0.30.9 用户必升）**：0.30.8 的更新清单改用了新 APK 命名（-android5）且声明 minSdk 21，而 0.28.0 及更早客户端的解析器只认 -android8 命名与 minSdk≥26；0.30.9 修正了清单，但 APK 实际 minSdk 仍为 21，旧客户端装前校验「实际 minSdk 与声明一致」时报「包名、版本或签名不匹配」拦下安装。本版起双构建：更新通道 APK 实际 minSdk 26（与清单一致，存量用户自动更新全通），Release 页另挂 minSdk 21 的 -android5.apk 供 Android 5-7 新用户手动安装"
             echo "- **一句话遥控（本版重点）**：手机遥控页新增「一句话」输入，说剧名直接搜、说指令直接做，回执以提示条播报。支持 47 种说法：\`我要看文盲修仙的第七集\`、\`快进30秒\`、\`后退15秒\`、\`1.5倍速\`、\`返回上一级\`、\`随机推荐一部漫剧\`、\`登录红果账户\`、\`打开选集\`、\`跳到片尾\`、\`静音\`、\`音量加\`、\`半小时后关掉\`、\`切到短剧\`……完整清单见仓库 \`docs/voice-cheatsheet.md\`"
             echo "- **搜索只列结果、不自动播放**：说剧名只把结果摆出来，看哪部自己点；只有说清集数才直达那一集。当前库搜不到时自动换到漫剧/短剧库重搜一次"
             echo "- **快传与历史也能说**：\`刷新二维码\`、\`打开快传文件\`、\`清空文件\`、\`清空搜索历史\`——说出口即执行，回执报数量和体积"
@@ -60,10 +60,26 @@ jobs:
           HONGGUOTV_KEY_ALIAS: ${{ secrets.HONGGUOTV_KEY_ALIAS }}
           HONGGUOTV_KEY_PASSWORD: ${{ secrets.HONGGUOTV_KEY_PASSWORD }}
         run: ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:lintRelease :app:assembleRelease --console=plain
+      - name: Verify channel APK minSdk matches manifest (26)
+        run: |
+          SDK=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging kotlin-tv/app/build/outputs/apk/release/app-release.apk | sed -n "s/^minSdkVersion: *'\([0-9]*\)'.*/\1/p")
+          echo "channel APK minSdk=$SDK"
+          test "$SDK" = 26
       - name: Publish APK, source, and update manifest
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/publish-tv-update.py
+      - name: Build Android 5-7 variant (minSdk 21) and attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./kotlin-tv/gradlew -p kotlin-tv -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease --console=plain
+          mkdir -p outputs
+          cp kotlin-tv/app/build/outputs/apk/release/app-release.apk "outputs/hongguotv-kotlin-$HONGGUOTV_VERSION_NAME-android5.apk"
+          SDK=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "outputs/hongguotv-kotlin-$HONGGUOTV_VERSION_NAME-android5.apk" | sed -n "s/^minSdkVersion: *'\([0-9]*\)'.*/\1/p")
+          echo "android5 APK minSdk=$SDK"
+          test "$SDK" = 21
+          gh release upload "$UPDATE_TAG" "outputs/hongguotv-kotlin-$HONGGUOTV_VERSION_NAME-android5.apk" --clobber --repo "$GITHUB_REPOSITORY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

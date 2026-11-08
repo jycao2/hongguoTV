@@ -2,6 +2,14 @@
 
 本文件记录红果 TV 面向使用者的改动。版本号为 Android `versionName`，括号内为 `versionCode`。
 
+## v0.30.10 — 2026-11-08
+
+双构建收尾自动更新链路（0.30.9 的清单修对了，但安装仍被拦）。
+
+- **0.28.0 客户端装前校验真相**：`AppUpdater.validateApk` 要求更新包**实际 minSdkVersion == 清单声明 minSdk**（报错文案「新版包名、版本或签名不匹配」有误导性，真机截图逐项核对后定位）。0.30.9 声明 26、实际 21，必然拦下。
+- **双构建方案**：更新通道 `-android8.apk` 实际 minSdk 26（与声明一致，存量用户全通）；Release 页另挂 `-android5.apk`（minSdk 21，Android 5-7 新用户手动装）。`minSdk` 改由 Gradle 属性 `HONGGUOTV_MIN_SDK` 控制，默认 26。
+- **CI 防呆**：发布前用 aapt2 校验两包实际 minSdk 分别为 26/21，不符即失败。
+
 ## v0.30.9 — 2026-11-08
 
 紧急修 0.30.8 的自动更新链路。

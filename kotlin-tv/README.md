@@ -11,9 +11,13 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.30.10 修复
+
+- **双构建修完自动更新链路**：旧客户端（≤0.28.0）装前校验更新包「实际 minSdk == 清单声明 minSdk」，因此更新通道 APK 实际 minSdk 必须是 26。本版起 CI 出两个包：更新通道 `-android8.apk`（minSdk 26，存量 Android 8+ 用户自动更新全通）；Release 页另挂 `-android5.apk`（minSdk 21，Android 5-7 用户手动安装）。构建脚本默认 minSdk 26，出 android5 变体用 `-PHONGGUOTV_MIN_SDK=21`。CI 内以 aapt2 校验两包 minSdk 防呆。
+
 ## 0.30.9 修复
 
-- **自动更新链路修复**：0.30.8 更新清单用了新命名 `-android5.apk` 与 `minSdk: 21`，而 0.28.0 及更早客户端只认 `-android8.apk` 与 `minSdk≥26`，存量用户检查更新报「更新信息格式不正确」。本版恢复 `-android8.apk` 命名、清单声明 `minSdk: 26`（实际包仍支持 Android 5.0，声明值只用于旧客户端兼容判断），并放宽客户端解析为两种命名兼容。实测 0.28.0 客户端可发现新版并完成覆盖安装。
+- **自动更新链路修复**：0.30.8 更新清单用了新命名 `-android5.apk` 与 `minSdk: 21`，而 0.28.0 及更早客户端只认 `-android8.apk` 与 `minSdk≥26`，存量用户检查更新报「更新信息格式不正确」。本版恢复 `-android8.apk` 命名、清单声明 `minSdk: 26`，并放宽客户端解析为两种命名兼容。实测 0.28.0 客户端可发现新版并下载，但装前校验「实际 minSdk 与声明一致」仍拦下安装（报「包名、版本或签名不匹配」）——最终修复见 0.30.10。
 
 ## 0.30.8 新增
 
@@ -411,7 +415,9 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.30.9-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.30.10-android8.apk（更新通道，minSdk 26）
+# Android 5-7 变体：./gradlew -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease
+# 输出：outputs/hongguotv-kotlin-0.30.10-android5.apk（minSdk 21）
 ```
 
 ## 工程结构
