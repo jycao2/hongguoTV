@@ -1747,7 +1747,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val urlEdit = editText("TVBox 配置链接（明文 JSON）")
         val errorText = text("", 13f, TvStyle.accent).apply { setPadding(0, dp(6), 0, 0) }
         form.addView(urlEdit); form.addView(errorText)
-        form.addView(text("自动跳过 spider jar（type=0）与加密 app 源（type=3/4）。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
+        form.addView(text("支持 CMS JSON（type=1）与 XML（type=0）源，自动跳过 spider jar（type=3）与 JS/app 源（type=4）。", 12f, muted).apply { setPadding(0, dp(6), 0, 0) })
         val actions = row().apply { setPadding(0, dp(12), 0, 0) }
         lateinit var dialog: AlertDialog
         val parse = TvDialog.capsuleButton(activity, "解析") { }
