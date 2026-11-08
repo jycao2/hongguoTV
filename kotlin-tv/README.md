@@ -11,6 +11,10 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.30.9 修复
+
+- **自动更新链路修复**：0.30.8 更新清单用了新命名 `-android5.apk` 与 `minSdk: 21`，而 0.28.0 及更早客户端只认 `-android8.apk` 与 `minSdk≥26`，存量用户检查更新报「更新信息格式不正确」。本版恢复 `-android8.apk` 命名、清单声明 `minSdk: 26`（实际包仍支持 Android 5.0，声明值只用于旧客户端兼容判断），并放宽客户端解析为两种命名兼容。实测 0.28.0 客户端可发现新版并完成覆盖安装。
+
 ## 0.30.8 新增
 
 完整说明见 [更新日志](../docs/CHANGELOG.md)。
@@ -407,7 +411,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.30.8-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.30.9-android8.apk
 ```
 
 ## 工程结构

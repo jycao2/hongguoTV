@@ -47,7 +47,9 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
             require(update.versionCode in 1..Int.MAX_VALUE.toLong() && update.minSdk in 21..100)
             require(update.versionName.matches(Regex("[0-9][0-9A-Za-z.+-]{0,63}")))
             require(update.tag.matches(Regex("kotlin-v[0-9][0-9A-Za-z.+-]{0,80}")))
-            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android5\\.apk")))
+            // 0.28.0 及更早的已发布客户端只认 -android8.apk，minSdk 下探后新包改用 -android5.apk——
+            // 两种后缀都在线上的清单里出现过，解析必须同时接受，否则总有一批存量客户端「更新信息格式不正确」
+            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android[58]\\.apk")))
             require(update.size in 1..MAX_APK_BYTES && update.sha256.matches(Regex("[0-9a-f]{64}")))
             return update
         }
