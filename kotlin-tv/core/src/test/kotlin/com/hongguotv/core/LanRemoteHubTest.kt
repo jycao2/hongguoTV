@@ -396,7 +396,13 @@ class LanRemoteHubTest {
                 assertTrue(stream.await("Content-Type:").contains("text/event-stream"))
                 assertTrue(stream.await("Cache-Control:").contains("no-store"))
                 server.snapshot = PlaybackSnapshot(source = PlaybackSource.OFFICIAL, title = "A")
-                assertEquals("A", stream.nextSnapshot().getString("title"))
+                // 读到响应头即返回后，注册与广播仍有毫秒级竞态，可能先吐出连接瞬间的初始空快照；
+                // 断言放宽为「等到标题为 A 的快照帧」，广播本身失效仍会超时失败
+                var seen = false
+                for(i in 0 until 3) {
+                    if(stream.nextSnapshot().optString("title") == "A") { seen = true; break }
+                }
+                assertTrue("没有等到标题为 A 的快照", seen)
             }
         } finally {
             server.close()
