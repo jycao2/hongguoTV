@@ -5071,7 +5071,10 @@ class MainActivity: Activity() {
             return true
         }
         val manager=audioManager()
-        val muted=runCatching { manager.isStreamMute(AudioManager.STREAM_MUSIC) }.getOrDefault(false)
+        // isStreamMute 是 API 23 才有的；更低版本读不到静音状态，按「未静音」处理（mode 明确给了 on/off 时不影响结果）
+        val muted=if(Build.VERSION.SDK_INT>=23)
+            runCatching { manager.isStreamMute(AudioManager.STREAM_MUSIC) }.getOrDefault(false)
+        else false
         val target=wanted ?: !muted
         manager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
             if(target) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE,0)
