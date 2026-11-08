@@ -4640,14 +4640,22 @@ class MainActivity: Activity() {
             tvTools.info("遥控地址","电视还没拿到局域网地址，请确认已连 Wi-Fi 或有线网络后重试。",anchor)
             return
         }
+        val base=session.hub.url
         val message=buildString {
-            appendLine("同一局域网里的脚本、Home Assistant、语音桥都可以直接调：")
+            appendLine("同一局域网里的脚本、Home Assistant、语音桥都可以直接调。")
             appendLine()
-            appendLine(session.hub.url)
+            appendLine("① 地址由「IP + 端口 + 门禁 token」拼成：")
+            appendLine(base)
+            appendLine("换网络只有 IP 会变，token 不变。")
             appendLine()
-            appendLine("在上面地址后面加 /cmd 用 POST 发命令：")
-            appendLine("""{"cmd":"open","module":"source"}""")
-            appendLine("""{"cmd":"watch","query":"黄石"}""")
+            appendLine("② 在地址末尾加 /cmd，用 POST 发一段 JSON：")
+            appendLine("""{"cmd":"open","module":"source"}   跳到片源页""")
+            appendLine("""{"cmd":"watch","query":"黄石"}   搜到并起播""")
+            appendLine()
+            appendLine("③ 完整示例（bash / Git Bash 可直接跑）：")
+            appendLine("curl -X POST \"$base/cmd\" \\")
+            appendLine("  -H \"Content-Type: application/json\" \\")
+            appendLine("""  -d '{"cmd":"watch","query":"黄石"}'""")
             appendLine()
             append("module 可选：home / search / rank / favorite / history / settings / source / library")
         }
