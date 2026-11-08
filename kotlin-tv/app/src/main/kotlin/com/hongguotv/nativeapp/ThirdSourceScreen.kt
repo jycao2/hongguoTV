@@ -63,6 +63,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         const val SOURCE_DISCLAIMER = "第三方 CMS 接口由用户自行添加，仅为技术交流与学习用途，应用不提供、不存储、不传播任何视频内容，内容合法性由对应源站负责。"
         /** 聚合搜索单次最多参与的源数：当前源优先，独立线程池并发，避免被慢源拖成多轮。 */
         const val AGGREGATE_LIMIT = 6
+
+        /** 聚合搜索总时限（毫秒）：超过就把未返回的源放弃，不等齐再展示。 */
+        const val AGGREGATE_TIMEOUT_MS = 8_000L
         /** 探活缓存有效期：30 分钟内的结果直接复用，冷启动不再全量请求。 */
         const val PROBE_TTL_MS = 30 * 60_000L
         /** 连续缓冲多少秒视为线路卡死：自动换线路，线路用尽再尝试其它片源。
@@ -131,6 +134,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var searchSourceTotal = 0
     private val searchFailures = HashMap<String, String>()
     private var searchSeq = 0
+    // 聚合总时限：到点把没返回的源按「超时」记账直接收尾，已到的结果照常展示。
+    // 没有这个兜底时，一个挂起的源能让结果页永远停在「正在聚合 1/6」，33 条结果躺在内存里看不见。
+    private var searchTimeout: Runnable? = null
     private var searchAllOverride = false
     private var searchStatusView: TextView? = null
     // 搜索页（独立 Mode.SEARCH）：输入、联想、分页状态与浏览态结果分离
@@ -1098,7 +1104,17 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         searchAggregate = candidates.size > 1
         searchSourceTotal = candidates.size
         searchAggregating = searchAggregate && candidates.size > 1
+        // 上一轮的超时兜底作废：换词/换源后序号会变，超时任务里有 seq 守卫，这里只是及时清句柄
+        searchTimeout?.let { main.removeCallbacks(it) }
+        searchTimeout = null
+        // 已返回的源记在这里，超时收尾时才能区分「慢源」和「真失败」
+        val arrived = HashSet<String>()
         var firstArrival = true
+        if(searchAggregating) {
+            val timeout = Runnable { finishAggregation(seq, candidates, arrived, timedOut = true) }
+            searchTimeout = timeout
+            main.postDelayed(timeout, AGGREGATE_TIMEOUT_MS)
+        }
         candidates.forEach { source ->
             searchExecutor.execute {
                 val result = client.searchPage(source.api, word, 1)
@@ -1107,6 +1123,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     // 若继续用它守卫，其余源的后续结果会被全部丢弃（状态永远停在 1/N）。
                     // 这里以序号 + 关键词为准，换源/重新搜索都会先改 searchWord。
                     if(seq != searchSeq || searchWord != word) return@post
+                    arrived.add(source.api)
                     searchSourcesDone++
                     val pageData = result.page
                     if(pageData == null) searchFailures[source.api] = result.error ?: "连接失败"
@@ -1121,20 +1138,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                         }
                     }
                     val finished = searchSourcesDone >= candidates.size
+                    if(finished) finishAggregation(seq, candidates, arrived, timedOut = false)
                     // 语音开播：第一条结果到手就起播，不等其余源聚合完成
                     if(playPendingWatch()) return@post
                     searchLoading = !finished
-                    if(finished) {
-                        searchAggregating = false
-                        // 到这一步还没起播：要么一个结果都没有，要么结果里没有能播的。
-                        // 待办必须丢掉，否则下一次手动搜索的首条结果会被这条旧语音命令抢走。
-                        val missed = watchPending
-                        watchPending = null
-                        if(searchHits.isEmpty()) loadError = searchFailures.values.firstOrNull()?.let { "所有片源均未返回结果（$it）" }
-                            ?: "连接超时或接口无响应"
-                        // 有结果但没一个能播：留在结果页，让人自己点——这比替用户猜一个可靠。
-                        else if(missed != null) Toast.makeText(activity, "没找到能播放的「$missed」，请从结果里选一个", Toast.LENGTH_SHORT).show()
-                    }
                     // 首个结果到达才建网格；后续结果只刷新 adapter，避免整页重建抢走焦点
                     if(firstArrival || (gridAdapter == null && searchDetails.isNotEmpty())) { firstArrival = false; rebuild() }
                     else {
@@ -1147,9 +1154,45 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
     }
 
+    /**
+     * 聚合收尾：全部源返回，或总时限到了放弃慢源（[timedOut]）。
+     *
+     * 超时是把结果页从「永远在聚合」里救出来的兜底：慢源一挂几十秒，
+     * 已到的结果早就能看了，没理由陪它等。未返回的源逐个记「超时」，
+     * 顶部统计里和真失败一样能看出有几个源没响应。
+     *
+     * 收尾时若网格已建好就只刷状态文本，不整页重建——用户可能正在翻结果，
+     * 抢走焦点比晚几秒更新统计更糟。
+     */
+    private fun finishAggregation(seq: Int, candidates: List<ThirdSource>, arrived: Set<String>, timedOut: Boolean) {
+        if(seq != searchSeq) return
+        searchTimeout?.let { main.removeCallbacks(it) }
+        searchTimeout = null
+        searchAggregating = false
+        if(timedOut) {
+            candidates.filter { it.api !in arrived }.forEach { searchFailures[it.api] = "超时" }
+            searchSourcesDone = candidates.size
+        }
+        // 待办必须丢掉：收尾意味着这条语音命令的搜索已经结束，
+        // 不清掉的话下一次手动搜索的首条结果会被它误起播。
+        val missed = watchPending
+        watchPending = null
+        searchLoading = false
+        if(searchHits.isEmpty()) {
+            loadError = searchFailures.values.firstOrNull()?.let { "所有片源均未返回结果（$it）" }
+                ?: "连接超时或接口无响应"
+        } else if(missed != null) {
+            // 有结果但没一个能播：留在结果页，让人自己点——这比替用户猜一个可靠。
+            Toast.makeText(activity, "没找到能播放的「$missed」，请从结果里选一个", Toast.LENGTH_SHORT).show()
+        }
+        if(gridAdapter != null) {
+            searchStatusView?.text = searchSummaryText()
+            gridStatus?.text = gridStatusText()
+        } else rebuild()
+    }
+
     /** 「仅当前源」分页追加。 */
-    private fun requestSearchMore(source: ThirdSource, word: String) {
-        if(searchLoadingMore || !searchHasMore) return
+    private fun requestSearchMore(source: ThirdSource, word: String) {        if(searchLoadingMore || !searchHasMore) return
         searchLoadingMore = true
         val seq = searchSeq
         val requestPage = searchPage + 1
