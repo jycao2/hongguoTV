@@ -2159,6 +2159,8 @@ class MainActivity: Activity() {
         accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
+        lateinit var remoteAddressButton: TextView
+        remoteAddressButton=setting(device,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
         lateinit var backup: TextView
         backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -4623,6 +4625,99 @@ class MainActivity: Activity() {
         return true
     }
 
+    /**
+     * 遥控地址（含门禁 token）常驻入口。
+     *
+     * 手机扫码窗口一旦有手机连上就会自动关掉，想抄地址去配自动化就没地方看；
+     * 这里固定展示一次，并列出外部可直接用的命令，省得去翻源码或抓包。
+     */
+    private fun showRemoteAddress(anchor: View) {
+        autoStartRemote()
+        val session=remote ?: run {
+            tvTools.info("遥控地址","电视还没拿到局域网地址，请确认已连 Wi-Fi 或有线网络后重试。",anchor)
+            return
+        }
+        val message=buildString {
+            appendLine("同一局域网里的脚本、Home Assistant、语音桥都可以直接调：")
+            appendLine()
+            appendLine(session.hub.url)
+            appendLine()
+            appendLine("在上面地址后面加 /cmd 用 POST 发命令：")
+            appendLine("""{"cmd":"open","module":"source"}""")
+            appendLine("""{"cmd":"watch","query":"黄石"}""")
+            appendLine()
+            append("module 可选：home / search / rank / favorite / history / settings / source / library")
+        }
+        tvTools.info("遥控地址",message,anchor)
+    }
+
+    /** 一级模块键 → 页签下标。索引语义见顶部导航构建处的注释。 */
+    private fun remoteTabOf(module: String): Int? = when(module) {
+        "home" -> 0
+        "search" -> 1
+        "rank" -> 2
+        "favorite" -> 3
+        "history" -> 4
+        "settings" -> 5
+        "source" -> 6
+        "library" -> 7
+        else -> null
+    }
+
+    /**
+     * 语音/自动化「跳到某个模块」。
+     *
+     * 正在播的那部必须先停：只切页面不停播放器，会出现画面走了声音还在后台放。
+     * 模块被用户在设置里隐藏时直接返回 false，不要把焦点送进一个不可见的页签。
+     */
+    private fun remoteOpenModule(module: String): Boolean {
+        val target=remoteTabOf(module) ?: return false
+        if(navHiddenAt(target)) return false
+        TvDialog.topmostDialog()?.dismiss()
+        if(screen=="player") {
+            resetPlaybackSession(); sleepTimer.cancel(); sleepStopped=false
+            saveProgress(); library.flush(); releasePlayer()
+        }
+        if(tab!=target) switchTab(target) else showCatalog()
+        nav.getOrNull(target)?.requestFocus()
+        return true
+    }
+
+    /**
+     * 「一句话开播」：按剧名搜一次，命中就直接进播放器。
+     *
+     * 停在片源页时交给片源模块自己搜（那边有独立的源与内容库），其余页面搜红果主站。
+     * 当前内容类型搜不到时再试另一种（漫剧/短剧分库），避免「在漫剧里搜短剧」直接搜空。
+     * 起播走 resume=true：有观看记录就接着上次的位置，没有则从第 1 集开始。
+     */
+    private fun remoteWatch(query: String): Boolean {
+        if(tab==6) return third?.remotePlayTitle(query)==true
+        if(screen=="player") {
+            resetPlaybackSession(); sleepTimer.cancel(); sleepStopped=false
+            saveProgress(); library.flush(); releasePlayer()
+        }
+        // 先切到搜索结果页：万一没搜到，人也能看到搜的是什么、有哪些近似结果
+        runSearch(query,fromPhone=true)
+        // AI 剧没有独立搜索入口（searchTab=null），放进候选只会白等一次超时
+        val types=(listOf(library.contentType)+ContentType.entries).distinct().filter { it.searchTab!=null }
+        io.execute {
+            val hit=types.firstNotNullOfOrNull { type ->
+                runCatching { repository.search(query,1,type) }.getOrNull()?.items?.firstOrNull()?.let { type to it }
+            }
+            main.post {
+                if(isDestroyed) return@post
+                if(hit==null) {
+                    Toast.makeText(this,"没搜到「$query」，可以换个说法再试",Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                val (type,series)=hit
+                if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
+                openDetail(series,resume=true)
+            }
+        }
+        return true
+    }
+
     /** 方向键走焦点搜索，不做 KeyEvent 注入：注入会撞上播放屏的专用语义（↓选集、↑更多）。 */
     private fun remoteDpad(key: String): Boolean {
         // 弹窗是独立窗口，盖上来以后 Activity.currentFocus 恒为 null，下面的 focusSearch 全部落空。
@@ -4692,6 +4787,8 @@ class MainActivity: Activity() {
                 }
             }
             is RemoteCommand.Resume -> remoteResumePlay(cmd.id)
+            is RemoteCommand.Open -> remoteOpenModule(cmd.module)
+            is RemoteCommand.Watch -> remoteWatch(cmd.query)
             else -> false
         }
         override fun onClientsChanged(clients: Int) {

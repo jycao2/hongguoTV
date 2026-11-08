@@ -230,6 +230,23 @@ class ThirdCmsTest {
     }
 
     @Test
+    fun `pickBest 先精确后包含最后兜底首条`() {
+        val hits = listOf(
+            detail("1", "末日重生之番外篇", "2025", 5),
+            detail("2", "《末日 重生》", "2025", 30)
+        )
+        // 片名归一后与关键词完全一致的优先，哪怕它排在后面
+        assertEquals("2", ThirdCms.pickBest("末日重生", hits)?.video?.id)
+        // 没有完全一致的，退到「包含关键词」的那条
+        assertEquals("1", ThirdCms.pickBest("末日重生之", hits)?.video?.id)
+        // 关键词谁都不沾时取首条：CMS 搜索本身按相关度排序
+        assertEquals("1", ThirdCms.pickBest("不相干", hits)?.video?.id)
+        assertNull(ThirdCms.pickBest("末日重生", emptyList()))
+        // 只有空白的关键词不该把结果筛空
+        assertEquals("1", ThirdCms.pickBest("   ", hits)?.video?.id)
+    }
+
+    @Test
     fun `dedupeHits 同片名年份合并并优先当前源`() {
         val a = ThirdSource("a", "A源", "https://a/vod")
         val b = ThirdSource("b", "B源", "https://b/vod")

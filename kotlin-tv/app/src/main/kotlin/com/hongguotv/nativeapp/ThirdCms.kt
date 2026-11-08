@@ -45,10 +45,25 @@ object ThirdCms {
     const val SUGGEST_LIMIT = 10       // 联想词条数上限
     const val TIMEOUT_SECONDS = 10L
 
-    /** 聚合搜索去重键：片名去掉《》与空白、统一大小写，再拼年份；年份缺失时只按片名。 */
-    fun searchKey(name: String, year: String?): String =
-        name.replace("《", "").replace("》", "").replace(Regex("\\s+"), "").lowercase() +
-            "|" + year?.trim().orEmpty()
+    /** 片名归一：去掉《》与空白、统一小写。聚合去重与「一句话开播」挑片共用同一套口径。 */
+    fun nameKey(name: String): String =
+        name.replace("《", "").replace("》", "").replace(Regex("\\s+"), "").lowercase()
+
+    /** 聚合搜索去重键：片名归一后再拼年份；年份缺失时只按片名。 */
+    fun searchKey(name: String, year: String?): String = nameKey(name) + "|" + year?.trim().orEmpty()
+
+    /**
+     * 「一句话开播」挑片：先要片名完全一致的，其次要片名包含关键词的，都没有就取第一条
+     * （CMS 搜索本身按相关度排序，首条通常就是要的那部）。
+     */
+    fun pickBest(word: String, details: List<ThirdDetail>): ThirdDetail? {
+        if(details.isEmpty()) return null
+        val key = nameKey(word)
+        if(key.isEmpty()) return details.first()
+        return details.firstOrNull { nameKey(it.video.name) == key }
+            ?: details.firstOrNull { nameKey(it.video.name).contains(key) }
+            ?: details.first()
+    }
 
     /** 季标记：兼容「第二季」「第2季」「第 2 部」，数字与「季/部」之间允许空格。 */
     private val SeasonMark = Regex("第\\s*([0-9零〇一二三四五六七八九十百千]+)\\s*(?:季|部)")

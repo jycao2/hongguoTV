@@ -140,6 +140,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private var searchLoading = false
     private var searchLoadingMore = false
     private var searchRequested = false
+    /** 「一句话开播」待办关键字：搜索结果第一条到达就起播，只消费一次。 */
+    private var watchPending: String? = null
     private var searchPage = 1
     private var searchHasMore = false
     private var searchTotal = 0
@@ -1119,9 +1121,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                         }
                     }
                     val finished = searchSourcesDone >= candidates.size
+                    // 语音开播：第一条结果到手就起播，不等其余源聚合完成
+                    if(playPendingWatch()) return@post
                     searchLoading = !finished
                     if(finished) {
                         searchAggregating = false
+                        // 到这一步还没起播，说明这次搜索没有任何结果：把待办丢掉，
+                        // 否则下一次手动搜索的首条结果会被上一次的语音命令误起播
+                        watchPending = null
                         if(searchHits.isEmpty()) loadError = searchFailures.values.firstOrNull()?.let { "所有片源均未返回结果（$it）" }
                             ?: "连接超时或接口无响应"
                     }
@@ -2068,6 +2075,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(clean.isEmpty() || currentSource() == null) return
         main.removeCallbacks(suggestDebounce)
         searchWord = clean; searchInput = clean
+        // 手动发起的新搜索取消上一次没跑完的语音开播待办
+        watchPending = null
         store.rememberSearch(clean)
         searchAllOverride = allSources
         searchDetails = emptyList(); searchHits = emptyList(); searchHitByVideoId.clear(); searchIndex.clear()
@@ -2916,6 +2925,43 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 playEpisode(group, progress?.episode ?: 0, progress?.positionMs ?: 0L)
             }
         }
+        return true
+    }
+
+    /**
+     * 「一句话开播」：按片名搜当前片源，命中就直接进播放器（有进度就续播）。
+     *
+     * 不自己再发一次搜索：片源的聚合搜索本来就会把首个返回的源结果落到 [searchDetails]，
+     * 两边同时请求既浪费一次往返，也会和模块自己的 rebuild 抢时序（结果回来时人已经在播放页，
+     * 又被搜索页盖回去）。这里只挂一个待办关键字，由搜索结果到达的路径接手。
+     */
+    fun remotePlayTitle(word: String): Boolean {
+        if(currentSource() == null) return false
+        if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
+        submitSearch(word)
+        // 必须放在 submitSearch 之后：新版搜索会清掉上一次没跑完的待办
+        watchPending = word
+        return true
+    }
+
+    /** 结果到达后的「一句话开播」接手点。返回 true 表示已接管，调用方别再重建搜索页。 */
+    private fun playPendingWatch(): Boolean {
+        val word = watchPending ?: return false
+        if(searchDetails.isEmpty()) return false
+        watchPending = null
+        val picked = ThirdCms.pickBest(word, searchDetails) ?: return false
+        // 接管后把在途的聚合搜索作废：否则剩余源陆续返回还会 rebuild 一次搜索页，把人从播放器顶回去
+        searchSeq++
+        searchLoading = false; searchRequested = false; searchAggregating = false
+        // 命中项可能来自其它源（聚合搜索），起播要用它自己的 source
+        val hit = searchHits.firstOrNull { it.detail.video.id == picked.video.id }
+        val source = hit?.source ?: currentSource()
+        openDetail(picked, source)
+        val progress = store.progress(source?.id.orEmpty(), picked.video.id)
+        val group = progress?.group?.takeIf { picked.groups.getOrNull(it) != null }
+            ?: ThirdCms.defaultGroupIndex(picked.groups)
+        detailReturnMode = Mode.BROWSE
+        playEpisode(group, progress?.episode ?: 0, progress?.positionMs ?: 0L)
         return true
     }
 

@@ -22,6 +22,20 @@ class RemoteProtocolTest {
         assertEquals(RemoteCommand.Menu(true), parse("""{"cmd":"menu","long":true}"""))
         assertEquals(RemoteCommand.Detach, parse("""{"cmd":"detach"}"""))
         assertEquals(RemoteCommand.Search("总裁的替身新娘"), parse("""{"cmd":"search","query":"总裁的替身新娘"}"""))
+        assertEquals(RemoteCommand.Watch("黄石"), parse("""{"cmd":"watch","query":"黄石"}"""))
+        assertEquals(RemoteCommand.Open("source"), parse("""{"cmd":"open","module":"source"}"""))
+        // 大小写与两端空白由协议层吃掉，桥接那边不用自己归一
+        assertEquals(RemoteCommand.Open("rank"), parse("""{"cmd":"open","module":" RANK "}"""))
+    }
+
+    @Test fun `open only accepts whitelisted modules`() {
+        // 白名单外的键一律拒绝：界面层不该为一个不存在的页签做兜底
+        assertNull(parse("""{"cmd":"open","module":"porn"}"""))
+        assertNull(parse("""{"cmd":"open","module":""}"""))
+        assertNull(parse("""{"cmd":"open"}"""))
+        assertNull(parse("""{"cmd":"watch","query":""}"""))
+        assertNull(parse("""{"cmd":"watch","query":"${"x".repeat(81)}"}"""))
+        assertNull(parse("""{"cmd":"watch"}"""))
     }
 
     @Test fun `out of range and malformed commands are rejected instead of clamped`() {

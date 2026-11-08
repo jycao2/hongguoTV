@@ -70,6 +70,23 @@ sealed class RemoteCommand {
     data class Menu(val long: Boolean) : RemoteCommand()
     data class Search(val query: String) : RemoteCommand()
     data class Resume(val id: String) : RemoteCommand()
+
+    /**
+     * 直接跳到一级模块。
+     *
+     * 参数用稳定英文键而不是中文名：界面文案改名（「片源」→「三方源」）不该让外部桥接失效，
+     * 手机页面、语音桥、自动化脚本都只依赖这里的键。合法值见 [REMOTE_MODULES]。
+     */
+    data class Open(val module: String) : RemoteCommand()
+
+    /**
+     * 「一句话开播」：按剧名搜一次，命中就直接起播，没命中只在电视上提示。
+     *
+     * 与 [Search] 的区别是要落到播放器，所以由界面侧决定优先搜哪套内容
+     * （停在片源页就搜片源，否则搜红果主站）。
+     */
+    data class Watch(val query: String) : RemoteCommand()
+
     data object Detach : RemoteCommand()
 
     /**
@@ -98,6 +115,23 @@ const val REMOTE_SEEK_MAX_MS = 24L * 60 * 60 * 1000
 const val REMOTE_STEP_MAX_MS = 10L * 60 * 1000
 private const val SEARCH_MAX = 80
 private val DPAD_KEYS = setOf("up", "down", "left", "right", "center")
+
+/**
+ * `open` 命令允许的模块键。
+ *
+ * 白名单而不是自由字符串：命令来自局域网，任何拼错或恶意的键都该在入口被拒，
+ * 不要让界面层去猜一个不存在的页签。
+ */
+val REMOTE_MODULES = setOf(
+    "home",     // 首页
+    "search",   // 搜索
+    "rank",     // 排行榜
+    "favorite", // 收藏
+    "history",  // 最近观看
+    "settings", // 设置
+    "source",   // 片源（三方 CMS）
+    "library"   // 本地库
+)
 
 object RemoteProtocol {
     /** 单条命令请求体上限；正常命令都在 200 字节内。 */
@@ -151,6 +185,13 @@ object RemoteProtocol {
                 val id = json.optString("id")
                 if(id.isEmpty() || id.length > 128 || id.any { it.isISOControl() }) null
                 else RemoteCommand.Resume(id)
+            }
+            "open" -> json.optString("module").trim().lowercase()
+                .takeIf { it in REMOTE_MODULES }?.let { RemoteCommand.Open(it) }
+            "watch" -> {
+                val query = json.optString("query").trim()
+                if(query.isEmpty() || query.length > SEARCH_MAX || query.any { it.isISOControl() }) null
+                else RemoteCommand.Watch(query)
             }
             "detach" -> RemoteCommand.Detach
             else -> null
