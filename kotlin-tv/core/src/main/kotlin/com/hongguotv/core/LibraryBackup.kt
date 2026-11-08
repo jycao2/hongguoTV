@@ -17,8 +17,16 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
 }
 data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet(),val favoriteGroups: Map<String,String> = emptyMap(),val thirdSources: List<BackupThirdSource> = emptyList(),val thirdHistory: List<BackupThirdHistory> = emptyList(),val thirdFavorites: List<BackupThirdFavorite> = emptyList())
 
-/** 三方片源配置：只保存名称与接口，随主备份一起迁移；恢复时只追加不覆盖。 */
-data class BackupThirdSource(val name: String,val api: String)
+/** 三方片源配置：随主备份一起迁移；恢复时只追加不覆盖。
+ *  v2 起新增源类型与元数据字段；缺省值与 v1 一致（type 1 / 全可搜 / 无专用头）。 */
+data class BackupThirdSource(
+    val name: String,val api: String,
+    val type: Int = 1,
+    val headers: Map<String,String> = emptyMap(),
+    val searchable: Boolean = true,val quickSearch: Boolean = true,val filterable: Boolean = true,
+    val categories: List<String> = emptyList(),
+    val timeoutSeconds: Int = 0
+)
 
 /** 三方片源收藏：随主备份迁移，恢复时按「源接口 + 影片」保留较新的一条。 */
 data class BackupThirdFavorite(
@@ -65,7 +73,15 @@ object LibraryBackup {
             .put("favorites",JSONArray(data.favorites.map(::seriesJson))).put("history",JSONArray(data.history.map { it.json() }))
             .put("favoriteGroups",groups)
             .put("thirdSources",JSONArray(data.thirdSources.take(ThirdSourceConfig.MAX).map { source ->
-                JSONObject().put("name",cleanText(source.name,40)).put("api",cleanText(source.api,500))
+                val item=JSONObject().put("name",cleanText(source.name,40)).put("api",cleanText(source.api,500))
+                if(source.type==0) item.put("type",0)
+                if(source.headers.isNotEmpty()) item.put("headers",JSONObject(source.headers.entries.take(8).associate { (key,value)-> cleanText(key,40) to cleanText(value,300) }))
+                if(!source.searchable) item.put("searchable",false)
+                if(!source.quickSearch) item.put("quickSearch",false)
+                if(!source.filterable) item.put("filterable",false)
+                if(source.categories.isNotEmpty()) item.put("categories",JSONArray(source.categories.take(40).map { cleanText(it,20) }))
+                if(source.timeoutSeconds>0) item.put("timeoutSeconds",source.timeoutSeconds.coerceAtMost(60))
+                item
             }))
             .put("thirdHistory",JSONArray(data.thirdHistory.take(MAX_THIRD_HISTORY).map { hit -> JSONObject()
                 .put("sourceApi",cleanText(hit.sourceApi,500)).put("sourceName",cleanText(hit.sourceName,40))
@@ -156,13 +172,29 @@ object LibraryBackup {
                 (0 until rows.length()).mapNotNull { rows.optString(it).takeIf { key -> key in NAV_KEYS } }.toSet()
             } ?: setOf("nas")
         }.getOrDefault(setOf("nas"))
-        // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复
+        // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复。
+        // v2 字段（type/headers/元数据）缺失时回落 v1 默认值，新旧备份双向兼容
         val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
             val api=runCatching { row.string("api",500) }.getOrNull() ?: return@mapNotNull null
             if(!api.startsWith("http")) return@mapNotNull null
             val name=runCatching { row.string("name",40) }.getOrDefault("")
                 .ifBlank { api.removePrefix("https://").removePrefix("http://").substringBefore('/') }
-            BackupThirdSource(name,api)
+            val type=runCatching { row.optInt("type",1) }.getOrDefault(1).let { if(it==0) 0 else 1 }
+            val headers=runCatching {
+                val obj=row.optJSONObject("headers") ?: return@runCatching emptyMap<String,String>()
+                obj.keys().asSequence().take(8).mapNotNull { key ->
+                    val value=obj.optString(key).trim()
+                    if(key.isNotBlank() && value.isNotEmpty()) cleanText(key,40) to cleanText(value,300) else null
+                }.toMap()
+            }.getOrDefault(emptyMap())
+            val categories=runCatching {
+                row.optJSONArray("categories")?.let { rows ->
+                    (0 until minOf(rows.length(),40)).mapNotNull { rows.optString(it).takeIf(String::isNotBlank)?.take(20) }
+                } ?: emptyList()
+            }.getOrDefault(emptyList())
+            BackupThirdSource(name,api,type,headers,
+                row.optBoolean("searchable",true),row.optBoolean("quickSearch",true),row.optBoolean("filterable",true),
+                categories,runCatching { row.optInt("timeoutSeconds",0) }.getOrDefault(0).coerceIn(0,60))
         }.distinctBy { it.api } else emptyList()
         // 三方观看历史：缺字段、类型异常或单条损坏都只影响这一段，绝不拖垮整份备份
         val thirdHistory: List<BackupThirdHistory> = if(o.has("thirdHistory")) runCatching {

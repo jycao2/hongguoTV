@@ -266,8 +266,11 @@ class ThirdStore(context: Context) {
         }
     }
 
-    /** 备份/导出用：只保留名称与接口。 */
-    fun backupSources(): List<BackupThirdSource> = sources().map { BackupThirdSource(it.name, it.api) }
+    /** 备份/导出用：源类型、专用请求头与元数据随配置一起迁移。 */
+    fun backupSources(): List<BackupThirdSource> = sources().map {
+        BackupThirdSource(it.name, it.api, it.type, it.headers,
+            it.searchable, it.quickSearch, it.filterable, it.categories, it.timeoutSeconds)
+    }
 
     /** 恢复源配置：本地已有的接口一律保留（不覆盖），只追加缺失项；返回新增数量。 */
     fun mergeRestored(incoming: List<BackupThirdSource>): Int {
@@ -277,8 +280,11 @@ class ThirdStore(context: Context) {
         val added = incoming.asSequence()
             .filter { it.api.startsWith("http") && known.add(it.api) }
             .take(room)
-            .map { ThirdSource("u" + it.api.hashCode().toUInt().toString(),
-                it.name.ifBlank { it.api.removePrefix("https://").removePrefix("http://").substringBefore('/') }, it.api) }
+            .map {
+                ThirdSource("u" + it.api.hashCode().toUInt().toString(),
+                    it.name.ifBlank { it.api.removePrefix("https://").removePrefix("http://").substringBefore('/') }, it.api,
+                    it.headers, it.type, it.searchable, it.quickSearch, it.filterable, it.categories, it.timeoutSeconds)
+            }
             .toList()
         if(added.isEmpty()) return 0
         saveSources(local + added)

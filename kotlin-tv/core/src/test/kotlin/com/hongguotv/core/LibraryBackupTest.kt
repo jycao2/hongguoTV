@@ -147,6 +147,12 @@ class LibraryBackupTest {
     @Test fun `third sources round trip merge keeps local and legacy backups stay empty`() {
         val original=data().copy(thirdSources=listOf(BackupThirdSource("量子","https://a.example.com/api.php/provide/vod")))
         assertEquals(original,LibraryBackup.decode(LibraryBackup.encode(original)))
+        // v2 字段随主备份往返：headers/type/元数据不丢
+        val rich=data().copy(thirdSources=listOf(BackupThirdSource("老站","https://x.example.com/vod",0,
+            mapOf("User-Agent" to "okhttp/4.9", "Referer" to "https://x.example.com/"),
+            searchable=false, quickSearch=true, filterable=false,
+            categories=listOf("1","2"), timeoutSeconds=15)))
+        assertEquals(rich,LibraryBackup.decode(LibraryBackup.encode(rich)))
         val legacy=JSONObject(LibraryBackup.encode(data())); legacy.remove("thirdSources")
         assertTrue(LibraryBackup.decode(legacy.toString()).thirdSources.isEmpty())
         val broken=JSONObject(LibraryBackup.encode(data()))
@@ -155,6 +161,12 @@ class LibraryBackupTest {
         val decoded=LibraryBackup.decode(broken.toString()).thirdSources
         assertEquals(listOf("https://b.example.com/vod"),decoded.map { it.api })
         assertEquals("b.example.com",decoded.single().name)
+        // v1 旧备份（无新字段）解析后回落默认值
+        val v1=JSONObject(LibraryBackup.encode(data()))
+        v1.put("thirdSources",JSONArray().put(JSONObject().put("name","旧源").put("api","https://old.example.com/vod")))
+        val v1decoded=LibraryBackup.decode(v1.toString()).thirdSources.single()
+        assertEquals(1,v1decoded.type); assertEquals(emptyMap<String,String>(),v1decoded.headers)
+        assertTrue(v1decoded.searchable); assertEquals(0,v1decoded.timeoutSeconds)
         val local=data().copy(thirdSources=listOf(BackupThirdSource("本地","https://a.example.com/vod")))
         val incoming=data().copy(thirdSources=listOf(BackupThirdSource("备份名","https://a.example.com/vod"),BackupThirdSource("新源","https://b.example.com/vod")))
         val merged=LibraryBackup.merge(local,incoming,false).thirdSources
@@ -164,7 +176,7 @@ class LibraryBackupTest {
     @Test fun `source config encode decode caps entries and rejects invalid ones`() {
         val list=(1..3).map { BackupThirdSource("源$it","https://s$it.example.com/api.php/provide/vod") }
         assertEquals(list,ThirdSourceConfig.decode(ThirdSourceConfig.encode(list)))
-        assertEquals(ThirdSourceConfig.MAX,ThirdSourceConfig.decode(ThirdSourceConfig.encode((1..40).map { BackupThirdSource("源$it","https://s$it.example.com/vod") })).size)
+        assertEquals(ThirdSourceConfig.MAX,ThirdSourceConfig.decode(ThirdSourceConfig.encode((1..250).map { BackupThirdSource("源$it","https://s$it.example.com/vod") })).size)
         assertTrue(ThirdSourceConfig.decode("not json").isEmpty())
         assertTrue(ThirdSourceConfig.decode("""{"format":"other","sources":[]}""").isEmpty())
         assertTrue(ThirdSourceConfig.decode("x".repeat(ThirdSourceConfig.MAX_BYTES+1)).isEmpty())
@@ -172,6 +184,22 @@ class LibraryBackupTest {
         val decoded=ThirdSourceConfig.decode(raw)
         assertEquals(listOf("https://a.example.com/vod","https://b.example.com/vod"),decoded.map { it.api })
         assertEquals("b.example.com",decoded[1].name)
+        // v1 文件缺元数据字段时回落默认值
+        assertEquals(1,decoded[0].type); assertTrue(decoded[0].searchable); assertEquals(0,decoded[0].timeoutSeconds)
+    }
+    @Test fun `source config v2 fields round trip`() {
+        val rich=listOf(BackupThirdSource("XML老站","https://x.example.com/api.php/provide/vod",0,
+            mapOf("User-Agent" to "Mozilla/5.0"), searchable=false, quickSearch=false, filterable=true,
+            categories=listOf("1","2","3"), timeoutSeconds=20))
+        val decoded=ThirdSourceConfig.decode(ThirdSourceConfig.encode(rich))
+        assertEquals(rich,decoded)
+        // v2 里 headers 超过 8 个只留前 8 个；timeout 钳到 60
+        val many=BackupThirdSource("多","https://m.example.com/vod",1,(1..12).associate { "h$it" to "v$it" },timeoutSeconds=99)
+        val decodedMany=ThirdSourceConfig.decode(ThirdSourceConfig.encode(listOf(many))).single()
+        assertEquals(8,decodedMany.headers.size); assertEquals(60,decodedMany.timeoutSeconds)
+        // version 3 的文件拒绝
+        val raw="""{"format":"hongguotv.third-sources","version":3,"sources":[]}"""
+        assertTrue(ThirdSourceConfig.decode(raw).isEmpty())
     }
     @Test fun `invalid format ranges settings duplicates and oversized nesting are rejected`() {
         fun reject(change: (JSONObject)->Unit) { val o=JSONObject(LibraryBackup.encode(data())); change(o); assertTrue(o.toString(),runCatching { LibraryBackup.decode(o.toString()) }.isFailure) }
