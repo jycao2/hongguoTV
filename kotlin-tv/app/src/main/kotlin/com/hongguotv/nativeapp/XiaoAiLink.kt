@@ -4,6 +4,8 @@ package com.hongguotv.nativeapp
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.hongguotv.core.RemoteCommand
+import com.hongguotv.core.VoiceIntent
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -35,6 +37,15 @@ object XiaoAiVoice {
 
         /** 直接跳到一级模块，键见 [com.hongguotv.core.REMOTE_MODULES]。 */
         data class Open(val module: String) : Action()
+
+        /**
+         * 一句通用指令：检查更新、切主题、打开列表第 N 个……
+         *
+         * 和 [Watch]/[Open] 分开是因为它们的来源不同：那两个是「喊昵称」时代的产物，
+         * 这个来自 [com.hongguotv.core.VoiceIntent] 对整句话的解析。
+         * [echo] 是解析时给出的回执文案，执行失败时用来告诉用户「听懂了但做不到」。
+         */
+        data class Do(val command: RemoteCommand, val echo: String) : Action()
     }
 
     data class Topic(val topic: String, val name: String, val msg: String, val unix: Long)
@@ -110,6 +121,24 @@ object XiaoAiVoice {
         if(text.lowercase() in SWITCH_WORDS) return null
         if(text.any { it.isISOControl() }) return null
         return text
+    }
+
+    /**
+     * 一句话 → 动作。
+     *
+     * 与 [actionOf] 的分工：[actionOf] 解释的是**主题昵称**（「黄石第五季」这种名字），
+     * 这里解释的是**用户说的整句话**（「检查有没有更新」「看历史记录第二个」）。
+     *
+     * 解析器认不出来就返回 null，调用方什么都不做——不要退化成「拿整句话去搜」，
+     * 那会把一句闲聊变成一次莫名其妙的搜索。
+     */
+    fun textAction(text: String): Action? {
+        val plan = VoiceIntent.parse(text) ?: return null
+        return when(val cmd = plan.command) {
+            is RemoteCommand.Open -> Action.Open(cmd.module)
+            is RemoteCommand.Watch -> Action.Watch(cmd.query)
+            else -> Action.Do(cmd, plan.echo)
+        }
     }
 
     /**
@@ -337,7 +366,8 @@ class XiaoAiLink(
     private fun onMqtt(topic: String, payload: String) {
         XiaoAiVoice.queryOf(payload)?.let { query ->
             handled[topic] = System.currentTimeMillis()
-            main.post { if(running) onAction(XiaoAiVoice.Action.Watch(query)) }
+            val action = XiaoAiVoice.textAction(query) ?: return
+            main.post { if(running) onAction(action) }
             return
         }
         if(!payload.equals("on", ignoreCase = true)) return
@@ -397,10 +427,11 @@ class XiaoAiLink(
                 onAction(action)
                 continue
             }
-            // 非开关载荷 = 技能写进来的剧名。轮询是兜底通道，这条也得认，否则 MQTT 一断
+            // 非开关载荷 = 技能写进来的原话。轮询是兜底通道，这条也得认，否则 MQTT 一断
             // 就只能喊固定昵称了。
             val query = XiaoAiVoice.queryOf(topic.msg) ?: continue
-            onAction(XiaoAiVoice.Action.Watch(query))
+            val action = XiaoAiVoice.textAction(query) ?: continue
+            onAction(action)
         }
     }
 

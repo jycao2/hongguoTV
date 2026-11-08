@@ -87,6 +87,19 @@ sealed class RemoteCommand {
      */
     data class Watch(val query: String) : RemoteCommand()
 
+    /**
+     * 通用界面动作：把 App 里每个「点了会发生事」的功能变成一个可外部调用的 ID。
+     *
+     * 这是语音入口的落点。之前只有 open/watch/search 三条，能做的仅限「跳页」和「搜片名」；
+     * 想知道有没有新版、想把主题换成白的、想看历史记录第二条，都没有对应的命令可用。
+     * 有了 [Act] 以后，语音能操作的范围 = [REMOTE_ACTIONS] 里登记了什么，加新功能时只要
+     * 登记一个键、在界面层接一下，不必再动协议。
+     *
+     * [arg] 是可选参数，格式由动作自己定义（目前只有列表定位用 `<列表>:<序号>`）。
+     * 白名单校验在 [RemoteProtocol.parse]，执行由界面层负责。
+     */
+    data class Act(val id: String, val arg: String = "") : RemoteCommand()
+
     data object Detach : RemoteCommand()
 
     /**
@@ -132,6 +145,74 @@ val REMOTE_MODULES = setOf(
     "source",   // 片源（三方 CMS）
     "library"   // 本地库
 )
+
+/**
+ * `act` 命令允许的动作键。
+ *
+ * 和 [REMOTE_MODULES] 同样的原则：白名单而不是自由字符串。命名规则 `<对象>.<动词>`，
+ * 键名一旦发布就当接口用——界面文案改了（「系统风格」→「主题」）不许改键。
+ *
+ * 这些键全部是**幂等或可重复**的操作：执行两次不会把用户带到奇怪的地方。
+ * 「下一集」「切主题」这类切换型看着不幂等，但重放只会再切一次，比丢掉指令可接受。
+ */
+val REMOTE_ACTIONS = setOf(
+    // 外观与界面
+    "theme.toggle",     // 切换深/浅主题
+    "theme.set",        // 指定主题：arg = dark | light
+    "clock.toggle",     // 顶栏系统时间
+    "backdrop.reset",   // 恢复默认背景
+    // 播放偏好（设置页里的开关）
+    "autonext.toggle",  // 自动连播
+    "autoseason.toggle",// 系列剧连播
+    "danmaku.toggle",   // 弹幕：在播放页切当前剧，其它页切总开关
+    "autoskip.toggle",  // 不兼容片源自动跳过
+    // 播放控制（语义化版本，语音端不知道集号，只说「下一集」）
+    "play.toggle",      // 暂停 / 继续
+    "play.next",        // 下一集
+    "play.prev",        // 上一集
+    // 列表定位：arg = "<列表>:<序号>"，序号从 1 开始，见 [REMOTE_LIST_KINDS]
+    "list.play",
+    // 继续观看
+    "resume.latest",    // 接着看最近一条
+    // 详情页
+    "favorite.toggle",  // 收藏 / 取消收藏当前剧
+    // 关于与工具
+    "update.check",     // 检查版本更新
+    "check.interface",  // 接口自检
+    "cache.clear",      // 清理缓存
+    "stats.show",       // 观看统计
+    "backup.show",      // 本地备份
+    "quick.send",       // 手机快传
+    "remote.address",   // 遥控地址
+    "xiaoai.show",      // 小爱同学设置
+    "account.show",     // 账号
+    "hidden.restore"    // 恢复隐藏推荐
+)
+
+/** `list.play` 的列表键：`history` 最近观看、`favorite` 收藏、`catalog` 当前列表、`episodes` 选集。 */
+val REMOTE_LIST_KINDS = setOf("history", "favorite", "catalog", "episodes", "current")
+
+/** 动作参数的长度上限；正常只有 `history:12` 这种。 */
+const val REMOTE_ACT_ARG_MAX = 48
+
+/**
+ * 动作参数只允许小写字母、数字和 `: . _ -` 三个分隔符。
+ *
+ * 参数来自语音识别的自由文本，必须在这里收窄成一个几乎没有表达力的字符集：
+ * 界面层拿到的东西不该再需要做一次转义或注入检查。
+ */
+fun actArgValid(arg: String): Boolean =
+    arg.length <= REMOTE_ACT_ARG_MAX && arg.all { it in 'a'..'z' || it in '0'..'9' || it == ':' || it == '.' || it == '_' || it == '-' }
+
+/** `list.play` 的参数：`history:2` → (history, 2)。序号从 1 起，格式不符或越界返回 null。 */
+fun listTarget(arg: String): Pair<String, Int>? {
+    val parts = arg.split(':', limit = 2)
+    if(parts.size != 2) return null
+    val kind = parts[0]
+    if(kind !in REMOTE_LIST_KINDS) return null
+    val index = parts[1].toIntOrNull() ?: return null
+    return if(index in 1..999) kind to index else null
+}
 
 object RemoteProtocol {
     /** 单条命令请求体上限；正常命令都在 200 字节内。 */
@@ -192,6 +273,18 @@ object RemoteProtocol {
                 val query = json.optString("query").trim()
                 if(query.isEmpty() || query.length > SEARCH_MAX || query.any { it.isISOControl() }) null
                 else RemoteCommand.Watch(query)
+            }
+            "act" -> {
+                val id = json.optString("id").trim().lowercase()
+                val arg = json.optString("arg").trim()
+                when {
+                    id !in REMOTE_ACTIONS -> null
+                    !actArgValid(arg) -> null
+                    // 列表定位必须带一个合法的列表键：一个不带参数的 list.play 没有意义，
+                    // 与其让界面层去猜「你说的是哪个列表」，不如在入口就拒掉。
+                    id == "list.play" && listTarget(arg) == null -> null
+                    else -> RemoteCommand.Act(id, arg)
+                }
             }
             "detach" -> RemoteCommand.Detach
             else -> null

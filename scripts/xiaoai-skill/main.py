@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""小爱同学 → 红果TV：把小爱听到的剧名写进巴法云主题。
+"""小爱同学 → 红果TV：把听到的那句话原样写进巴法云主题。
 
 跑在小米小爱开放平台的「函数计算」技能里，不需要自己的服务器、域名、内网穿透。
-平台把语音识别结果解析成 JSON 丢进来，原文在 `query`；这里洗干净动作词，交给巴法云，
-电视订阅着那个主题，收到文本就开始搜。
+电视订阅着那个主题，收到文本自己去理解——**这里不做任何理解**。
 
-为什么能这么走：米家只允许「打开/关闭设备」，指令里没有文本字段，所以固定昵称那条路
-永远只能喊预设的几个名字。而巴法云的 msg 字段接受任意文本，小爱技能又能拿到原始识别
-文本，两件事凑在一起，就是任意剧名。
+为什么不在云端洗词：电视端知道「现在停在哪一屏、这个列表里有哪些条目」，
+同一句「第二个」在首页和在历史页意思完全不同。云端只有一句话，剥掉动词就等于
+把仅有的线索也扔了（「我要看历史记录第二个」里，真正有用的是「历史记录」和「第二个」）。
+两边各有一套词表还会互相打架，所以清洗全部放在电视端的 VoiceIntent 里。
 
-改这里之前先看 docs/xiaoai-voice.md 的「任意剧名」一节。
+改这里之前先看 docs/xiaoai-voice.md。
 """
 
 import json
-import re
 import urllib.request
 
 # ---- 两处必填：巴法云私钥 + 主题名 ----
@@ -22,57 +21,11 @@ TOPIC = "hgplay1001"
 
 PUSH_URL = "https://apis.bemfa.com/va/postJsonMsg"
 
-# 句首的动作词。只收明显不是片名开头的词：
-# - 单字「放」「看」会误伤真剧名（放羊的星星 / 看见味道的你），不碰
-# - 「打开」「请」「给我」同样有真片名（打开生活的正确方式 / 请回答1988 / 给我一支烟），不碰
-# 剥错了也只是搜不到并提示，不会播错片，但仍然宁少勿多。
-LEAD = (
-    "麻烦你帮我", "麻烦帮我", "麻烦你", "麻烦", "帮我",
-    "我想看一下", "我想看看", "我要看一下", "我要看看",
-    "我想看", "我要看", "我想听", "我要听",
-    "播放一下", "搜索一下", "查一下", "看一下", "看看", "来一集", "来点",
-    "播放", "搜索", "搜一下", "查找",
-)
+# 结束语：让技能退出的说法
+QUIT = ("退出", "不看了", "算了", "关闭技能", "退下吧")
 
-# 句尾的客套与语气，剥掉不影响片名。
-TAIL = (
-    "这部电视剧", "这部片子", "这部电影", "这部", "的电视剧", "的电视",
-    "吧", "啊", "呀", "呢", "哦", "呗",
-    "。", "，", "！", "？", ".", ",", "!", "?", " ", "\u3000",
-)
-
-# 单字动词后面紧跟空格，就是口头分隔（「看 狂飙」），可以安全剥掉；
-# 没有空格时说明它可能是片名的一部分，不动。
-VERB_GAP = re.compile(r"^[看放搜找听]\s+")
-
-QUIT = ("退出", "不看了", "算了", "关闭技能")
-
-
-def clean(raw):
-    """识别文本 → 片名。剥多了也能播，剥错了会播错片，所以只剥确定的。"""
-    text = (raw or "").strip()
-    if not text:
-        return ""
-
-    # 长词优先：「我要看」比「我要」先匹配上
-    for word in sorted(LEAD, key=len, reverse=True):
-        if text.startswith(word):
-            rest = text[len(word):].strip()
-            # 剥完只剩一两个字，多半是把片名本身剥掉了，退回原文
-            if len(rest) >= 2:
-                text = rest
-            break
-
-    text = VERB_GAP.sub("", text, count=1)
-
-    changed = True
-    while changed:
-        changed = False
-        for word in TAIL:
-            if text.endswith(word) and len(text) - len(word) >= 2:
-                text = text[: -len(word)].strip()
-                changed = True
-    return text
+# 一句话的上限。电视端协议 80 字，超了直接拒，别让巴法云里存一条没人认的脏数据。
+MAX_CHARS = 80
 
 
 def _from_dict(event):
@@ -105,7 +58,7 @@ def heard(event):
 
 
 def push(text):
-    """把片名写进巴法云主题。电视那边订阅着它，载荷就是这条 msg。"""
+    """把那句话写进巴法云主题。电视那边订阅着它，载荷就是这条 msg。"""
     body = json.dumps(
         {"uid": UID, "topic": TOPIC, "type": 1, "msg": text},
         ensure_ascii=False,
@@ -133,22 +86,18 @@ def reply(text, end=False):
 
 
 def main(event):
-    raw = heard(event)
-    return handle(raw)
+    return handle(heard(event))
 
 
 def handle(raw):
-    """拆出来是为了本地能直接跑：python main.py 播放黄石第五季"""
-    if not raw:
-        return reply("你要看什么？再说一次片名就行。")
-
-    text = clean(raw)
+    """拆出来是为了本地能直接跑：python main.py 检查有没有更新"""
+    text = (raw or "").strip()
     if not text:
-        return reply("没听清，再说一次片名。")
+        return reply("你说什么？再说一次。")
     if text in QUIT:
         return reply("好的，已退出。", end=True)
-    if len(text) > 40:
-        return reply("名字有点长，说短一点试试？")
+    if len(text) > MAX_CHARS:
+        return reply("这句话太长了，说短一点。")
 
     try:
         push(text)
@@ -156,12 +105,16 @@ def handle(raw):
         # 播报里带上原因，出问题时不至于只能猜
         return reply("电视没连上，稍后再试。%s" % error)
 
-    return reply("好的，去电视上找%s" % text)
+    # 不报「好的，去电视上找 X」：现在这句话可能是「关掉弹幕」，报剧名会很怪。
+    # 真正的反馈在电视上（每个动作都有自己的回执），这里只确认收到了。
+    return reply("好")
 
 
 if __name__ == "__main__":
     import sys
 
-    # 本地自测：只验证清洗逻辑，按 Ctrl+C 不会真的去推
-    for line in (sys.argv[1:] or ["播放黄石第五季", "我想看放羊的星星", "搜索一下庆余年吧"]):
-        print("%-14s → %s" % (line, clean(line)))
+    # 本地自测：只验证「收到什么就发什么」，不联网。
+    # 真正的理解在电视端，这里不该有任何改写动作。
+    for line in (sys.argv[1:] or ["检查有没有更新", "我要看历史记录第二个", "关掉弹幕"]):
+        payload = (line or "").strip()
+        print("%-16s → push(%r)" % (line, payload))

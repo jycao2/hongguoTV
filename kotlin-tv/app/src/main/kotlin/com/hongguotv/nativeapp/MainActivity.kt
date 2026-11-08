@@ -236,6 +236,15 @@ class MainActivity: Activity() {
     private var generation=0
     private var screen="catalog"
     private var tab=0
+
+    /**
+     * 语音触发设置类弹窗时的锚点。
+     *
+     * 设置页里的弹窗都要求一个 anchor，用来在关窗后把焦点还回去、并顺手刷新那一行的文案。
+     * 语音场景下设置页根本不在场：给一个永不 attach 的 TextView，`isAttachedToWindow`
+     * 恒为 false，弹窗关闭时的焦点恢复会自动跳过，写文案也只是写进一个没人看的对象。
+     */
+    private val voiceAnchor by lazy { TextView(this).apply { id=View.generateViewId() } }
     private var page=1
     private var query=""
     private var catalog=emptyList<Series>()
@@ -4686,6 +4695,144 @@ class MainActivity: Activity() {
      * 正在播的那部必须先停：只切页面不停播放器，会出现画面走了声音还在后台放。
      * 模块被用户在设置里隐藏时直接返回 false，不要把焦点送进一个不可见的页签。
      */
+    /**
+     * 语音与外部指令的动作分发（`act` 命令）。
+     *
+     * 每个分支都等价于「用户在界面上点了那一项」，区别只是触发源换成了嘴。
+     * 返回 false 表示**当前状态做不了**（没在播放却说「下一集」），上层据此提示，
+     * 不假装成功——静默失败比多问一句更让人困惑。
+     */
+    private fun remoteAct(cmd: RemoteCommand.Act): Boolean {
+        val anchor=voiceAnchor
+        return when(cmd.id) {
+            "theme.toggle" -> {
+                library.theme=TvStyle.toggle().name
+                voiceSay("主题 · ${TvStyle.theme.label}")
+                recreateKeepingPage("系统风格")
+                true
+            }
+            "theme.set" -> {
+                val target=if(cmd.arg=="light") TvStyle.Theme.PORCELAIN else TvStyle.Theme.NIGHT
+                if(TvStyle.theme==target) { voiceSay("已经是 ${target.label}"); return true }
+                library.theme=target.name
+                voiceSay("主题 · ${target.label}")
+                recreateKeepingPage("系统风格")
+                true
+            }
+            "clock.toggle" -> {
+                library.showClock=!library.showClock
+                applyClock()
+                voiceSay(if(library.showClock) "已显示系统时间" else "已隐藏系统时间")
+                true
+            }
+            "backdrop.reset" -> {
+                resetBackdrop("plain")
+                refreshBackdropSetting?.invoke()
+                voiceSay("已恢复默认背景")
+                true
+            }
+            "autonext.toggle" -> {
+                library.autoNext=!library.autoNext
+                voiceSay(if(library.autoNext) "自动连播已开启" else "自动连播已关闭")
+                true
+            }
+            "autoseason.toggle" -> {
+                library.autoSeason=!library.autoSeason
+                voiceSay(if(library.autoSeason) "系列剧连播已开启" else "系列剧连播已关闭")
+                true
+            }
+            "autoskip.toggle" -> {
+                extras.autoSkipUnplayable=!extras.autoSkipUnplayable
+                voiceSay(if(extras.autoSkipUnplayable) "自动跳过已开启" else "自动跳过已关闭")
+                true
+            }
+            // 播放中说「关弹幕」多半是嫌当前这一部挡画面，而不是想改全局开关：
+            // 有播放器就只作用于这一部，没播放器才是设置页里的总开关。
+            "danmaku.toggle" -> {
+                if(screen=="player") {
+                    val id=detail?.series?.id ?: return false
+                    toggleSeriesDanmaku(id); true
+                } else {
+                    library.danmaku=!library.danmaku
+                    voiceSay(if(library.danmaku) "弹幕已开启" else "弹幕已关闭")
+                    true
+                }
+            }
+            "play.toggle" -> if(screen=="player") { togglePlayback(); true } else false
+            "play.next" -> skipEpisode(1)
+            "play.prev" -> skipEpisode(-1)
+            "resume.latest" -> remoteResumeList().firstOrNull()?.let { remoteResumePlay(it.id) } ?: false
+            "list.play" -> listTarget(cmd.arg)?.let { (kind,index) -> remoteListPlay(kind,index) } ?: false
+            "favorite.toggle" -> {
+                val series=detail?.series ?: return false
+                val added=library.toggle(series)
+                voiceSay(if(added) "已收藏" else "已取消收藏")
+                refreshLibraryCards(series.id,!added && (tab==3 || collection=="updates"))
+                if(added) favoriteMonitor.check()
+                true
+            }
+            "update.check" -> { updater.checkNow(anchor); true }
+            "check.interface" -> { showInterfaceCheck(anchor); true }
+            "cache.clear" -> {
+                io.execute {
+                    listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
+                    main.post { if(!isDestroyed) voiceSay("缓存已清理") }
+                }
+                true
+            }
+            "stats.show" -> { showWatchStats(anchor); true }
+            "backup.show" -> { showLocalBackupDialog(anchor); true }
+            "quick.send" -> {
+                tvTools.quickTransfer(anchor,{ file,kind -> handleQuickTransfer(file,kind) },{},{})
+                true
+            }
+            "remote.address" -> { showRemoteAddress(anchor); true }
+            "xiaoai.show" -> { showXiaoAiDialog(anchor); true }
+            "account.show" -> { accountManager.showLoginDialog(this); true }
+            "hidden.restore" -> {
+                library.unhideAll()
+                voiceSay("已恢复隐藏推荐")
+                true
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * 「列表第 N 个」的落点。序号从 1 起，与口头表达一致（说「第二个」就取下标 1）。
+     *
+     * `history` 走 [remoteResumeList]，所以它自动跟着当前模块走：停在片源页就是片源的历史。
+     * 越界一律返回 false，让人知道这句话没落实，而不是默默播了一个别的东西。
+     */
+    private fun remoteListPlay(kind: String,index: Int): Boolean {
+        val position=index-1
+        if(position<0) return false
+        return when(kind) {
+            "history" -> remoteResumeList().getOrNull(position)?.let { remoteResumePlay(it.id) } ?: false
+            "favorite" -> {
+                val series=library.favorites().getOrNull(position) ?: return false
+                openDetail(series,resume=true)
+                true
+            }
+            "episodes" -> {
+                val count=detail?.episodes?.size ?: return false
+                if(position>=count) return false
+                playEpisode(position,savedPosition(position))
+                true
+            }
+            else -> {
+                val series=catalog.getOrNull(position) ?: return false
+                openDetail(series,resume=true)
+                true
+            }
+        }
+    }
+
+    /** 语音动作的回执：短提示，不打断画面，也不抢焦点。 */
+    private fun voiceSay(message: String) {
+        Toast.makeText(this,message,Toast.LENGTH_SHORT).show()
+    }
+
     private fun remoteOpenModule(module: String): Boolean {
         val target=remoteTabOf(module) ?: return false
         if(navHiddenAt(target)) return false
@@ -4775,13 +4922,22 @@ class MainActivity: Activity() {
 
     /** 语音动作落到界面：与手机遥控同一套入口，行为保持一致。 */
     private fun runVoiceAction(action: XiaoAiVoice.Action) {
+        // 通用指令自己会出回执（「已切换弹幕」），只有做不到时才需要在这里补一句
+        if(action is XiaoAiVoice.Action.Do) {
+            val cmd=action.command as? RemoteCommand.Act
+            if(cmd==null || !remoteAct(cmd))
+                Toast.makeText(this,"小爱同学：${action.echo}，但当前页面做不到",Toast.LENGTH_SHORT).show()
+            return
+        }
         val ok=when(action) {
             is XiaoAiVoice.Action.Open -> remoteOpenModule(action.module)
             is XiaoAiVoice.Action.Watch -> remoteWatch(action.query)
+            is XiaoAiVoice.Action.Do -> false
         }
         val what=when(action) {
             is XiaoAiVoice.Action.Open -> "打开「${moduleLabel(action.module)}」"
             is XiaoAiVoice.Action.Watch -> "播放「${action.query}」"
+            is XiaoAiVoice.Action.Do -> action.echo
         }
         Toast.makeText(this,if(ok) "小爱同学：$what" else "小爱同学：$what 没生效（当前页面不支持）",Toast.LENGTH_SHORT).show()
     }
@@ -4941,6 +5097,7 @@ class MainActivity: Activity() {
             is RemoteCommand.Resume -> remoteResumePlay(cmd.id)
             is RemoteCommand.Open -> remoteOpenModule(cmd.module)
             is RemoteCommand.Watch -> remoteWatch(cmd.query)
+            is RemoteCommand.Act -> remoteAct(cmd)
             else -> false
         }
         override fun onClientsChanged(clients: Int) {
