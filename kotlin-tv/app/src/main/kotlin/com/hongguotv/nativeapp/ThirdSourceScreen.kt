@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -2635,6 +2636,22 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         instance.playWhenReady = autoplay
 
         player = instance; playerHost = host
+        // 播放页鼠标手势：单击呼出/收起控制层，右键退出回详情。
+        // 顶层挂 touch，控制层里的按钮（子 view）优先收到事件，互不打架。
+        val tapGestures = android.view.GestureDetector(activity, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if(overlayVisible) hideOverlay() else showOverlay()
+                return true
+            }
+        })
+        host.setOnTouchListener { _, e ->
+            if(mode != Mode.PLAY) return@setOnTouchListener false
+            if(e.actionMasked == MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY) != 0) {
+                onBack()
+                return@setOnTouchListener true
+            }
+            tapGestures.onTouchEvent(e)
+        }
         buildOverlay(host, data, group.first)
         (activity.findViewById(android.R.id.content) as FrameLayout).addView(host, FrameLayout.LayoutParams(-1, -1))
         scheduleSave()
@@ -2651,6 +2668,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         topBar.addView(text("${data.video.name} · ${data.groups.getOrNull(playGroup)?.second?.getOrNull(playEpisode)?.label.orEmpty()}", 15f), lp(0, -2).apply { weight = 1f })
         topBar.addView(text("${detailSource?.name.orEmpty()} · $groupName", 12f, muted))
+        // 插着鼠标的人下意识想到「点右上角关掉」；遥控用户仍按返回键，两条路都通
+        val exitPlay = text("✕ 退出", 13f).apply {
+            isFocusable = false; isClickable = true
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            background = rounded(Color.argb(90, 0, 0, 0), radius = 8)
+            setOnClickListener { onBack() }
+        }
+        topBar.addView(exitPlay, lp(-2, -2).apply { leftMargin = dp(12) })
         topBar.visibility = View.GONE
         host.addView(topBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
@@ -2683,6 +2708,22 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             thumb.visibility = if(focused) View.VISIBLE else View.GONE
             bubble.visibility = if(focused) View.VISIBLE else View.INVISIBLE
             if(focused) updatePlayUi()
+        }
+        // 鼠标 / 触摸拖动定位：按住就跟手（只动气泡与时间），松手才真正 seek。
+        // 遥控用户的左右键路径完全不变，两条输入各走各的。
+        seekBar.setOnTouchListener { view, event ->
+            when(event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if(!overlayVisible) showOverlay(focusButtons = false)
+                    main.removeCallbacks(hideOverlayRun)
+                    thumb.visibility = View.VISIBLE
+                    touchScrub(event.x, view.width)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> { touchScrub(event.x, view.width); true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { endTouchScrub(); true }
+                else -> false
+            }
         }
         bottom.addView(seekBar, lp(-1, -2))
         val controls = row().apply { setPadding(0, dp(8), 0, 0) }
@@ -2742,6 +2783,28 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         1 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
         2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
+    /** 鼠标/触摸在进度条上拖动：按下即计算落点，拖动只更新气泡与时间，不逐帧 seek。 */
+    private fun touchScrub(x: Float, width: Int) {
+        val instance = player ?: return
+        val duration = instance.duration
+        if(duration <= 0 || width <= 0) return
+        val ratio = (x / width).coerceIn(0f, 1f)
+        scrubPositionMs = (duration * ratio).toLong()
+        scrubbing = true
+        updatePlayUi()
+    }
+
+    /** 松手：落到拖动位置（精确 seek），恢复控制层的自动收起计时。 */
+    private fun endTouchScrub() {
+        if(!scrubbing) return
+        scrubbing = false
+        val instance = player ?: return
+        instance.seekTo(scrubPositionMs.coerceIn(0L, instance.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+        updatePlayUi()
+        main.removeCallbacks(hideOverlayRun)
+        main.postDelayed(hideOverlayRun, 6_000L)
     }
 
     /** 开始平滑快进/快退：暂停声音、只跳关键帧做画面预览，由节奏器按爬坡步长推进。 */

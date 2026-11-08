@@ -390,7 +390,7 @@ class MainActivity: Activity() {
     private lateinit var hud: LinearLayout
     private lateinit var playbackText: TextView
     private lateinit var playbackStatus: TextView
-    private lateinit var progressBar: ProgressBar
+    private lateinit var progressBar: PlaybackSeekBar
     /** 自动重试时的转圈，单独可见；手动面板态切回 controls。 */
     private var recoverySpinner: ProgressBar?=null
     private lateinit var controls: LinearLayout
@@ -3108,11 +3108,38 @@ class MainActivity: Activity() {
             danmakuLayer.applyPrefs(library.danmakuOpacity,library.danmakuFont,library.danmakuSpeed,library.danmakuRows)
             root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
-            playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
+            playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }
+            // 标题行右侧留一个鼠标能点的退出：遥控用户按返回键，插鼠标的用户不该只剩键盘快捷键
+            val titleRow=row().apply { gravity=Gravity.CENTER_VERTICAL }
+            titleRow.addView(playbackTitle,lp(0,-2).apply { weight=1f })
+            val exitPlay=text("✕ 退出",13f,muted).apply {
+                isFocusable=false; isClickable=true
+                setPadding(dp(12),dp(5),dp(12),dp(5))
+                background=rounded(Color.argb(96,0,0,0),TvStyle.outline)
+                setOnClickListener { returnToDetail() }
+            }
+            titleRow.addView(exitPlay,lp(-2,-2))
+            hud.addView(titleRow)
             playbackStatus=text("",14f,gold).apply { setPadding(0,dp(6),0,0); maxLines=1 }
             hud.addView(playbackStatus)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(7),0,dp(9)) }; hud.addView(playbackText)
-            progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
+            // 进度条自己画轨道与滑块：轨道 4dp、可点区域 26dp，鼠标/手指按住就能拖
+            progressBar=PlaybackSeekBar(this).apply { max=1000 }
+            progressBar.onScrubPreview=preview@{ ratio ->
+                val p=player ?: return@preview
+                val duration=p.duration
+                if(duration<=0 || screen!="player") return@preview
+                main.removeCallbacks(hideHud)
+                playbackText.text="定位到 ${formatTime((duration*ratio).toLong())} / ${formatTime(duration)}"
+            }
+            progressBar.onScrub=scrub@{ ratio,final ->
+                val p=player ?: return@scrub
+                val duration=p.duration
+                if(duration<=0 || !playbackReady) return@scrub
+                if(final) seekTo((duration*ratio).toLong())
+            }
+            progressBar.onScrollStep={ delta -> seekTo(currentPosition()+delta) }
+            hud.addView(progressBar,lp(-1,dp(26)))
             keyHints=text(keyHintText(),13f,muted).apply { setPadding(0,dp(12),0,0) }; hud.addView(keyHints)
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             // 转圈单独挂在根布局正中央，不占底部 HUD 空间；播放失败自动重试时才可见。
@@ -3501,6 +3528,12 @@ class MainActivity: Activity() {
         val detector=GestureDetector(this,gestures)
         root.setOnTouchListener { _,e ->
             if(screen!="player") return@setOnTouchListener false
+            // 鼠标右键退出播放。TV 上很多遥控器把右键映射成 BACK（那条走 dispatchKeyEvent），
+            // 这里接的是真正的鼠标次级键：插着鼠标的人下意识右键，不该什么反应都没有。
+            if(e.actionMasked==MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY)!=0) {
+                returnToDetail()
+                return@setOnTouchListener true
+            }
             when(e.actionMasked) {
                 // 只在按下时重置：抬起后 onFling 才回调，若在 UP 重置会解锁导致 fling 再触发一次（一次滑动切两集）
                 MotionEvent.ACTION_DOWN -> gestures.beginStroke()
@@ -3512,7 +3545,7 @@ class MainActivity: Activity() {
     /** 播放 hud 底部按键提示：跟随「遥控上下键」设置变化。 */
     private fun keyHintText(): String {
         val upDown=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "↓ 下一集    ↑ 上一集" else "↓ 选集    ↑ 更多"
-        return "确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    $upDown    长按菜单 快捷面板    鼠标 上下滑换集 · 单击 控制条    返回 收起 / 退出"
+        return "确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    $upDown    长按菜单 快捷面板    鼠标 拖进度条定位 · 条上滚轮 ±10 秒 · 上下滑换集 · 右键或右上角退出    返回 收起 / 退出"
     }
     private fun showHud() {
         if(screen!="player") return
@@ -3524,6 +3557,8 @@ class MainActivity: Activity() {
         transportPlay?.text=if(player?.playWhenReady==true) "暂停" else "播放"
         sleepButton?.text="定时 ${sleepTimer.label()}"
         if(screen!="player" || playError) return
+        // 拖动进度条时别用播放位置盖掉「定位到 12:34」：手指还按着，文字每秒跳回去像坏了
+        if(progressBar.scrubbing) return
         val danmakuOn=library.danmaku && detail?.series?.id?.let { extras.danmakuEnabled(it,true) }!=false
         playbackStatus.text=listOfNotNull(quality.ifBlank { null },PlaybackSpeed.label(player?.playbackParameters?.speed ?: effectiveSpeed()),"弹幕 "+(if(danmakuOn) "开" else "关")).joinToString("   ·   ")
         if(sleepStopped) { playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"; return }
