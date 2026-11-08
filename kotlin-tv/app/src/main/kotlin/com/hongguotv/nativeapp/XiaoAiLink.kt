@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -21,10 +22,6 @@ import java.util.concurrent.TimeUnit
  * 小爱只会说「打开 X / 关闭 X」，喊不出自由句子，所以约定：**一个主题 = 一个动作，
  * 主题昵称 = 小爱要喊的名字**。昵称可以随便写中文（主题名本身只能字母数字），于是
  * 「红果片源」是跳模块，「黄石第五季」就是按名字开播。
- *
- * 电视这边不开长连接（Android TV 的后台 socket 太容易被系统掐）：每 2 秒拉一次主题列表，
- * 哪个主题的 msg 变成 on 且时间戳比上次新，就执行一次。代价是最多 2 秒的延迟，换来的是
- * 断网、待机、进程重启都不需要重连状态机。
  */
 object XiaoAiVoice {
 
@@ -173,10 +170,17 @@ object XiaoAiAccess {
 }
 
 /**
- * 轮询巴法云，把「某个主题刚被打开」翻成动作。
+ * 小爱语音的调度：MQTT 常驻订阅为主，HTTP 轮询做兜底。
  *
- * 只在电视前台跑：语音入口的绝大多数使用场景就是「电视开着、人不想找遥控器」，
- * 后台常驻轮询既费流量又会被系统的省电策略打断，收益不成正比。
+ * **为什么必须有 MQTT**：米家下发指令前会先看设备在不在线，而巴法云的「在线」= 有客户端
+ * 订阅了这个主题。只轮询 HTTP 的电视永远算离线，小爱会直接回「设备不在线」，指令根本发不出来。
+ *
+ * 两条路的职责：
+ * - MQTT：维持在线状态 + 实时收指令（延迟约 0）
+ * - 轮询：MQTT 没连上时照样能收（最多 2 秒延迟）；顺带刷新「主题 → 昵称」映射，
+ *   MQTT 的消息里只有主题名，没有昵称
+ *
+ * 只在电视前台跑：语音入口的实际场景就是「电视开着、人懒得找遥控器」，后台常驻会被系统掐。
  */
 class XiaoAiLink(
     private val onAction: (XiaoAiVoice.Action) -> Unit,
@@ -186,8 +190,14 @@ class XiaoAiLink(
         /** HTTPS：私钥在查询串里，不走明文。 */
         private const val ENDPOINT = "https://apis.bemfa.com/vb/api/v2/allTopic"
 
-        /** 2 秒一轮：再快对巴法不礼貌，再慢用户会以为没反应。 */
-        private const val POLL_MS = 2_000L
+        /** 离线时 2 秒一轮：再快对巴法不礼貌，再慢用户会以为没反应。 */
+        private const val POLL_OFFLINE_MS = 2_000L
+
+        /** 在线时只是刷新映射（新加的主题），慢一点没关系。 */
+        private const val POLL_ONLINE_MS = 60_000L
+
+        /** MQTT 刚处理过的主题，轮询在这么久内不再重复触发。 */
+        private const val MQTT_GRACE_MS = 15_000L
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -200,12 +210,23 @@ class XiaoAiLink(
         .build()
 
     /** 主题 → 已处理到的消息时间戳。 */
-    private val seen = HashMap<String, Long>()
+    private val seen = ConcurrentHashMap<String, Long>()
+
+    /** 主题 → 昵称。MQTT 的 PUBLISH 只给主题名，昵称得靠轮询拉回来。 */
+    private val names = ConcurrentHashMap<String, String>()
+
+    /** 主题 → MQTT 最近一次处理的时间，用来抑制轮询重复触发。 */
+    private val handled = ConcurrentHashMap<String, Long>()
+
+    private var session: BemfaSession? = null
     private var primed = false
+    private var baseline = false
     private var running = false
     private var count = 0
     private var lastError: String? = null
     private var reported = ""
+
+    @Volatile private var online = false
 
     private val tick = object : Runnable {
         override fun run() {
@@ -216,13 +237,13 @@ class XiaoAiLink(
                     if(!running) return@post
                     result.onSuccess { topics ->
                         lastError = null
-                        count = topics.size
+                        applyTopics(topics)
                         consume(topics)
                     }.onFailure { error ->
                         lastError = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
                     }
                     publish()
-                    main.postDelayed(this, POLL_MS)
+                    main.postDelayed(this, if(online) POLL_ONLINE_MS else POLL_OFFLINE_MS)
                 }
             }
         }
@@ -233,14 +254,23 @@ class XiaoAiLink(
         if(XiaoAiAccess.uid.isBlank()) { publish("未填写巴法云私钥"); return }
         running = true
         primed = false
-        seen.clear()
+        baseline = false
+        online = false
         lastError = null
+        seen.clear()
+        names.clear()
+        handled.clear()
+        count = 0
+        connect()
         main.post(tick)
     }
 
     fun stop() {
         running = false
         main.removeCallbacks(tick)
+        session?.stop()
+        session = null
+        online = false
     }
 
     fun destroy() {
@@ -252,10 +282,54 @@ class XiaoAiLink(
 
     fun state(): String = when {
         XiaoAiAccess.uid.isBlank() -> "未填写巴法云私钥"
-        lastError != null -> "连不上巴法云（$lastError）"
+        lastError != null && !online -> "连不上巴法云（$lastError）"
         !primed -> "正在连接…"
         count == 0 -> "已连接，但没有以 ${XiaoAiVoice.TOPIC_PREFIX} 开头的主题"
-        else -> "已连接 · $count 个设备"
+        online -> "已连接 · $count 个设备"
+        else -> "$count 个主题，云端未在线（正在重连，此时小爱会说设备不在线）"
+    }
+
+    private fun connect() {
+        val uid = XiaoAiAccess.uid
+        if(uid.isBlank()) return
+        session?.stop()
+        session = BemfaSession(
+            clientId = uid,
+            onOpen = { worker.execute { refresh() } },
+            onMessage = { topic, payload -> onMqtt(topic, payload) },
+            onState = { up ->
+                online = up
+                main.post { publish() }
+            }
+        ).also { it.start() }
+    }
+
+    /**
+     * MQTT 收到的指令。载荷只有 `on` / `off`，昵称要查映射表——映射还没拉到就先记着，
+     * 等轮询补上；这种极端情况用户再喊一次即可。
+     */
+    private fun onMqtt(topic: String, payload: String) {
+        if(!payload.equals("on", ignoreCase = true)) return
+        val name = names[topic] ?: return
+        val action = XiaoAiVoice.actionOf(name) ?: return
+        handled[topic] = System.currentTimeMillis()
+        main.post { if(running) onAction(action) }
+    }
+
+    /** 只拉列表、不发动作：用于 MQTT 连上时确认要订阅哪些主题。 */
+    private fun refresh() {
+        val topics = runCatching { fetch() }.getOrNull() ?: return
+        applyTopics(topics)
+        if(topics.isNotEmpty()) primed = true
+        main.post { publish() }
+    }
+
+    /** 更新主题与昵称的映射，主题有增减就重新订阅。 */
+    private fun applyTopics(topics: List<XiaoAiVoice.Topic>) {
+        topics.forEach { names[it.topic] = it.name }
+        count = topics.size
+        primed = true
+        session?.subscribe(topics.map { it.topic })
     }
 
     private fun publish(forced: String? = null) {
@@ -266,18 +340,28 @@ class XiaoAiLink(
     }
 
     /**
+     * 轮询兜底：只在 MQTT 没连上时触发动作。
+     *
      * 第一轮只记基线不执行：进程刚起来时列表里全是历史消息，照单全收会莫名其妙开始播。
      */
     private fun consume(topics: List<XiaoAiVoice.Topic>) {
-        if(!primed) {
+        if(!baseline) {
             topics.forEach { seen[it.topic] = it.unix }
-            primed = true
+            baseline = true
             return
         }
+        if(online) {
+            // MQTT 在线时它已经实时处理过了，这里只更新基线，免得重连后又补播一遍
+            topics.forEach { seen[it.topic] = it.unix }
+            return
+        }
+        val now = System.currentTimeMillis()
         for(topic in topics) {
             if(!topic.msg.equals("on", ignoreCase = true)) continue
             if((seen[topic.topic] ?: 0L) >= topic.unix) continue
             seen[topic.topic] = topic.unix
+            val recent = handled[topic.topic] ?: 0L
+            if(now - recent < MQTT_GRACE_MS) continue
             val action = XiaoAiVoice.actionOf(topic.name) ?: continue
             onAction(action)
         }
