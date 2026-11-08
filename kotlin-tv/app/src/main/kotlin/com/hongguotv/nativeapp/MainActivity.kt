@@ -2841,11 +2841,15 @@ class MainActivity: Activity() {
             }
         })
     }
-    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloud: CloudProgress?=null) {
+    /**
+     * @param preloaded 已经取到的详情。语音开播要「先确认有剧集再起播」，
+     *   那时详情已经拉过一次，这里复用，不再重复请求（电视上多一次往返就是多等一秒）。
+     */
+    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloud: CloudProgress?=null,preloaded: Detail?=null) {
         pendingDetail=series; detailAutoplay=autoplay; pendingCloudResume=cloud
         invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false; detailEpisodePage=-1
         val body=base(series.title); message(body,"正在加载剧集…")
-        work({ repository.detail(series.id) }, { result ->
+        val apply:(Detail)->Unit={ result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
             val cloudResume=pendingCloudResume.takeIf { it?.series?.id==series.id }; pendingCloudResume=null
             val target=if(cloudResume!=null) {
@@ -2858,7 +2862,9 @@ class MainActivity: Activity() {
             }
             episodeIndex=target.index; group=episodeIndex/20
             if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
-        }, { problem -> error(body,problem) { openDetail(series,resume,detailAutoplay,cloud) } })
+        }
+        if(preloaded!=null) apply(preloaded)
+        else work({ repository.detail(series.id) }, apply, { problem -> error(body,problem) { openDetail(series,resume,detailAutoplay,cloud) } })
     }
     /** focusPager：翻页后焦点留在翻页按钮上（-1=‹，1=›），0=按 focusEpisode 决定，见函数末尾。 */
     private fun showDetail(focusEpisode: Boolean, focusPager: Int = 0) {
@@ -4880,7 +4886,16 @@ class MainActivity: Activity() {
      * 起播走 resume=true：有观看记录就接着上次的位置，没有则从第 1 集开始。
      */
     private fun remoteWatch(query: String): Boolean {
-        if(tab==6) return third?.remotePlayTitle(query)==true
+        // 停在片源模块时交给片源自己的搜索：那一侧有自己的源列表和聚合结果页，
+        // 用主站搜索会搜出「主站有、当前片源没有」的片子，点开还是放不出来。
+        if(tab==6) {
+            val module=third
+            if(module==null) {
+                Toast.makeText(this,"片源模块还没准备好，稍后再试",Toast.LENGTH_SHORT).show()
+                return false
+            }
+            return module.remotePlayTitle(query)
+        }
         if(screen=="player") {
             resetPlaybackSession(); sleepTimer.cancel(); sleepStopped=false
             saveProgress(); library.flush(); releasePlayer()
@@ -4900,15 +4915,25 @@ class MainActivity: Activity() {
                     if(index<0) null else type to items[index]
                 }
             }
+            // 标题对上只是第一步：搜索结果里混着预告、空壳和同名不同内容，
+            // 没有剧集就进播放器等于把人扔进一个黑屏。这里把详情先取回来验一次，
+            // 验不过就停在搜索页——结果已经摆在屏幕上了，点一下比猜可靠。
+            val ready=hit?.let { (type,series) ->
+                runCatching { repository.detail(series.id) }.getOrNull()
+                    ?.takeIf { it.episodes.isNotEmpty() }
+                    ?.let { Triple(type,series,it) }
+            }
             main.post {
                 if(isDestroyed) return@post
-                if(hit==null) {
-                    Toast.makeText(this,"没搜到「$query」，可以换个说法再试",Toast.LENGTH_SHORT).show()
+                if(ready==null) {
+                    val why=if(hit==null) "没搜到「$query」，可以换个说法再试"
+                        else "《${hit.second.title}》暂时没有可播放的剧集，请在结果里选一个"
+                    Toast.makeText(this,why,Toast.LENGTH_SHORT).show()
                     return@post
                 }
-                val (type,series)=hit
+                val (type,series,loaded)=ready
                 if(library.contentType!=type) { library.contentType=type; for(index in 0..1) { tabState.remove(index); tabFocus.remove(index) } }
-                openDetail(series,resume=true)
+                openDetail(series,resume=true,preloaded=loaded)
             }
         }
         return true

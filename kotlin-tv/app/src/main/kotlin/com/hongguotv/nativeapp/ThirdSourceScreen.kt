@@ -1126,11 +1126,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     searchLoading = !finished
                     if(finished) {
                         searchAggregating = false
-                        // 到这一步还没起播，说明这次搜索没有任何结果：把待办丢掉，
-                        // 否则下一次手动搜索的首条结果会被上一次的语音命令误起播
+                        // 到这一步还没起播：要么一个结果都没有，要么结果里没有能播的。
+                        // 待办必须丢掉，否则下一次手动搜索的首条结果会被这条旧语音命令抢走。
+                        val missed = watchPending
                         watchPending = null
                         if(searchHits.isEmpty()) loadError = searchFailures.values.firstOrNull()?.let { "所有片源均未返回结果（$it）" }
                             ?: "连接超时或接口无响应"
+                        // 有结果但没一个能播：留在结果页，让人自己点——这比替用户猜一个可靠。
+                        else if(missed != null) Toast.makeText(activity, "没找到能播放的「$missed」，请从结果里选一个", Toast.LENGTH_SHORT).show()
                     }
                     // 首个结果到达才建网格；后续结果只刷新 adapter，避免整页重建抢走焦点
                     if(firstArrival || (gridAdapter == null && searchDetails.isNotEmpty())) { firstArrival = false; rebuild() }
@@ -2936,7 +2939,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
      * 又被搜索页盖回去）。这里只挂一个待办关键字，由搜索结果到达的路径接手。
      */
     fun remotePlayTitle(word: String): Boolean {
-        if(currentSource() == null) return false
+        if(currentSource() == null) {
+            Toast.makeText(activity, "先选一个片源，再搜「$word」", Toast.LENGTH_SHORT).show()
+            return false
+        }
         if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
         submitSearch(word)
         // 必须放在 submitSearch 之后：新版搜索会清掉上一次没跑完的待办
@@ -2948,8 +2954,12 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun playPendingWatch(): Boolean {
         val word = watchPending ?: return false
         if(searchDetails.isEmpty()) return false
+        // 只从「真的有正片」的条目里挑：片源搜索结果里常有只有简介、没有分集的空壳，
+        // 挑中它进播放器就是一个没有内容的播放器。挑不到就留在结果页让人自己点，
+        // 待办也先留着——另一个源可能马上返回同一部片且带正片。
+        val picked = ThirdCms.pickBest(word, searchDetails.filter { detail -> detail.groups.any { it.second.isNotEmpty() } })
+            ?: return false
         watchPending = null
-        val picked = ThirdCms.pickBest(word, searchDetails) ?: return false
         // 接管后把在途的聚合搜索作废：否则剩余源陆续返回还会 rebuild 一次搜索页，把人从播放器顶回去
         searchSeq++
         searchLoading = false; searchRequested = false; searchAggregating = false
