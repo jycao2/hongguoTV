@@ -4847,6 +4847,25 @@ class MainActivity: Activity() {
     }
 
     /**
+     * 遥控页输入框里那句话：先当语音指令理解，认不出动作就当剧名开播。
+     *
+     * 和 [runVoiceAction] 同源不同壳——那边是给小爱的，回执要带「小爱同学：」前缀；
+     * 这里是人自己在遥控页上打的字，做没做成屏幕上本来就看得见（切了页/开始播了），
+     * 只在**做不到**的时候补一句，免得多一层"手机关掉了没"的怀疑。
+     */
+    private fun remoteSay(text: String): Boolean {
+        val plan=VoiceIntent.parse(text) ?: return remoteWatch(text)
+        return when(val cmd=plan.command) {
+            is RemoteCommand.Act -> remoteAct(cmd).also {
+                if(!it) Toast.makeText(this,"${plan.echo}：当前页面做不到",Toast.LENGTH_SHORT).show()
+            }
+            is RemoteCommand.Open -> remoteOpenModule(cmd.module)
+            is RemoteCommand.Watch -> remoteWatch(cmd.query)
+            else -> false
+        }
+    }
+
+    /**
      * 「一句话开播」：按剧名搜一次，命中就直接进播放器。
      *
      * 停在片源页时交给片源模块自己搜（那边有独立的源与内容库），其余页面搜红果主站。
@@ -5097,6 +5116,7 @@ class MainActivity: Activity() {
             is RemoteCommand.Resume -> remoteResumePlay(cmd.id)
             is RemoteCommand.Open -> remoteOpenModule(cmd.module)
             is RemoteCommand.Watch -> remoteWatch(cmd.query)
+            is RemoteCommand.Say -> remoteSay(cmd.text)
             is RemoteCommand.Act -> remoteAct(cmd)
             else -> false
         }

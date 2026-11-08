@@ -343,10 +343,10 @@
   </div>
   <div class="searchwrap">
     <div class="searchbox">
-      <input id="q" placeholder="说出或输入剧名" maxlength="80" autocomplete="off" enterkeyhint="search">
-      <button id="go">搜索</button>
+      <input id="q" placeholder="说出剧名或指令" maxlength="80" autocomplete="off" enterkeyhint="send">
+      <button id="go">发送</button>
     </div>
-    <div class="searchhint">点输入框后，用键盘上的麦克风说出剧名，识别结果会发到电视。</div>
+    <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就开播，说「检查更新」「历史记录第二个」就照做。</div>
   </div>
   <div class="quick" id="quick"></div>
   <button class="openlist" id="openlist">选集 · 加载中</button>
@@ -374,10 +374,10 @@
     <!-- 浏览形态同样要能搜：电视正在播时切过来找下一部，不用先切回遥控面板 -->
     <div class="searchwrap">
       <div class="searchbox">
-        <input id="qb" placeholder="说出或输入剧名" maxlength="80" autocomplete="off" enterkeyhint="search">
-        <button id="gob">搜索</button>
+        <input id="qb" placeholder="说出剧名或指令" maxlength="80" autocomplete="off" enterkeyhint="send">
+        <button id="gob">发送</button>
       </div>
-      <div class="searchhint">点输入框后，用键盘上的麦克风说出剧名，识别结果会发到电视。</div>
+      <div class="searchhint">点输入框后用键盘麦克风说话，或直接打字：说剧名就开播，说「检查更新」「历史记录第二个」就照做。</div>
     </div>
     <div class="resume">
       <div class="rhead">
@@ -689,22 +689,24 @@
   window.addEventListener("mousemove", moveDrag);
   window.addEventListener("mouseup", endDrag);
 
-  // 搜索：一次输入法语音 → 纯文本 → 发到电视。遥控面板与浏览形态各有一个输入框，共用提交逻辑
-  function submitSearch(value){
+  // 一句话：输入的可能是剧名，也可能是指令（「检查更新」「历史记录第二个」「清理缓存」）。
+  // 统一发给电视端理解——认不出动作时会自动退化成「当剧名搜并开播」，
+  // 所以这里不需要让人先选类型。遥控面板与浏览形态各有一个输入框，共用提交逻辑。
+  function submitSay(value){
     value = (value || "").trim();
     if(!value) return;
-    send({ cmd: "search", query: value });
+    send({ cmd: "say", text: value });
     ["q","qb"].forEach(function(id){
       $(id).value = "";
       $(id).blur();
     });
     pendingSeek = null;
   }
-  $("go").onclick = function(){ submitSearch($("q").value); };
-  $("gob").onclick = function(){ submitSearch($("qb").value); };
+  $("go").onclick = function(){ submitSay($("q").value); };
+  $("gob").onclick = function(){ submitSay($("qb").value); };
   [["q","go"],["qb","gob"]].forEach(function(pair){
     $(pair[0]).addEventListener("keydown", function(e){
-      if(e.key === "Enter"){ e.preventDefault(); submitSearch($(pair[0]).value); }
+      if(e.key === "Enter"){ e.preventDefault(); submitSay($(pair[0]).value); }
     });
   });
 

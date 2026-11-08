@@ -23,6 +23,9 @@ class RemoteProtocolTest {
         assertEquals(RemoteCommand.Detach, parse("""{"cmd":"detach"}"""))
         assertEquals(RemoteCommand.Search("总裁的替身新娘"), parse("""{"cmd":"search","query":"总裁的替身新娘"}"""))
         assertEquals(RemoteCommand.Watch("黄石"), parse("""{"cmd":"watch","query":"黄石"}"""))
+        // 遥控页整句：可能是指令也可能是剧名，理解交给电视端
+        assertEquals(RemoteCommand.Say("检查有没有更新"), parse("""{"cmd":"say","text":"检查有没有更新"}"""))
+        assertNull("空句子不该被当成指令", parse("""{"cmd":"say","text":"   "}"""))
         assertEquals(RemoteCommand.Open("source"), parse("""{"cmd":"open","module":"source"}"""))
         // 大小写与两端空白由协议层吃掉，桥接那边不用自己归一
         assertEquals(RemoteCommand.Open("rank"), parse("""{"cmd":"open","module":" RANK "}"""))

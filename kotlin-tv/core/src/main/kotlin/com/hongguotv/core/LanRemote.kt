@@ -88,6 +88,15 @@ sealed class RemoteCommand {
     data class Watch(val query: String) : RemoteCommand()
 
     /**
+     * 把整句话交给电视自己理解（[VoiceIntent.parse]）。
+     *
+     * 遥控页的输入框走这条：说的可能是剧名，也可能是「检查更新」「历史记录第二个」。
+     * 解析器认不出任何动作时本来就退化成「当剧名搜」，所以一个入口两用，
+     * 不用让用户在遥控页上先选「这是指令还是片名」。
+     */
+    data class Say(val text: String) : RemoteCommand()
+
+    /**
      * 通用界面动作：把 App 里每个「点了会发生事」的功能变成一个可外部调用的 ID。
      *
      * 这是语音入口的落点。之前只有 open/watch/search 三条，能做的仅限「跳页」和「搜片名」；
@@ -273,6 +282,11 @@ object RemoteProtocol {
                 val query = json.optString("query").trim()
                 if(query.isEmpty() || query.length > SEARCH_MAX || query.any { it.isISOControl() }) null
                 else RemoteCommand.Watch(query)
+            }
+            "say" -> {
+                val text = json.optString("text").trim()
+                if(text.isEmpty() || text.length > SEARCH_MAX || text.any { it.isISOControl() }) null
+                else RemoteCommand.Say(text)
             }
             "act" -> {
                 val id = json.optString("id").trim().lowercase()
