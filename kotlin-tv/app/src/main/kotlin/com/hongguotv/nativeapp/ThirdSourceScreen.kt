@@ -1062,13 +1062,13 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val result = client.list(source, requestCategory, requestPage)
             main.post {
                 if(gen != generation) return@post
-                if(fetched != null && fetched.isNotEmpty()) { categories = fetched; categoriesCached = true }
+                if(fetched != null && fetched.isNotEmpty()) { categories = ThirdCms.filterCategories(source, fetched); categoriesCached = true }
                 if(reset) {
                     loading = false
                     if(result != null) {
                         // 分类兜底：仅首页响应含分类时更新缓存，后续页沿用
                         if(!categoriesCached && result.categories.isNotEmpty()) {
-                            categories = result.categories; categoriesCached = true
+                            categories = ThirdCms.filterCategories(source, result.categories); categoriesCached = true
                         }
                         videos = result.videos.toMutableList()
                         hasMore = result.hasMore && result.videos.isNotEmpty(); loadError = null; page = 1
@@ -1106,8 +1106,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         searchSourcesDone = 0
         val aggregate = searchAllOverride || store.searchAllSources
         val candidates = if(aggregate) {
-            // 当前源优先，跳过已知不可用的源，最多并发聚合 6 个（复用 3 线程池）
-            val others = sources.filter { it.id != current.id && probes[it.id]?.dot != Dot.DEAD }
+            // 当前源优先，跳过已知不可用与配置为不可搜索（searchable=false）的源，最多并发聚合 6 个（复用 3 线程池）
+            val others = sources.filter { it.id != current.id && it.searchable && probes[it.id]?.dot != Dot.DEAD }
             (listOf(current) + others).take(AGGREGATE_LIMIT)
         } else listOf(current)
         searchAggregate = candidates.size > 1
@@ -1906,7 +1906,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 room <= 0 -> {}
                 else -> {
                     val id = "u" + site.api.hashCode().toUInt().toString()
-                    added += ThirdSource(id, site.name, site.api, site.headers)
+                    added += ThirdSource(id, site.name, site.api, site.headers, site.searchable, site.quickSearch,
+                        site.filterable, site.categories, site.timeoutSeconds)
                     existingApis += site.api; room--; imported++
                 }
             }
@@ -2112,6 +2113,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     /** 联想请求：300ms 防抖 + 序号守卫（只接受最新输入的结果），接口不支持或失败时静默为空。 */
     private fun runSuggest() {
         val source = currentSource() ?: return
+        // 源配置 quickSearch=false：输入即搜的快速通道不适用，联想直接为空（整词搜索仍可用）
+        if(!source.quickSearch) { suggestions = emptyList(); renderSuggestions(); return }
         val word = searchInput.trim()
         val seq = ++suggestSeq
         if(word.isEmpty()) { suggestions = emptyList(); renderSuggestions(); return }

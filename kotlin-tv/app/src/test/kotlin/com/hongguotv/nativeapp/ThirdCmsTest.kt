@@ -371,4 +371,37 @@ class ThirdCmsTest {
     fun `ThirdSource headers 默认为空表不破坏既有构造`() {
         assertEquals(emptyMap<String, String>(), ThirdSource("a", "A源", "https://a/vod").headers)
     }
+
+    // ---------- site 元数据 ----------
+
+    @Test
+    fun `parseTvboxConfig 提取 searchable 与 timeout 与 categories`() {
+        val body = """
+            {"sites":[
+              {"name":"元数据源","api":"https://a/vod","type":1,
+               "searchable":0,"quickSearch":0,"filterable":0,
+               "categories":["1","2",3,""],"timeout":45},
+              {"name":"默认源","api":"https://b/vod","type":1,"timeout":999}
+            ]}
+        """.trimIndent()
+        val parsed = ThirdCms.parseTvboxConfig(body)
+        assertEquals(2, parsed.candidates.size)
+        val first = parsed.candidates[0]
+        assertFalse(first.searchable); assertFalse(first.quickSearch); assertFalse(first.filterable)
+        assertEquals(listOf("1", "2", "3"), first.categories)
+        assertEquals(45, first.timeoutSeconds)
+        // 默认源：全部 true + 超时钳制到 60 秒上限
+        val second = parsed.candidates[1]
+        assertTrue(second.searchable)
+        assertEquals(ThirdCms.MAX_TIMEOUT_SECONDS, second.timeoutSeconds)
+    }
+
+    @Test
+    fun `filterCategories 空配置不裁剪 指定后按原序保留`() {
+        val source = ThirdSource("a", "A源", "https://a/vod")
+        val cats = listOf(ThirdCategory("2", "剧集"), ThirdCategory("1", "电影"), ThirdCategory("3", "综艺"))
+        assertEquals(cats, ThirdCms.filterCategories(source, cats))
+        val limited = source.copy(categories = listOf("1", "3"))
+        assertEquals(listOf("1", "3"), ThirdCms.filterCategories(limited, cats).map { it.id })
+    }
 }

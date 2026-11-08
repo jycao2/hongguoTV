@@ -296,7 +296,9 @@ class ThirdStore(context: Context) {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val id = item.optString("id"); val api = item.optString("api")
             if(id.isEmpty() || api.isEmpty()) null
-            else ThirdSource(id, item.optString("name"), api, readHeaders(item))
+            else ThirdSource(id, item.optString("name"), api, readHeaders(item),
+                item.optBoolean("searchable", true), item.optBoolean("quickSearch", true),
+                item.optBoolean("filterable", true), readCategories(item), item.optInt("timeoutSeconds", 0))
         }
     }
 
@@ -305,6 +307,11 @@ class ThirdStore(context: Context) {
         list.forEach { source ->
             val item = JSONObject().put("id", source.id).put("name", source.name).put("api", source.api)
             if(source.headers.isNotEmpty()) item.put("headers", JSONObject(source.headers))
+            if(!source.searchable) item.put("searchable", false)
+            if(!source.quickSearch) item.put("quickSearch", false)
+            if(!source.filterable) item.put("filterable", false)
+            if(source.categories.isNotEmpty()) item.put("categories", JSONArray(source.categories))
+            if(source.timeoutSeconds > 0) item.put("timeoutSeconds", source.timeoutSeconds)
             array.put(item)
         }
         return array.toString()
@@ -317,6 +324,11 @@ class ThirdStore(context: Context) {
             val value = obj.optString(key).trim()
             if(key.isNotBlank() && value.isNotEmpty()) key.trim() to value else null
         }.toMap()
+    }
+
+    private fun readCategories(item: JSONObject): List<String> {
+        val array = item.optJSONArray("categories") ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index -> array.optString(index).ifEmpty { null } }
     }
 
     companion object {
