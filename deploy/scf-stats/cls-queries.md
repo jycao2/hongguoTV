@@ -70,20 +70,26 @@ WHERE SCF_Message LIKE '%"evt": "ping"%'
 
 切换更新通道（例如把清单 minSdk 由 26 降到 21、让存量设备改吃 5.0 包）前，必须先看这两组数据。
 
-存量设备跨版本占比（近 7 天活跃设备按 versionCode 分档）：
+**口径前提（重要）**：应用版本 **< 0.23 的客户端已无法播放**，属于无效用户，统计时整档剔除，不参与门禁计算。
 
 ```sql
-SELECT CASE WHEN c >= 10460 THEN 'new' WHEN c >= 10450 THEN 'bridge' ELSE 'old' END AS tier,
-       count(DISTINCT regexp_extract(SCF_Message, '"u"\s*:\s*"([^"]+)"', 1)) AS devices
+* | SELECT CASE
+        WHEN ver_num < 23 THEN 'dead(<0.23 不能播放，剔除)'
+        WHEN ver_num < 309 THEN 'old(能播放但解析不了 21 清单)'
+        ELSE 'bridge(>=0.30.9 可切轨)' END AS tier,
+      count(DISTINCT uid) AS devices
 FROM (
-  SELECT CAST(regexp_extract(SCF_Message, '"c"\s*:\s*([0-9]+)', 1) AS INT) AS c,
-         SCF_Message
+  SELECT regexp_extract(SCF_Message, '"u"\s*:\s*"([^"]+)"', 1) AS uid,
+         CAST(regexp_extract(regexp_extract(SCF_Message, '"v"\s*:\s*"([^"]+)"', 1), '^0\.([0-9]+)', 1) AS INT) AS ver_num
+  FROM log
   WHERE SCF_Message LIKE '%"evt": "ping"%'
 )
 GROUP BY tier ORDER BY devices DESC
 ```
 
-放行条件（两条都满足才可切）：`bridge + new` 设备占比 ≥ 95%，`old` 设备占比 < 2%。
+放行条件（分母只算非 dead 档）：`bridge` 占真用户 ≥ 95%，且 `old` 占真用户 < 2%。
+
+实测基线（2026-11-08，近 7 天去重 27,607 台）：`dead` 1,466（5.3%）、`old` 25,985（94.1%）、`bridge` 118（0.4%）——**远未达标，不可切轨**。按次版本看 old 档：0.23=7,939 / 0.24=4,130 / 0.25=3,855 / 0.26=3,458 / 0.27=4,041 / 0.28=2,559。
 
 更新失败分布（按阶段 + 目标版本，定位「某个版本在某批机型装不上」）：
 
