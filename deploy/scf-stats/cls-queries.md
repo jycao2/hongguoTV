@@ -66,6 +66,39 @@ SELECT count(*) AS pings
 WHERE SCF_Message LIKE '%"evt": "ping"%'
 ```
 
+## 发版门禁：版本分布与更新失败
+
+切换更新通道（例如把清单 minSdk 由 26 降到 21、让存量设备改吃 5.0 包）前，必须先看这两组数据。
+
+存量设备跨版本占比（近 7 天活跃设备按 versionCode 分档）：
+
+```sql
+SELECT CASE WHEN c >= 10460 THEN 'new' WHEN c >= 10450 THEN 'bridge' ELSE 'old' END AS tier,
+       count(DISTINCT regexp_extract(SCF_Message, '"u"\s*:\s*"([^"]+)"', 1)) AS devices
+FROM (
+  SELECT CAST(regexp_extract(SCF_Message, '"c"\s*:\s*([0-9]+)', 1) AS INT) AS c,
+         SCF_Message
+  WHERE SCF_Message LIKE '%"evt": "ping"%'
+)
+GROUP BY tier ORDER BY devices DESC
+```
+
+放行条件（两条都满足才可切）：`bridge + new` 设备占比 ≥ 95%，`old` 设备占比 < 2%。
+
+更新失败分布（按阶段 + 目标版本，定位「某个版本在某批机型装不上」）：
+
+```sql
+SELECT regexp_extract(SCF_Message, '"s"\s*:\s*"([^"]+)"', 1) AS stage,
+       regexp_extract(SCF_Message, '"t"\s*:\s*"([^"]+)"', 1) AS target,
+       count(*) AS fails,
+       count(DISTINCT regexp_extract(SCF_Message, '"u"\s*:\s*"([^"]+)"', 1)) AS devices
+FROM log
+WHERE SCF_Message LIKE '%"evt": "update_fail"%'
+GROUP BY stage, target ORDER BY fails DESC
+```
+
+阶段含义：`parse` 清单解析失败（多为旧客户端遇到低 minSdk 声明）、`download` 下载失败、`verify` 包校验/元信息不符、`install` 系统安装入口被拒。
+
 ## 备注
 
 - 日志只含随机 ID 与版本号，不含 IP、机型、内容等信息；SCF 不解析、不额外落库请求来源 IP。

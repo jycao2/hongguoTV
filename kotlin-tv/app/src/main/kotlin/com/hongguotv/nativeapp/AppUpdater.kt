@@ -19,6 +19,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import com.hongguotv.core.AppUpdate
+import com.hongguotv.core.UpdateNotes
 import com.hongguotv.core.AppUpdateRepository
 import com.hongguotv.core.UpdateFiles
 import java.io.File
@@ -92,12 +93,11 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         // TLS socket close may send close_notify; it must not run on Android's main thread.
         Thread({ repository.close() }, "hongguotv-update-cleanup").start()
     }
-    /** Release 说明是 Markdown：去掉标题井号与加粗标记，行首 `-` 换成居中点，避免电视上直接显示 `**`。 */
-    private fun notesText(raw: String): String = raw.replace("\r\n", "\n")
-        .replace(Regex("(?m)^#{1,6}\\s*"), "")
-        .replace("**", "")
-        .replace(Regex("(?m)^- "), "· ")
-        .trim()
+    /**
+     * 更新说明来自远程 `update.json`，长度不可控：整段塞进弹窗会把弹窗撑高。
+     * 统一交给 [UpdateNotes.summarize] 做去标记 + 限条数 + 限字数 + 折叠。
+     */
+    private fun notesText(raw: String): String = UpdateNotes.summarize(raw)
     private fun updateStatus(text: String) { status = text; statusView?.text = text; fitStatus() }
     /** 更新说明可能很长：限制正文高度并允许滚动，避免把「立即安装」按钮挤出屏幕。 */
     private fun fitStatus() {
@@ -185,13 +185,15 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (available == null && !busy && !ready) check(true)
     }
 
-    private fun <T> work(action: () -> T, done: (T) -> Unit) {
+    private fun <T> work(stage: () -> String = { "unknown" }, action: () -> T, done: (T) -> Unit) {
         busy = true; renderActions(); val ticket = ++generation
         task = worker.submit {
             try {
                 val result = action()
                 main.post { if (active && generation == ticket) { busy = false; done(result); renderActions() } }
             } catch (e: Exception) {
+                // 失败静默无法定位问题：带上阶段与目标版本，7 天内可在 CLS 看到某版本的失败聚集
+                InstallStatsPing.reportUpdateFail(activity, stage(), available?.versionName ?: "-")
                 main.post { if (active && generation == ticket) {
                     busy = false; ready = false; retryAfter = System.currentTimeMillis()+30*60*1000L
                     updateStatus(if (e is IOException) e.message ?: "更新失败，请重试" else "更新校验失败，请重试"); renderActions()
@@ -207,7 +209,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (!manual && !idle()) return false
         preferences.edit().putLong("last_attempt", System.currentTimeMillis()).apply()
         updateStatus("正在检查新版…")
-        work({ repository.latest() }) { update ->
+        work(stage = { "parse" }, action = { repository.latest() }) { update ->
             available = update.takeIf { it.newerThan(BuildConfig.VERSION_CODE.toLong(), Build.VERSION.SDK_INT) }; ready = false
             if (available == null) {
                 updateStatus(if (update.versionCode > BuildConfig.VERSION_CODE && update.minSdk > Build.VERSION.SDK_INT) "新版需要 Android API ${update.minSdk}，当前电视继续使用本版" else "已是最新版本 ${BuildConfig.VERSION_NAME}")
@@ -224,8 +226,10 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (busy || !active || !idle()) return
         updateStatus("正在下载 ${update.versionName}…")
         val ticket = generation + 1
-        work({
+        var stage = "download"
+        work(stage = { stage }, action = {
             repository.download(update, apk) { percent -> main.post { if (generation == ticket && active) updateStatus("正在下载 ${update.versionName} · $percent%") } }
+            stage = "verify"
             validateApk(update)
         }) {
             ready = true; updateStatus("${update.versionName} 已下载并校验\n${notesText(update.notes)}\n\n确认后由系统覆盖安装，保留本机记录。")
@@ -244,16 +248,20 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         val version = if (Build.VERSION.SDK_INT >= 28) candidate.longVersionCode else candidate.versionCode.toLong()
         fun signers(info: android.content.pm.PackageInfo) =
             ((if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else null) ?: info.signatures)?.map { it.toCharsString() }?.toSet().orEmpty()
-        // ApplicationInfo.minSdkVersion 要 API 24，低版本读不到就不校验这一项
-        val candidateMinSdk = if (Build.VERSION.SDK_INT >= 24) candidate.applicationInfo?.minSdkVersion ?: 0 else update.minSdk
+        // ApplicationInfo.minSdkVersion 要 API 24，低版本读不到就跳过这一项
+        val candidateMinSdk = if (Build.VERSION.SDK_INT >= 24) candidate.applicationInfo?.minSdkVersion ?: 0 else 0
         if (candidate.packageName != activity.packageName || version != update.versionCode || candidate.versionName != update.versionName || version <= BuildConfig.VERSION_CODE ||
-            candidateMinSdk != update.minSdk || signers(installed).isEmpty() || signers(installed) != signers(candidate))
+            signers(installed).isEmpty() || signers(installed) != signers(candidate))
             throw IOException("新版包名、版本或签名不匹配，已阻止安装")
+        // minSdk 只拦「包要求比清单声明更高」：声明值可以高于包实际值（同一个包同时兼容低版本设备），
+        // 严格等值会让每次调整声明都必须换一个包，0.30.9 就因此拦下了所有存量用户。
+        if (candidateMinSdk > update.minSdk)
+            throw IOException("新版要求 Android API $candidateMinSdk，高于清单声明的 ${update.minSdk}，已阻止安装")
     }
     private fun install() {
         val update = available ?: return
         if (busy || !active || !ready) return
-        work({ validateApk(update) }) {
+        work(stage = { "install" }, action = { validateApk(update) }) {
             try {
                 if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
                     permissionRequested = true

@@ -64,8 +64,34 @@ class InstallStatsReporter(
         }
     }
 
+    /**
+     * 更新失败上报：只带匿名 ID、当前版本、目标版本与失败阶段。
+     * 阶段取值 parse / download / verify / install，用于判断某个版本是否在特定机型上装不上。
+     */
+    fun updateFailed(installId: String, from: String, to: String, stage: String): Boolean {
+        if (!ID_RE.matches(installId) || !VER_RE.matches(from) || !VER_RE.matches(to) || !STAGE_RE.matches(stage)) return false
+        val url = try {
+            endpoint.toHttpUrl().newBuilder()
+                .addPathSegment("update_fail")
+                .addQueryParameter("u", installId)
+                .addQueryParameter("f", from)
+                .addQueryParameter("t", to)
+                .addQueryParameter("s", stage)
+                .build()
+                .toString()
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        return try {
+            transport.get(url) in 200..299
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private companion object {
         val ID_RE = Regex("^[A-Za-z0-9_-]{8,64}$")
         val VER_RE = Regex("^[0-9A-Za-z.+:-]{1,32}$")
+        val STAGE_RE = Regex("^[a-z]{3,16}$")
     }
 }

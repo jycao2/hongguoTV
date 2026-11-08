@@ -34,6 +34,14 @@ def changelog():
     return f"更新日志（自 {base} 起）：\n{log}" if base else f"更新日志：\n{log}"
 
 notes = os.environ.get("RELEASE_NOTES", "").strip() or changelog()
+# 更新说明会显示在电视弹窗里，长度必须可控（0.30.10 写了 16 条技术细节，把弹窗撑满）：
+# 面向用户最多 8 条、每条一句，总量 1200 字封顶；超了直接失败，逼着写短话。
+MAX_NOTES_CHARS = 1200
+MAX_NOTES_ITEMS = 8
+items = [ln for ln in notes.splitlines() if ln.strip()]
+if len(notes) > MAX_NOTES_CHARS or len(items) > MAX_NOTES_ITEMS:
+    sys.exit(f"RELEASE_NOTES 过长：{len(notes)} 字 / {len(items)} 行（上限 {MAX_NOTES_CHARS} 字 / {MAX_NOTES_ITEMS} 行）。"
+             "面向用户的日志请压到 5 条以内、每条一句话，技术细节写进 docs/CHANGELOG.md。")
 manifest = {
     "schema": 1,
     "packageName": "com.hongguotv.nativeapp",

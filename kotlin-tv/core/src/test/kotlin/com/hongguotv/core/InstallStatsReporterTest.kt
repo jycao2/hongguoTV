@@ -88,4 +88,26 @@ class InstallStatsReporterTest {
     fun malformedEndpointReturnsFalse() {
         assertFalse(InstallStatsReporter("not a url", FakeTransport(200)).ping("abcdef0123", "1.0", 1))
     }
+
+    @Test
+    fun updateFailedBuildsExpectedUrl() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertTrue(reporter.updateFailed("abcdef0123456789", "0.28.0+50", "-", "parse"))
+        val url = transport.urls.single()
+        assertTrue(url, url.startsWith("https://stats.example.com/update_fail?"))
+        assertTrue(url, url.contains("f=0.28.0%2B50") || url.contains("f=0.28.0+50"))
+        assertTrue(url, url.contains("t=-"))
+        assertTrue(url, url.contains("s=parse"))
+    }
+
+    @Test
+    fun updateFailedRejectsUnknownStageAndBadVersion() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertFalse(reporter.updateFailed("abcdef0123", "1.0", "2.0", "boom stage"))
+        assertFalse(reporter.updateFailed("abcdef0123", "1 0", "2.0", "parse"))
+        assertFalse(reporter.updateFailed("bad id!", "1.0", "2.0", "parse"))
+        assertTrue(transport.urls.isEmpty())
+    }
 }
