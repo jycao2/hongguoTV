@@ -59,7 +59,20 @@ class XiaoAiVoiceTest {
         assertEquals(XiaoAiVoice.Action.Open("settings"), XiaoAiVoice.actionOf("设置"))
     }
 
-    private val payload = """
+    /** 实测响应（2026-11-08 抓的原文）：主题数组被包在 data.data 里。 */
+    private val realPayload = """
+        {"code":0,"msg":"success","data":{"data":[
+          {"topic":"hgplay1001","type":1,"share":false,"time":"2026-11-08 09:12:34","unix":1794100354,
+           "online":false,"name":"黄石第五季","room":"","msg":"","pubOnline":true,"deviceType":"outlet",
+           "group":"","createTime":"2026-11-08 09:12:34"},
+          {"topic":"lamp002","type":1,"share":false,"time":"2026-11-08 09:12:34","unix":1794100355,
+           "online":false,"name":"台灯","room":"","msg":"","pubOnline":true,"deviceType":"bulb",
+           "group":"","createTime":"2026-11-08 09:12:34"}
+        ]}}
+    """.trimIndent()
+
+    /** 扁平结构：万一巴法改回来，也别再白屏一次。 */
+    private val flatPayload = """
         {"code":0,"message":"OK","data":[
           {"topic":"hghs001","msg":"on","name":"黄石第五季","online":true,"unix":1762500000},
           {"topic":"hgmod1001","msg":"off","name":"红果片源","online":true,"unix":1762500100},
@@ -68,8 +81,22 @@ class XiaoAiVoiceTest {
     """.trimIndent()
 
     @Test
+    fun `真实响应的两层 data 能读到主题`() {
+        val topics = XiaoAiVoice.parse(realPayload)
+        assertEquals(1, topics.size)
+        assertEquals("hgplay1001", topics[0].topic)
+        assertEquals("黄石第五季", topics[0].name)
+        assertEquals(1794100354L, topics[0].unix)
+    }
+
+    @Test
+    fun `扁平 data 数组也兼容`() {
+        assertEquals(2, XiaoAiVoice.parse(flatPayload).size)
+    }
+
+    @Test
     fun `只认 hg 开头的主题`() {
-        val topics = XiaoAiVoice.parse(payload)
+        val topics = XiaoAiVoice.parse(flatPayload)
         assertEquals(2, topics.size)
         assertEquals(listOf("hghs001", "hgmod1001"), topics.map { it.topic })
         assertEquals("黄石第五季", topics[0].name)
@@ -80,6 +107,8 @@ class XiaoAiVoiceTest {
     @Test
     fun `私钥错时返回空列表而不是抛异常`() {
         assertTrue(XiaoAiVoice.parse("""{"code":40003,"message":"openID error"}""").isEmpty())
+        // 实测：私钥不认时 data 是空字符串，不是数组也不是对象
+        assertTrue(XiaoAiVoice.parse("""{"code":-1,"msg":"获取失败","data":""}""").isEmpty())
         assertTrue(XiaoAiVoice.parse("not json").isEmpty())
     }
 

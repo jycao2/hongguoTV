@@ -56,13 +56,20 @@ object ThirdCms {
      * 「一句话开播」挑片：先要片名完全一致的，其次要片名包含关键词的，都没有就取第一条
      * （CMS 搜索本身按相关度排序，首条通常就是要的那部）。
      */
+    /**
+     * 「一句话开播」挑片：先要片名完全一致的，其次要片名包含关键词的，再次要关键词包含片名的
+     * （说了「某剧第五季」而库里只有「某剧」）。
+     *
+     * 都对不上返回 null。原来这里兜底取首条，理由是「CMS 搜索按相关度排序，首条通常就是要的那部」，
+     * 但实测搜索词对不上时首条是无关推荐——喊「黄石第五季」能播出别的剧，宁可不播。
+     */
     fun pickBest(word: String, details: List<ThirdDetail>): ThirdDetail? {
         if(details.isEmpty()) return null
         val key = nameKey(word)
-        if(key.isEmpty()) return details.first()
+        if(key.isEmpty()) return null
         return details.firstOrNull { nameKey(it.video.name) == key }
             ?: details.firstOrNull { nameKey(it.video.name).contains(key) }
-            ?: details.first()
+            ?: details.firstOrNull { nameKey(it.video.name).let { name -> name.length >= 2 && key.contains(name) } }
     }
 
     /** 季标记：兼容「第二季」「第2季」「第 2 部」，数字与「季/部」之间允许空格。 */

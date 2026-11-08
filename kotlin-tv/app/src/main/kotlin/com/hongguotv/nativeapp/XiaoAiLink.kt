@@ -95,10 +95,21 @@ object XiaoAiVoice {
     /**
      * 解析 `allTopic` 响应。
      *
+     * 真实响应把主题数组又包了一层（`data.data`），跟文档里写的 `data` 直接是数组不一样：
+     *
+     * ```json
+     * {"code":0,"msg":"success","data":{"data":[{"topic":"hgplay1001","name":"黄石第五季"}]}}
+     * ```
+     *
+     * 两种都读，免得哪天巴法再改回去又白屏一次。
+     *
      * 只保留 [TOPIC_PREFIX] 开头的主题：巴法账号里可能还有别的设备，那些不该被这里当作指令。
      */
     fun parse(body: String): List<Topic> {
-        val data = runCatching { JSONObject(body).optJSONArray("data") }.getOrNull() ?: return emptyList()
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+        val data = root.optJSONArray("data")
+            ?: root.optJSONObject("data")?.optJSONArray("data")
+            ?: return emptyList()
         val out = ArrayList<Topic>(data.length())
         for(index in 0 until data.length()) {
             val item = data.optJSONObject(index) ?: continue

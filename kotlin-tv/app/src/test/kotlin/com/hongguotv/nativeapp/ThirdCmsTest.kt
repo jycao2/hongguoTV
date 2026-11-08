@@ -230,7 +230,7 @@ class ThirdCmsTest {
     }
 
     @Test
-    fun `pickBest 先精确后包含最后兜底首条`() {
+    fun `pickBest 只认片名对得上的`() {
         val hits = listOf(
             detail("1", "末日重生之番外篇", "2025", 5),
             detail("2", "《末日 重生》", "2025", 30)
@@ -239,11 +239,16 @@ class ThirdCmsTest {
         assertEquals("2", ThirdCms.pickBest("末日重生", hits)?.video?.id)
         // 没有完全一致的，退到「包含关键词」的那条
         assertEquals("1", ThirdCms.pickBest("末日重生之", hits)?.video?.id)
-        // 关键词谁都不沾时取首条：CMS 搜索本身按相关度排序
-        assertEquals("1", ThirdCms.pickBest("不相干", hits)?.video?.id)
+        // 关键词谁都不沾时不再兜底首条：搜索没命中时首条是无关推荐，播出去就是另一部剧
+        assertNull(ThirdCms.pickBest("不相干", hits))
+        assertNull(ThirdCms.pickBest("   ", hits))
         assertNull(ThirdCms.pickBest("末日重生", emptyList()))
-        // 只有空白的关键词不该把结果筛空
-        assertEquals("1", ThirdCms.pickBest("   ", hits)?.video?.id)
+    }
+
+    @Test
+    fun `pickBest 说了第几季但库里只有正片也能命中`() {
+        val hits = listOf(detail("1", "黄石", "2018", 10))
+        assertEquals("1", ThirdCms.pickBest("黄石第五季", hits)?.video?.id)
     }
 
     @Test

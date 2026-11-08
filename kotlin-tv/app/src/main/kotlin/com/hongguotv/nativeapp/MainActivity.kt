@@ -4705,7 +4705,9 @@ class MainActivity: Activity() {
         val types=(listOf(library.contentType)+ContentType.entries).distinct().filter { it.searchTab!=null }
         io.execute {
             val hit=types.firstNotNullOfOrNull { type ->
-                runCatching { repository.search(query,1,type) }.getOrNull()?.items?.firstOrNull()?.let { type to it }
+                val items=runCatching { repository.search(query,1,type) }.getOrNull()?.items.orEmpty()
+                val index=TitleMatch.best(query,items)
+                if(index<0) null else type to items[index]
             }
             main.post {
                 if(isDestroyed) return@post
