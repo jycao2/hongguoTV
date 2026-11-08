@@ -103,6 +103,8 @@ class AccountManager(private val context: Context, private val library: Library)
     private var profile: CloudProfile? = null
     private var cloudHistory = emptyList<CloudProgress>()
     private var historyLoaded = false
+    private var cloudFavorites = emptyList<CloudFavorite>()
+    private var favoritesLoaded = false
     private var status = "未登录"
     private var busy = false
     var onAccountChanged: (() -> Unit)? = null
@@ -160,6 +162,7 @@ class AccountManager(private val context: Context, private val library: Library)
                         status = "已登录，正在读取云端历史…"
                         changed()
                         refreshHistory()
+                        refreshFavorites()
                     }
                     .onFailure { error ->
                         Log.w("HongguoTV", "Account validation failed", error)
@@ -205,6 +208,83 @@ class AccountManager(private val context: Context, private val library: Library)
 
     /** 云端观看记录（只读）：按更新时间倒序，只保留有播放进度的。 */
     fun cloudRows(): List<CloudProgress> = cloudHistory.filter { it.position > 0 }
+
+    /** 云端收藏（只读展示）：按收藏时间倒序。 */
+    fun cloudFavoriteRows(): List<CloudFavorite> = cloudFavorites
+
+    /** 云端收藏是否已成功拉取过；收藏页构建时用它判断要不要顺手触发一次 refreshFavorites。 */
+    val cloudFavoritesLoaded get() = favoritesLoaded
+
+    /** 拉取云端收藏，仅作只读展示：不合并不回写本机收藏。 */
+    fun refreshFavorites(onDone: (() -> Unit)? = null) {
+        val account = credentials ?: run { onDone?.invoke(); return }
+        if (closed) { onDone?.invoke(); return }
+        val token = generation
+        status = "正在读取云端收藏…"
+        changed()
+        worker.execute {
+            if (closed || token != generation) { main.post { onDone?.invoke() }; return@execute }
+            val result = runCatching { client.favorites(account) }
+            main.post {
+                if (closed || token != generation) { onDone?.invoke(); return@post }
+                result
+                    .onSuccess { rows ->
+                        cloudFavorites = rows
+                        favoritesLoaded = true
+                        status = "已读取 ${cloudFavorites.size} 部云端收藏"
+                        changed()
+                    }
+                    .onFailure { error ->
+                        status = "云端收藏读取失败：${safeError(error)}"
+                        changed()
+                    }
+                onDone?.invoke()
+            }
+        }
+    }
+
+    /**
+     * 手动把本机收藏同步到云端：把云端没有的本机收藏逐部加入视频书架。
+     * 上游协议要求写完书架后回读确认，回读结果直接作为新的云端缓存；
+     * 全程不写本机收藏，回调 onDone(上传, 跳过, 失败)。
+     */
+    fun syncFavoritesToCloud(onDone: (pushed: Int, skipped: Int, failed: Int) -> Unit) {
+        val account = credentials ?: run { toast("未登录"); return }
+        if (closed || busy) { toast("账号操作进行中，请稍候"); return }
+        if (!signedIn) { toast("请先登录红果账号"); return }
+        if (!library.isLoaded) { toast("收藏还在加载，请稍候再试"); return }
+        busy = true
+        status = "正在把本机收藏同步到云端…"
+        // 手动同步期间不触发 onAccountChanged，避免 showCatalog 重建页面打断按钮
+        val token = generation
+        worker.execute {
+            val localRows = library.favorites()
+            val cloudIds = cloudFavorites.mapTo(HashSet()) { it.series.id }
+            var pushed = 0
+            var skipped = 0
+            var failed = 0
+            for (series in localRows) {
+                if (closed || token != generation) return@execute
+                // 书架只收官方剧集编号；三方源或其他形态的收藏跳过不计
+                if (!series.id.matches(Regex("[0-9]{1,30}"))) { skipped++; continue }
+                if (series.id in cloudIds) { skipped++; continue }
+                val ok = runCatching { client.setFavorite(account, series.id, true) }.isSuccess
+                if (ok) pushed++ else failed++
+            }
+            val reread = if (pushed > 0 && !closed && token == generation) runCatching { client.favorites(account) } else null
+            main.post {
+                if (closed || token != generation) return@post
+                busy = false
+                reread?.onSuccess { rows ->
+                    cloudFavorites = rows
+                    favoritesLoaded = true
+                }
+                status = if (failed > 0) "收藏同步完成：上传 $pushed 部，失败 $failed 部"
+                else "收藏同步完成：上传 $pushed 部，跳过 $skipped 部"
+                onDone(pushed, skipped, failed)
+            }
+        }
+    }
 
     /**
      * 手动同步本机记录到云端：逐部上传本机进度。
@@ -474,11 +554,14 @@ class AccountManager(private val context: Context, private val library: Library)
         profile = account
         cloudHistory = emptyList()
         historyLoaded = false
+        cloudFavorites = emptyList()
+        favoritesLoaded = false
         generation++
         status = "已登录，正在读取云端历史…"
         changed()
         toast("已登录 ${account.nickname}")
         refreshHistory()
+        refreshFavorites()
     }
 
     private fun logout() {
@@ -488,6 +571,8 @@ class AccountManager(private val context: Context, private val library: Library)
         profile = null
         cloudHistory = emptyList()
         historyLoaded = false
+        cloudFavorites = emptyList()
+        favoritesLoaded = false
         http.dispatcher.cancelAll()
         status = "已退出账号"
         changed()
