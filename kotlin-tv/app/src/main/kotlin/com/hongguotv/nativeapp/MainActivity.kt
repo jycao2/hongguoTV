@@ -2003,6 +2003,7 @@ class MainActivity: Activity() {
         val playback=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
         val look=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
         val device=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
+        val lab=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
         val about=column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) }
         val settingRows=mutableListOf<TextView>()
         val groupRows=linkedMapOf<LinearLayout,MutableList<TextView>>()
@@ -2033,6 +2034,7 @@ class MainActivity: Activity() {
             Triple("播放与观看","所有剧集共用，播放中也可调整",playback),
             Triple("外观与界面","主题、时钟与首页导航",look),
             Triple("设备与数据","本机记录、存储与快传文件",device),
+            Triple("实验室功能","外部遥控、语音与自动化接口",lab),
             Triple("关于红果","版本更新、接口自检与许可",about))
         var active=0
         val railButtons=categories.map { entry ->
@@ -2160,10 +2162,6 @@ class MainActivity: Activity() {
         accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
-        lateinit var remoteAddressButton: TextView
-        remoteAddressButton=setting(device,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
-        lateinit var xiaoAiButton: TextView
-        xiaoAiButton=setting(device,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
         lateinit var backup: TextView
         backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -2230,7 +2228,12 @@ class MainActivity: Activity() {
             val bytes=cacheBytes()
             main.post { if(!isDestroyed) clearCache.text=cacheLabel(bytes) }
         }
-        heading(about,"关于红果",categories[3].second)
+        heading(lab,"实验室功能",categories[3].second)
+        lateinit var remoteAddressButton: TextView
+        remoteAddressButton=setting(lab,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
+        lateinit var xiaoAiButton: TextView
+        xiaoAiButton=setting(lab,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
+        heading(about,"关于红果",categories[4].second)
         lateinit var updates: TextView
         updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
         lateinit var checkButton: TextView
