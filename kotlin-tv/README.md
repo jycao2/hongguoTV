@@ -1,6 +1,6 @@
 # 红果 TV 原生独立版
 
-这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 8.0 / API 26。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
+这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 5.0 / API 21。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
 
 - 应用名称：红果TV
 - 包名：`com.hongguotv.nativeapp`。
@@ -10,6 +10,19 @@
 - [下载正式签名 APK](https://github.com/jycao2/hongguoTV/releases/latest)
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
+
+## 0.30.8 新增
+
+完整说明见 [更新日志](../docs/CHANGELOG.md)。
+
+- **一句话遥控**：手机遥控页可直接输入说法，说剧名搜索、说指令执行，47 种说法覆盖选集、快进快退、倍速、定时关机、静音、切模块、随机推荐、登录、快传与搜索历史；回执以提示条播报。
+- **搜索只列结果、不自动播放**：说剧名把结果摆出来由人自己点，说清集数才直达那一集；当前库搜不到自动换库重搜。
+- **播放页鼠标操作**：进度条可拖（拖动时暂停刷新、松手精确跳转，条上滚轮 ±10 秒），右上角「✕ 退出」与右键退出；退出按钮只在最近一次操作来自鼠标时出现。
+- **上下滑换集方向修正**：上滑下一集、下滑上一集（此前慢速拖动反向）。
+- **触摸模式下返回键失灵修复**：鼠标棒点击让窗口进入触摸模式，首页胶囊按钮取不到焦点导致返回键静默失效；已补触摸模式可聚焦属性并加焦点兜底。
+- **片源 110001 修复**：播放接口迁到新的五头签名；聚合搜索加 8 秒总时限，到点放弃慢源并展示已到结果。
+- **排行榜「上新」**、片源系列剧切换条、手机遥控页全屏/横屏打磨。
+- 最低版本下探到 Android 5.0（API 21）。
 
 ## 0.28.0 新增
 
@@ -394,7 +407,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.28.0-android8.apk
+# 输出：outputs/hongguotv-kotlin-0.30.8-android8.apk
 ```
 
 ## 工程结构
@@ -430,7 +443,7 @@ node kotlin-tv/tools/signing-oracle.cjs
 
 ## 验证边界
 
-当前版本通过 `core` 模块 JVM 单元测试与 Release lint；已在 Android TV 模拟器和 Android 实体电视上验证首页、搜索、详情、连续播放、主题切换和应用内更新。各版本交付证据见对应 `RELEASE_*.md` 记录。最低 API 26 配置和静态检查不等同于所有实体电视验收；遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
+当前版本通过 `core` 模块 JVM 单元测试与 Release lint；已在 Android TV 模拟器和 Android 实体电视上验证首页、搜索、详情、连续播放、主题切换和应用内更新。各版本交付证据见对应 `RELEASE_*.md` 记录。最低 API 21 配置和静态检查不等同于所有实体电视验收；遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
 
 内容来自第三方接口；接口、签名、内容可用性或地区网络变化可能需要更新 APK。此版本不是内容平台官方客户端。
 
