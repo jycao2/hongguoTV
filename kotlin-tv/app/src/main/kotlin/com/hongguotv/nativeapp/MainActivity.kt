@@ -2274,8 +2274,6 @@ class MainActivity: Activity() {
         accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
-        lateinit var proxyButton: TextView
-        proxyButton=setting(device,proxyLabel()) { showProxyDialog(proxyButton) }
         lateinit var backup: TextView
         backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -2347,6 +2345,8 @@ class MainActivity: Activity() {
         remoteAddressButton=setting(lab,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
         lateinit var xiaoAiButton: TextView
         xiaoAiButton=setting(lab,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
+        lateinit var proxyButton: TextView
+        proxyButton=setting(lab,proxyLabel()) { showProxyDialog(proxyButton) }
         heading(about,"关于红果",categories[4].second)
         lateinit var updates: TextView
         updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
