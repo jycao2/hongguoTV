@@ -2809,9 +2809,10 @@ class MainActivity: Activity() {
         val title=TvDialog.title(this,if(loading) "正在随机挑选…" else "随机荐剧")
         body.addView(title)
         val content=FrameLayout(this)
-        // 内容区高度按屏幕算：固定 420dp 在 1080p / 高密度面板上会连标题和按钮一起顶出屏幕
-        // （实测模拟器直接超屏）。留出标题、按钮行与卡片内边距，最多 420dp。
-        val contentHeight=minOf(dp(420),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
+        // 内容区高度按屏幕算：固定上限在 1080p / 高密度面板上会连标题和按钮一起顶出屏幕
+        // （实测模拟器直接超屏）。留出标题、按钮行与卡片内边距；上限压到 340dp（用户反馈整体偏高），
+        // 小屏仍以「屏幕高-230dp」为准，最低 200dp 保证两行卡片可见。
+        val contentHeight=minOf(dp(340),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
         body.addView(content,lp(-1,contentHeight).apply { bottomMargin=dp(10) })
         val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
         // 海报网格 3 列异步填充，宽度必须固定，不能收缩到内容：
