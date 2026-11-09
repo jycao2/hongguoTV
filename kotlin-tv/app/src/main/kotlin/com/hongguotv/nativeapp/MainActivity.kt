@@ -4848,6 +4848,7 @@ class MainActivity: Activity() {
         · 用 FlClash：软件里的代理开关必须打开，否则核心会静默拒绝所有代理流量（无任何报错）
         · 电脑改过端口：电视这里要同步改
         · 代理正常但某源仍打不开：多半是该源域名本身失效，与代理无关
+        · 手机遥控页 / 小爱语音也能开关：说「打开网络代理」「关闭网络代理」「代理状态」
     """.trimIndent().replace(Regex("^[ ]+",RegexOption.MULTILINE),"")
 
     /**
@@ -4997,6 +4998,7 @@ class MainActivity: Activity() {
             appendLine("剧名 / 文盲修仙第七集 / 快进30秒 / 快退一分钟 / 返回上一级")
             appendLine("1.5倍速 / 静音 / 声音大一点 / 半小时后关掉")
             appendLine("随机推荐一部漫剧 / 切换短剧 / 登录红果账户 / 检查更新")
+            appendLine("打开网络代理 / 关闭网络代理 / 代理状态")
             appendLine()
             append("module 可选：home / search / rank / favorite / history / settings / source / library")
         }
@@ -5191,6 +5193,25 @@ class MainActivity: Activity() {
             "hidden.restore" -> {
                 library.unhideAll()
                 voiceSay("已恢复隐藏推荐")
+                true
+            }
+            // 网络代理开关：arg = on | off（空=切换）。语音说「开代理」最常见的就是
+            // 被拦截的片源打不开时；地址没配过开不了，提示去设置里配，不静默失败。
+            "proxy.set", "proxy.status" -> {
+                val cur=AppProxy.current()
+                if(cmd.id=="proxy.status") {
+                    voiceSay(when {
+                        !cur.enabled -> "网络代理未启用"
+                        cur.valid -> "网络代理已启用 · ${cur.host}:${cur.port}"
+                        else -> "网络代理配置不完整"
+                    })
+                    return true
+                }
+                val target=when(cmd.arg) { "on" -> true; "off" -> false; else -> !cur.enabled }
+                if(target==cur.enabled) { voiceSay(if(target) "代理本来就是开着的" else "代理本来就是关着的"); return true }
+                if(target && !cur.valid) { voiceSay("还没配置代理地址，先到设置里填一次"); return true }
+                AppProxy.save(this,cur.copy(enabled=target))
+                voiceSay(if(target) "网络代理已开启 · ${cur.host}:${cur.port}" else "网络代理已关闭")
                 true
             }
             else -> false

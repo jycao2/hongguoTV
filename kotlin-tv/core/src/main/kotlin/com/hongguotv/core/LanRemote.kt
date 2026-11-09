@@ -219,7 +219,10 @@ val REMOTE_ACTIONS = setOf(
     "remote.address",   // 遥控地址
     "xiaoai.show",      // 小爱同学设置
     "account.show",     // 账号
-    "hidden.restore"    // 恢复隐藏推荐
+    "hidden.restore",   // 恢复隐藏推荐
+    // 网络代理（DNS 污染/SNI 阻断场景的开关）
+    "proxy.set",        // 开关代理：arg = on | off（空=切换；开启要求配置完整）
+    "proxy.status"      // 播报当前代理状态
 )
 
 /** `list.play` 的列表键：`history` 最近观看、`favorite` 收藏、`catalog` 当前列表、`episodes` 选集。 */
@@ -346,6 +349,7 @@ object RemoteProtocol {
                     id == "type.set" && arg !in REMOTE_TYPE_KEYS -> null
                     id == "random.pick" && arg.isNotEmpty() && arg !in REMOTE_TYPE_KEYS -> null
                     id == "volume.mute" && arg !in setOf("", "on", "off") -> null
+                    id == "proxy.set" && arg !in setOf("", "on", "off") -> null
                     id == "sleep.set" && sleepTarget(arg) == null -> null
                     else -> RemoteCommand.Act(id, arg)
                 }

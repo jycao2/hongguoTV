@@ -263,6 +263,45 @@ class VoiceIntentTest {
         assertEquals(RemoteCommand.Open("history"), command("打开历史记录"))
     }
 
+    // ------------------------------------------------------------ 网络代理
+
+    /**
+     * 代理的三种说法各归各的：开、关、查状态。
+     *
+     * 「代理」两个字太短——片名带「代理」的不少，所以词表里最短也要三个字。
+     * 「关闭代理服务器」这类混合句同时命中「关闭代理」和「代理服务器」时，
+     * 宁可落到只读的 status 也不要落成方向相反的开关。
+     */
+    @Test
+    fun proxyVariants() {
+        listOf("打开网络代理", "开启代理", "开代理", "开个代理").forEach {
+            assertEquals("「$it」应开代理", "proxy.set" to "on", act(it))
+        }
+        listOf("关闭网络代理", "关掉代理", "关代理", "关了代理").forEach {
+            assertEquals("「$it」应关代理", "proxy.set" to "off", act(it))
+        }
+        listOf("代理状态", "网络代理状态", "代理服务器", "代理开着吗").forEach {
+            assertEquals("「$it」应查代理状态", "proxy.status" to "", act(it))
+        }
+        // 切换语义：不带方向的「网络代理」「代理开关」
+        listOf("网络代理", "代理开关", "切换代理").forEach {
+            assertEquals("「$it」应切代理", "proxy.set" to "", act(it))
+        }
+        // 混合长句不落成开关
+        assertEquals("proxy.status", act("关闭代理服务器")?.first)
+    }
+
+    @Test
+    fun proxyArgsSurviveProtocol() {
+        listOf("on", "off", "").forEach { arg ->
+            val body = """{"cmd":"act","id":"proxy.set","arg":"$arg"}"""
+            assertEquals(RemoteCommand.Act("proxy.set", arg), RemoteProtocol.parse(body))
+        }
+        // 非法 arg 在协议入口就被拒掉
+        assertNull(RemoteProtocol.parse("""{"cmd":"act","id":"proxy.set","arg":"maybe"}"""))
+        assertEquals(RemoteCommand.Act("proxy.status"), RemoteProtocol.parse("""{"cmd":"act","id":"proxy.status"}"""))
+    }
+
     // ------------------------------------------------------------ 一致性
 
     /**
@@ -284,7 +323,9 @@ class VoiceIntentTest {
             "半小时后关掉", "看完这集就关", "声音大一点", "声音小一点", "静音", "取消静音",
             "随机推荐一部漫剧", "随机推荐", "切换短剧", "看漫剧",
             // 新增：快传三件事与搜索历史
-            "刷新二维码", "打开快传文件", "清空文件", "清空搜索历史"
+            "刷新二维码", "打开快传文件", "清空文件", "清空搜索历史",
+            // 新增：网络代理
+            "打开代理", "关代理", "代理状态", "网络代理"
         )
         for(text in samples) {
             val cmd = VoiceIntent.parse(text)?.command

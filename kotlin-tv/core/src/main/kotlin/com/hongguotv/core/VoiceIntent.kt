@@ -151,7 +151,16 @@ object VoiceIntent {
         Rule(listOf("接口自检", "自检", "检查接口"),
             RemoteCommand.Act("check.interface"), "接口自检"),
         Rule(listOf("恢复隐藏", "恢复推荐", "取消隐藏"),
-            RemoteCommand.Act("hidden.restore"), "已恢复隐藏推荐")
+            RemoteCommand.Act("hidden.restore"), "已恢复隐藏推荐"),
+        // 网络代理。「代理」两个字太短——片名带「代理」的不少，词表里最短也要三个字。
+        Rule(listOf("打开网络代理", "开启网络代理", "打开代理", "开启代理", "开代理", "开个代理"),
+            RemoteCommand.Act("proxy.set", "on"), "网络代理已开启"),
+        Rule(listOf("关闭网络代理", "关掉网络代理", "关闭代理", "关掉代理", "关代理", "关了代理", "代理关掉"),
+            RemoteCommand.Act("proxy.set", "off"), "网络代理已关闭"),
+        Rule(listOf("网络代理状态", "代理状态", "看看代理", "代理开着吗", "代理服务器"),
+            RemoteCommand.Act("proxy.status"), "网络代理状态"),
+        Rule(listOf("网络代理", "代理开关", "切换代理", "换个代理"),
+            RemoteCommand.Act("proxy.set"), "已切换网络代理")
     ).sortedByDescending { rule -> rule.words.maxOf { it.length } }
 
     /**
