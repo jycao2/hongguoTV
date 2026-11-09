@@ -4826,6 +4826,31 @@ class MainActivity: Activity() {
     private fun proxyLabel()="网络代理  ·  ${AppProxy.current().display}"
 
     /**
+     * 代理帮助：用户大多不熟悉 Clash 的局域网代理配置，把文档要点浓缩成三段——
+     * 电脑端怎么开、电视端怎么填、连不上时按什么顺序排查。在设置对话框点「帮助」弹出。
+     */
+    private fun proxyHelpText()="""
+        什么时候需要开：部分片源域名被运营商上游 DNS 污染或 SNI 阻断（换 DNS、DoH 均无效），开启代理后全部网络流量走局域网代理即可恢复访问。快传 / 遥控 / WebDAV 等局域网功能始终直连，不受影响。
+
+        一、电脑端准备（以 Clash / mihomo 为例）
+        1. 打开「允许局域网连接 / Allow LAN」
+        2. 记下代理端口（Clash 默认混合端口 7890，其他软件以实际为准）
+        3. Windows 防火墙首次弹窗选「允许访问」；电视一直连不上时，在防火墙高级设置里给代理软件加一条入站规则
+        4. 查电脑 IP：命令行运行 ipconfig，看 IPv4 地址（192.168.x.x）
+
+        二、电视端填写
+        1. 填电脑 IP 和端口；遥控输入不便就点「扫码填写」，用手机回填
+        2. 点「测试连接」，提示连通成功后「启用并保存」
+        3. 不想用了回来点「停用」即可
+
+        三、常见问题
+        · 测试连接失败：按顺序排查——电脑代理已启动、端口与这里填的一致、电视和电脑在同一网络、防火墙已放行
+        · 用 FlClash：软件里的代理开关必须打开，否则核心会静默拒绝所有代理流量（无任何报错）
+        · 电脑改过端口：电视这里要同步改
+        · 代理正常但某源仍打不开：多半是该源域名本身失效，与代理无关
+    """.trimIndent().replace(Regex("^[ ]+",RegexOption.MULTILINE),"")
+
+    /**
      * 网络代理设置：部分片源域名被上游 DNS 污染或 SNI 阻断（换 DNS/DoH 无效），
      * 让全部流量走局域网 HTTP 代理是唯一应用侧出路。详见 [AppProxy]。
      */
@@ -4858,12 +4883,19 @@ class MainActivity: Activity() {
         val enable=TvDialog.capsuleButton(this,"启用并保存") { }
         val test=TvDialog.capsuleButton(this,"测试连接") { }
         val scan=TvDialog.capsuleButton(this,"扫码填写") { }
+        lateinit var help: Button
+        help=TvDialog.capsuleButton(this,"帮助") { tvTools.info("网络代理 · 帮助",proxyHelpText(),help) }
         val disable=TvDialog.capsuleButton(this,"停用") { }
         val cancel=TvDialog.capsuleButton(this,"取消") { dialog.dismiss() }
-        listOf(enable to 10,test to 10,scan to 10,disable to 10,cancel to 0).forEach { (view,margin) ->
+        // 六个按钮一行放不下（停用/取消会被裁出对话框），拆两行：主操作 / 次要操作
+        listOf(enable to 10,test to 10,scan to 0).forEach { (view,margin) ->
             actions.addView(view,lp(-2,-2).apply { rightMargin=dp(margin) })
         }
-        form.addView(actions)
+        val actions2=row().apply { setPadding(0,dp(10),0,0) }
+        listOf(help to 10,disable to 10,cancel to 0).forEach { (view,margin) ->
+            actions2.addView(view,lp(-2,-2).apply { rightMargin=dp(margin) })
+        }
+        form.addView(actions); form.addView(actions2)
         val content=column()
         content.addView(TvDialog.title(this,"网络代理"))
         content.addView(ScrollView(this).apply { addView(form) },lp(-1,0).apply { weight=1f })
