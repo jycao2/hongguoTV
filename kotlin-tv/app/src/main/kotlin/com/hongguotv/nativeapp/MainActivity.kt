@@ -65,6 +65,9 @@ class MainActivity: Activity() {
     /** 界面整体缩放：包一层调过密度的 Context，dp/sp 等比生效（见 UiScale 注释）。 */
     override fun attachBaseContext(base: android.content.Context) {
         super.attachBaseContext(UiScale.wrap(base))
+        // 必须早于任何 OkHttpClient / HttpURLConnection 构建装上全局 ProxySelector，
+        // 否则客户端捕获的是旧 selector，运行中切换代理对已存在的客户端不生效
+        AppProxy.install(base)
     }
     private val bg by lazy { TvStyle.background }; private val surface by lazy { TvStyle.surface }
     private val accent by lazy { TvStyle.accent }; private val white by lazy { TvStyle.text }; private val muted by lazy { TvStyle.muted }
@@ -2271,6 +2274,8 @@ class MainActivity: Activity() {
         accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
         lateinit var localBackupButton: TextView
         localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
+        lateinit var proxyButton: TextView
+        proxyButton=setting(device,proxyLabel()) { showProxyDialog(proxyButton) }
         lateinit var backup: TextView
         backup=railAction("备份与恢复  ·  手机扫码") {
             runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
@@ -4818,6 +4823,119 @@ class MainActivity: Activity() {
      * 手机扫码窗口一旦有手机连上就会自动关掉，想抄地址去配自动化就没地方看；
      * 这里固定展示一次，并列出外部可直接用的命令，省得去翻源码或抓包。
      */
+    private fun proxyLabel()="网络代理  ·  ${AppProxy.current().display}"
+
+    /**
+     * 网络代理设置：部分片源域名被上游 DNS 污染或 SNI 阻断（换 DNS/DoH 无效），
+     * 让全部流量走局域网 HTTP 代理是唯一应用侧出路。详见 [AppProxy]。
+     */
+    private fun showProxyDialog(anchor: View) {
+        val current=AppProxy.current()
+        val form=column().apply { setPadding(dp(8),dp(4),dp(8),dp(8)) }
+        val hostEdit=EditText(this).apply {
+            hint="代理地址，如 192.168.31.23"; textSize=15f; setTextColor(white); setHintTextColor(muted)
+            isSingleLine=true; maxLines=1
+            background=rounded(bg); setPadding(dp(10),dp(10),dp(10),dp(10))
+            setText(current.host)
+            setOnFocusChangeListener { _,focused -> background=rounded(if(focused) TvStyle.raised else bg,if(focused) accent else Color.TRANSPARENT) }
+        }
+        val portEdit=EditText(this).apply {
+            hint="端口，如 7890"; textSize=15f; setTextColor(white); setHintTextColor(muted)
+            isSingleLine=true; maxLines=1
+            inputType=android.text.InputType.TYPE_CLASS_NUMBER
+            background=rounded(bg); setPadding(dp(10),dp(10),dp(10),dp(10))
+            if(current.port>0) setText(current.port.toString())
+            setOnFocusChangeListener { _,focused -> background=rounded(if(focused) TvStyle.raised else bg,if(focused) accent else Color.TRANSPARENT) }
+        }
+        val errorText=text("",13f,accent).apply { setPadding(0,dp(6),0,0) }
+        form.addView(text("部分片源域名被运营商上游 DNS 污染或 SNI 阻断（换 DNS / DoH 均无效），开启代理后全部网络流量走局域网代理，可恢复访问。局域网地址（快传 / 遥控 / WebDAV）始终直连。",12f,muted).apply { setPadding(0,0,0,dp(10)) })
+        form.addView(text("代理地址",13f,muted)); form.addView(hostEdit)
+        form.addView(text("端口",13f,muted).apply { setPadding(0,dp(8),0,0) }); form.addView(portEdit)
+        form.addView(errorText)
+        form.addView(text("电脑端以 Clash 为例：开启「允许局域网连接 Allow LAN」，这里填电脑的局域网 IP 和混合代理端口。",12f,muted).apply { setPadding(0,dp(6),0,0) })
+        val actions=row().apply { setPadding(0,dp(12),0,0) }
+        lateinit var dialog: AlertDialog
+        val enable=TvDialog.capsuleButton(this,"启用并保存") { }
+        val test=TvDialog.capsuleButton(this,"测试连接") { }
+        val scan=TvDialog.capsuleButton(this,"扫码填写") { }
+        val disable=TvDialog.capsuleButton(this,"停用") { }
+        val cancel=TvDialog.capsuleButton(this,"取消") { dialog.dismiss() }
+        listOf(enable to 10,test to 10,scan to 10,disable to 10,cancel to 0).forEach { (view,margin) ->
+            actions.addView(view,lp(-2,-2).apply { rightMargin=dp(margin) })
+        }
+        form.addView(actions)
+        val content=column()
+        content.addView(TvDialog.title(this,"网络代理"))
+        content.addView(ScrollView(this).apply { addView(form) },lp(-1,0).apply { weight=1f })
+        dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
+        TvDialog.styleWindow(this,dialog)
+
+        fun readConfig(enabled: Boolean): AppProxy.Config {
+            val host=hostEdit.text.toString().trim()
+            val port=portEdit.text.toString().trim().toIntOrNull() ?: 0
+            return AppProxy.Config(enabled,host,port)
+        }
+        fun persist(cfg: AppProxy.Config) {
+            AppProxy.save(this,cfg)
+            (anchor as? TextView)?.text=proxyLabel()
+            dialog.dismiss()
+            Toast.makeText(this,if(cfg.enabled) "网络代理已启用 · ${cfg.host}:${cfg.port}" else "网络代理已停用",Toast.LENGTH_SHORT).show()
+        }
+        enable.setOnClickListener {
+            val cfg=readConfig(true)
+            when {
+                cfg.host.isEmpty() -> errorText.text="请填写代理地址"
+                cfg.port !in 1..65535 -> errorText.text="端口需为 1-65535 的数字"
+                else -> persist(cfg)
+            }
+        }
+        disable.setOnClickListener { persist(readConfig(false)) }
+        test.setOnClickListener {
+            val cfg=readConfig(true)
+            if(cfg.host.isEmpty() || cfg.port !in 1..65535) { errorText.text="请先填写有效的地址与端口"; return@setOnClickListener }
+            errorText.text="测试中…"; test.isFocusable=false; test.isEnabled=false
+            io.execute {
+                val started=System.currentTimeMillis()
+                val result=runCatching {
+                    val proxy=java.net.Proxy(java.net.Proxy.Type.HTTP,java.net.InetSocketAddress(cfg.host,cfg.port))
+                    val client=okhttp3.OkHttpClient.Builder()
+                        .proxy(proxy)
+                        .connectTimeout(5,java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(5,java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    // 显式 .proxy() 绕开全局 selector，确保测的就是用户填的那个代理
+                    client.newCall(okhttp3.Request.Builder().url("https://www.baidu.com/").head().build()).execute().use { it.code }
+                }
+                main.post {
+                    test.isFocusable=true; test.isEnabled=true
+                    result.onSuccess { code -> errorText.text="连通成功 · ${System.currentTimeMillis()-started} ms（HTTP $code）" }
+                        .onFailure { errorText.text="连接失败：${it.message?.take(80) ?: "未知错误"}" }
+                }
+            }
+        }
+        scan.setOnClickListener {
+            // 电视键盘输入 IP/端口太费劲，走手机表单回填（与片源导入同一通道）
+            tvTools.phoneForm(enable,PhoneForm(
+                heading="填写网络代理",
+                description="填写局域网内代理服务的 IP 与端口（如电脑 Clash 的局域网 IP 和 7890），提交后自动回填到电视。",
+                fields=listOf(
+                    PhoneField("host","代理地址","例如：192.168.31.23",60),
+                    PhoneField("port","端口","例如：7890",5)),
+                doneHint="请回到电视点「启用并保存」。",
+                invalidMessage="请填写有效的地址与端口"
+            )) { values ->
+                val host=values["host"].orEmpty().trim()
+                val port=values["port"].orEmpty().trim()
+                if(host.isNotEmpty() && port.toIntOrNull() in 1..65535) { hostEdit.setText(host); portEdit.setText(port); enable.requestFocus() }
+                else errorText.text="请填写有效的地址与端口"
+            }
+        }
+        dialog.show()
+        // 与片源导入对话框同一规则：不自动聚焦输入框，避免弹软键盘挡住操作按钮
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        enable.requestFocus()
+    }
+
     private fun showRemoteAddress(anchor: View) {
         autoStartRemote()
         val session=remote ?: run {
