@@ -2814,8 +2814,9 @@ class MainActivity: Activity() {
         val contentHeight=minOf(dp(420),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
         body.addView(content,lp(-1,contentHeight).apply { bottomMargin=dp(10) })
         val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
-        // 海报网格 4 列异步填充，宽度必须固定，不能收缩到内容
-        TvDialog.styleWindow(this,dlg,widthDp=520)
+        // 海报网格 3 列异步填充，宽度必须固定，不能收缩到内容：
+        // 3×104 卡片 + 2×8 间距 + 卡片左右内边距 56 ≈ 390dp（一行四个时 520dp 偏大）
+        TvDialog.styleWindow(this,dlg,widthDp=390)
         randomDialog=dlg
         dlg.show()
         if(items.isEmpty() && !loading) {
@@ -2848,7 +2849,7 @@ class MainActivity: Activity() {
                     card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) loadCover(image,item.cover) }
                 }
             }
-            val grid=GridLayoutManager(this,4)
+            val grid=GridLayoutManager(this,3)
             val recycler=RecyclerView(this).apply { clipToPadding=false; itemAnimator=null }
             recycler.layoutManager=grid; recycler.adapter=randomAdapter
             content.addView(recycler,lp(-1,-1))
