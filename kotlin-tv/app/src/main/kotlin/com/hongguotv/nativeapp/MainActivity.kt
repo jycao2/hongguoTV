@@ -4848,7 +4848,7 @@ class MainActivity: Activity() {
         · 用 FlClash：软件里的代理开关必须打开，否则核心会静默拒绝所有代理流量（无任何报错）
         · 电脑改过端口：电视这里要同步改
         · 代理正常但某源仍打不开：多半是该源域名本身失效，与代理无关
-        · 手机遥控页 / 小爱语音也能开关：说「打开网络代理」「关闭网络代理」「代理状态」
+        · 手机遥控页也能开关：对输入框说「打开网络代理」「关闭网络代理」「代理状态」
     """.trimIndent().replace(Regex("^[ ]+",RegexOption.MULTILINE),"")
 
     /**
@@ -4881,22 +4881,18 @@ class MainActivity: Activity() {
         form.addView(text("电脑端以 Clash 为例：开启「允许局域网连接 Allow LAN」，这里填电脑的局域网 IP 和混合代理端口。",12f,muted).apply { setPadding(0,dp(6),0,0) })
         val actions=row().apply { setPadding(0,dp(12),0,0) }
         lateinit var dialog: AlertDialog
-        val enable=TvDialog.capsuleButton(this,"启用并保存") { }
-        val test=TvDialog.capsuleButton(this,"测试连接") { }
-        val scan=TvDialog.capsuleButton(this,"扫码填写") { }
+        val enable=TvDialog.capsuleButton(this,"启用并保存",compact=true) { }
+        val test=TvDialog.capsuleButton(this,"测试连接",compact=true) { }
+        val scan=TvDialog.capsuleButton(this,"扫码填写",compact=true) { }
         lateinit var help: Button
-        help=TvDialog.capsuleButton(this,"帮助") { tvTools.info("网络代理 · 帮助",proxyHelpText(),help) }
-        val disable=TvDialog.capsuleButton(this,"停用") { }
-        val cancel=TvDialog.capsuleButton(this,"取消") { dialog.dismiss() }
-        // 六个按钮一行放不下（停用/取消会被裁出对话框），拆两行：主操作 / 次要操作
-        listOf(enable to 10,test to 10,scan to 0).forEach { (view,margin) ->
+        help=TvDialog.capsuleButton(this,"帮助",compact=true) { tvTools.info("网络代理 · 帮助",proxyHelpText(),help) }
+        val disable=TvDialog.capsuleButton(this,"停用",compact=true) { }
+        val cancel=TvDialog.capsuleButton(this,"取消",compact=true) { dialog.dismiss() }
+        // 六个按钮用 compact 胶囊（13sp/内边距12）一行放下；常规尺寸会裁掉末尾按钮
+        listOf(enable to 8,test to 8,scan to 8,help to 8,disable to 8,cancel to 0).forEach { (view,margin) ->
             actions.addView(view,lp(-2,-2).apply { rightMargin=dp(margin) })
         }
-        val actions2=row().apply { setPadding(0,dp(10),0,0) }
-        listOf(help to 10,disable to 10,cancel to 0).forEach { (view,margin) ->
-            actions2.addView(view,lp(-2,-2).apply { rightMargin=dp(margin) })
-        }
-        form.addView(actions); form.addView(actions2)
+        form.addView(actions)
         val content=column()
         content.addView(TvDialog.title(this,"网络代理"))
         content.addView(ScrollView(this).apply { addView(form) },lp(-1,0).apply { weight=1f })
