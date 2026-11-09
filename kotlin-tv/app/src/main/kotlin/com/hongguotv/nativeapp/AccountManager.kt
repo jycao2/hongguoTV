@@ -367,14 +367,16 @@ class AccountManager(private val context: Context, private val library: Library)
             toast("账号操作进行中，请稍候")
             return
         }
-        val choices = if (signedIn) listOf("刷新云端记录", "同步本机到云端", "退出红果账号") else listOf("扫码登录")
+        val choices =
+            if (signedIn) listOf("刷新云端记录", "同步本机到云端", "退出红果账号")
+            else listOf("扫码登录", "手机号验证码登录")
         TvDialog.choose(
             activity,
             profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号",
             choices,
             onChoice = { index ->
                 if (!signedIn) {
-                    qrLogin(activity)
+                    if (index == 0) qrLogin(activity) else phoneLogin(activity)
                 } else when (index) {
                     0 -> refreshHistory()
                     1 -> syncLocalToCloud { pushed, skipped, failed ->
@@ -540,6 +542,98 @@ class AccountManager(private val context: Context, private val library: Library)
                 main.postDelayed({ poll() }, 1500)
             },
         )
+    }
+
+    // ------------------------------------------------------------- 手机号登录
+
+    /**
+     * 手机号 + 验证码登录：发码 → 填码 → 换会话 → 拉资料。
+     * 走官方 App 的 passport 短信通道（网页发码被滑块挡死）；滑块要求出现时引导回扫码。
+     */
+    private fun phoneLogin(activity: android.app.Activity) {
+        phoneField(activity, "手机号登录", "填完点「发送验证码」\n大陆直接填 11 位；境外用 +区号 号码（如 +886 0912345678）", null, numeric = false) { raw ->
+            val login = PhoneLogin(http)
+            task(
+                { login.send(raw) },
+                { sent -> phoneCode(activity, login, sent.maskedMobile) },
+                { failure -> phoneFailed(activity, failure) },
+            )
+        }
+    }
+
+    private fun phoneCode(activity: android.app.Activity, login: PhoneLogin, masked: String, error: String? = null) {
+        phoneField(activity, "输入验证码", "验证码已发送至 $masked", error, numeric = true) { code ->
+            task(
+                {
+                    val next = login.verify(code)
+                    val account = client.profile(next)
+                    store.save(next)
+                    next to account
+                },
+                { (next, account) -> acceptAccount(next, account) },
+                { failure ->
+                    if (failure is PhoneLogin.Failure && failure.canRetryCode) {
+                        phoneCode(activity, login, masked, safeError(failure))
+                    } else {
+                        phoneFailed(activity, failure)
+                    }
+                },
+            )
+        }
+    }
+
+    private fun phoneFailed(activity: android.app.Activity, failure: Throwable) {
+        val retry = if (failure is PhoneLogin.Failure && failure.needsWebsite) "改用扫码" else "重新填写"
+        actionDialog(activity, "手机号登录未完成", safeError(failure), retry, onAction = { showLoginDialog(activity) })
+    }
+
+    /** 单行输入弹窗：确认后回调 [submit]，空值不回调。[error] 非空时以醒目方式附在说明后。 */
+    private fun phoneField(
+        activity: android.app.Activity,
+        title: String,
+        message: String,
+        error: String?,
+        numeric: Boolean,
+        submit: (String) -> Unit,
+    ) {
+        val dp = { v: Int -> (v * activity.resources.displayMetrics.density).toInt() }
+        val field = android.widget.EditText(activity).apply {
+            isSingleLine = true
+            inputType =
+                if (numeric) android.text.InputType.TYPE_CLASS_NUMBER
+                else android.text.InputType.TYPE_CLASS_PHONE
+            hint = if (numeric) "6 位数字" else "13800138000 或 +区号 号码"
+            textSize = 16f
+            setTextColor(TvStyle.text)
+            setHintTextColor(TvStyle.muted)
+        }
+        val content = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(TvDialog.title(activity, title))
+            addView(TvDialog.body(activity, if (error == null) message else "$message\n\n$error"))
+            addView(field, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        }
+        val buttons = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.END
+            setPadding(0, dp(14), 0, 0)
+        }
+        val dialog = android.app.AlertDialog.Builder(activity)
+            .setView(TvDialog.card(activity, content))
+            .create()
+        val cancel = TvDialog.capsuleButton(activity, "返回") { dialog.dismiss(); showLoginDialog(activity) }
+        buttons.addView(cancel, android.widget.LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        val go = TvDialog.capsuleButton(activity, if (numeric) "登录" else "发送验证码") {}
+        buttons.addView(go)
+        content.addView(buttons)
+        TvDialog.styleWindow(activity, dialog) { field.requestFocus() }
+        go.setOnClickListener {
+            val value = field.text.toString().trim()
+            if (value.isEmpty()) return@setOnClickListener
+            dialog.dismiss()
+            submit(value)
+        }
+        dialog.show()
     }
 
     private fun validateAccount(web: AccountCredentials): Pair<AccountCredentials, CloudProfile> {
