@@ -188,16 +188,18 @@ val REMOTE_ACTIONS = setOf(
     "play.replay",      // 从头播放本集
     "player.close",     // 退出播放器，回到详情页
     "panel.episodes",   // 呼出选集面板（电视播放页 / 片源播放页）
+    "panel.quick",      // 呼出播放快捷面板（清晰度/倍速/弹幕/更多，仅播放页）
     "skip.intro",       // 按本剧片头标记跳过片头
     "speed.up",         // 倍速 +1 档（播放页只作用于本剧）
     "speed.down",       // 倍速 -1 档
-    "sleep.set",        // 定时停止：arg = min:<分钟> | ep:<集数>
+    "sleep.set",        // 定时停止：arg = min:<分钟> | ep:<集数> | off（取消）
     // 列表定位：arg = "<列表>:<序号>"，序号从 1 开始，见 [REMOTE_LIST_KINDS]
     "list.play",
     // 继续观看
     "resume.latest",    // 接着看最近一条
     // 详情页
     "favorite.toggle",  // 收藏 / 取消收藏当前剧
+    "favorite.check",   // 手动检查收藏的剧有没有更新
     // 浏览
     "type.set",         // 切内容类型：arg = comic | short | ai
     "random.pick",      // 随机推荐一部并打开详情：arg = comic | short | ai（空=当前类型）
@@ -350,7 +352,7 @@ object RemoteProtocol {
                     id == "random.pick" && arg.isNotEmpty() && arg !in REMOTE_TYPE_KEYS -> null
                     id == "volume.mute" && arg !in setOf("", "on", "off") -> null
                     id == "proxy.set" && arg !in setOf("", "on", "off") -> null
-                    id == "sleep.set" && sleepTarget(arg) == null -> null
+                    id == "sleep.set" && sleepTarget(arg) == null && arg != "off" -> null
                     else -> RemoteCommand.Act(id, arg)
                 }
             }

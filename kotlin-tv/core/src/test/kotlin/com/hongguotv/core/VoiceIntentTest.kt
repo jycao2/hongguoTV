@@ -302,6 +302,46 @@ class VoiceIntentTest {
         assertEquals(RemoteCommand.Act("proxy.status"), RemoteProtocol.parse("""{"cmd":"act","id":"proxy.status"}"""))
     }
 
+    // ------------------------------------------------------------ 指令扩充
+
+    /** 取消定时必须在时长判断之前生效，否则「取消定时」会被吃成「定时 30 分钟」。 */
+    @Test
+    fun sleepCancelVariants() {
+        listOf("取消定时", "解除定时", "关闭定时", "不定时了", "取消关机").forEach {
+            assertEquals("「$it」应取消定时", "sleep.set" to "off", act(it))
+        }
+        // 设置了再取消，整条链路语义正确
+        assertEquals("sleep.set" to "min:30", act("定时30分钟"))
+        assertEquals("sleep.set" to "off", act("取消定时"))
+    }
+
+    @Test
+    fun quickPanelAndFavoriteCheck() {
+        listOf("播放设置", "快捷面板", "播放面板", "播放快捷面板").forEach {
+            assertEquals("「$it」应呼出播放快捷面板", "panel.quick", act(it)?.first)
+        }
+        listOf("检查收藏更新", "看看收藏有没有更新", "收藏有没有更新", "检查收藏").forEach {
+            assertEquals("「$it」应检查收藏更新", "favorite.check", act(it)?.first)
+        }
+        // 「播放设置」不能吃掉「播放记录」这种导航说法
+        assertEquals(RemoteCommand.Open("history"), command("播放记录"))
+    }
+
+    @Test
+    fun enrichedAliases() {
+        assertEquals("play.next" to "", act("下一话"))
+        assertEquals("play.prev" to "", act("上一话"))
+        assertEquals("play.replay" to "", act("再放一遍"))
+        assertEquals("player.close" to "", act("不看了"))
+        assertEquals("resume.latest" to "", act("上次那个"))
+        assertEquals("random.pick" to "", act("来点别的"))
+        assertEquals("update.check" to "", act("版本升级"))
+        assertEquals("volume.mute" to "on", act("静音一下"))
+        assertEquals(RemoteCommand.Open("rank"), command("打开热榜"))
+        assertEquals(RemoteCommand.Open("favorite"), command("收藏列表"))
+        assertEquals(RemoteCommand.Open("library"), command("本地片库"))
+    }
+
     // ------------------------------------------------------------ 一致性
 
     /**

@@ -54,6 +54,9 @@ class RemoteProtocolTest {
         assertEquals(RemoteCommand.Act("type.set", "short"), parse("""{"cmd":"act","id":"type.set","arg":"short"}"""))
         assertEquals(RemoteCommand.Act("random.pick", ""), parse("""{"cmd":"act","id":"random.pick"}"""))
         assertEquals(RemoteCommand.Act("sleep.set", "min:30"), parse("""{"cmd":"act","id":"sleep.set","arg":"min:30"}"""))
+        assertEquals(RemoteCommand.Act("sleep.set", "off"), parse("""{"cmd":"act","id":"sleep.set","arg":"off"}"""))
+        assertEquals(RemoteCommand.Act("panel.quick"), parse("""{"cmd":"act","id":"panel.quick"}"""))
+        assertEquals(RemoteCommand.Act("favorite.check"), parse("""{"cmd":"act","id":"favorite.check"}"""))
         assertEquals(RemoteCommand.Act("volume.mute", "on"), parse("""{"cmd":"act","id":"volume.mute","arg":"on"}"""))
         assertEquals(RemoteCommand.Act("player.close"), parse("""{"cmd":"act","id":"player.close"}"""))
         // 参数校验：类型键、定时格式、静音参数都只收认识的值

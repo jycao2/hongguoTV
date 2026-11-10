@@ -5116,7 +5116,12 @@ class MainActivity: Activity() {
             }
             "speed.up" -> adjustSpeed(1)
             "speed.down" -> adjustSpeed(-1)
-            "sleep.set" -> sleepTarget(cmd.arg)?.let { (kind,value) ->
+            "sleep.set" -> if(cmd.arg=="off") {
+                sleepTimer.cancel()
+                voiceSay("已取消定时停止")
+                updatePlaybackText()
+                true
+            } else sleepTarget(cmd.arg)?.let { (kind,value) ->
                 // 界面上的定时只有 1..180 分钟 / 1..10 集，越界会被 SleepTimer 直接拒掉
                 if(kind=="min") sleepTimer.afterMinutes(value.coerceIn(1,180))
                 else sleepTimer.afterEpisodes(value.coerceIn(1,10))
@@ -5124,6 +5129,8 @@ class MainActivity: Activity() {
                 updatePlaybackText()
                 true
             } ?: false
+            // 播放快捷面板：清晰度/倍速/弹幕/更多四列，只在播放页有意义
+            "panel.quick" -> if(screen=="player") { showQuickPanel(); voiceSay("播放快捷面板"); true } else false
             "volume.up" -> adjustVolume(1)
             "volume.down" -> adjustVolume(-1)
             "volume.mute" -> adjustMute(cmd.arg)
@@ -5144,6 +5151,8 @@ class MainActivity: Activity() {
                 if(added) favoriteMonitor.check()
                 true
             }
+            // 主动查一次收藏更新：有新集时收藏页角标会亮，语音查完去收藏页就能看到
+            "favorite.check" -> { favoriteMonitor.check(); voiceSay("正在检查收藏更新"); true }
             "update.check" -> { updater.checkNow(anchor); true }
             "check.interface" -> { showInterfaceCheck(anchor); true }
             "cache.clear" -> {
