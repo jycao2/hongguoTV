@@ -2780,12 +2780,12 @@ class MainActivity: Activity() {
     }
     private fun showRandomPicks() {
         if(randomDialog?.isShowing==true) return
-        val picks=randomRecommender.pick(12)
+        val picks=randomRecommender.pick(4)
         if(picks.isNotEmpty()) { showRandomDialog(picks); return }
         // 池空或近期都展示过：先补充再展示
         showRandomDialog(emptyList(), loading = true)
         replenishRandomPool {
-            val next=randomRecommender.pick(12)
+            val next=randomRecommender.pick(4)
             if(next.isNotEmpty()) showRandomDialog(next) else randomDialog?.dismiss().also { Toast.makeText(this,"暂时无法随机荐剧，请稍后重试",Toast.LENGTH_SHORT).show() }
         }
     }
@@ -2809,23 +2809,22 @@ class MainActivity: Activity() {
         val title=TvDialog.title(this,if(loading) "正在随机挑选…" else "随机荐剧")
         body.addView(title)
         val content=FrameLayout(this)
-        // 内容区高度按屏幕算：固定上限在 1080p / 高密度面板上会连标题和按钮一起顶出屏幕
-        // （实测模拟器直接超屏）。留出标题、按钮行与卡片内边距；上限压到 340dp（用户反馈整体偏高），
-        // 小屏仍以「屏幕高-230dp」为准，最低 200dp 保证两行卡片可见。
-        val contentHeight=minOf(dp(340),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
+        // 内容区高度按屏幕算：一次只出 4 部（2×2 两行），高度按两行卡片实测算，
+        // 小屏仍以「屏幕高-230dp」兜底，最低 200dp。
+        val cardWidth=dp(132)
+        val posterHeight=(cardWidth/TvStyle.POSTER_ASPECT).toInt()
+        val contentHeight=minOf(posterHeight*2+dp(178),resources.displayMetrics.heightPixels-dp(230)).coerceAtLeast(dp(200))
         body.addView(content,lp(-1,contentHeight).apply { bottomMargin=dp(10) })
         val dlg=AlertDialog.Builder(this).setView(TvDialog.card(this,body)).create()
-        // 海报网格 3 列异步填充，宽度必须固定，不能收缩到内容：
-        // 3×104 卡片 + 2×8 间距 + 卡片左右内边距 56 ≈ 390dp（一行四个时 520dp 偏大）
-        TvDialog.styleWindow(this,dlg,widthDp=390)
+        // 海报网格 2 列异步填充，宽度必须固定，不能收缩到内容：
+        // 2×132 卡片 + 8 间距 + 卡片左右内边距 56 ≈ 330dp
+        TvDialog.styleWindow(this,dlg,widthDp=330)
         randomDialog=dlg
         dlg.show()
         if(items.isEmpty() && !loading) {
             content.addView(text("候选池为空，正在补充…",15f,muted).apply { setPadding(0,dp(20),0,0) })
         } else if(items.isNotEmpty()) {
-            // 弹窗专用固定尺寸卡片：宽104dp，上图（3:4固定高）下名称+集数，小图拉伸撑满
-            val cardWidth=dp(104)
-            val posterHeight=(cardWidth/TvStyle.POSTER_ASPECT).toInt()
+            // 弹窗专用固定尺寸卡片：宽132dp，上图（3:4固定高）下名称+集数，小图拉伸撑满
             val randomAdapter=object: RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 override fun getItemCount()=items.size
                 override fun onCreateViewHolder(parent: ViewGroup,viewType: Int): RecyclerView.ViewHolder {
@@ -2850,18 +2849,18 @@ class MainActivity: Activity() {
                     card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this@MainActivity,focused); if(focused) loadCover(image,item.cover) }
                 }
             }
-            val grid=GridLayoutManager(this,3)
+            val grid=GridLayoutManager(this,2)
             val recycler=RecyclerView(this).apply { clipToPadding=false; itemAnimator=null }
             recycler.layoutManager=grid; recycler.adapter=randomAdapter
             content.addView(recycler,lp(-1,-1))
         }
-        // 「换一批」按钮
-        val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
+        // 「换一批」按钮（居中）
+        val buttons=row().apply { gravity=Gravity.CENTER; setPadding(0,dp(14),0,0) }
         val change=TvDialog.capsuleButton(this,"换一批") {
             dlg.dismiss()
-            val picks=randomRecommender.pick(12)
+            val picks=randomRecommender.pick(4)
             if(picks.isNotEmpty()) showRandomDialog(picks)
-            else { showRandomDialog(emptyList(), loading = true); replenishRandomPool { val n=randomRecommender.pick(12); if(n.isNotEmpty()) showRandomDialog(n) } }
+            else { showRandomDialog(emptyList(), loading = true); replenishRandomPool { val n=randomRecommender.pick(4); if(n.isNotEmpty()) showRandomDialog(n) } }
         }
         val close=TvDialog.capsuleButton(this,"关闭") { dlg.dismiss() }
         buttons.addView(change,lp(-2,-2).apply { rightMargin=dp(12) })
