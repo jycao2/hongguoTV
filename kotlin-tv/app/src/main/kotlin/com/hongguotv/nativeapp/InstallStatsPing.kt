@@ -2,13 +2,15 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import android.os.Build
+import android.provider.Settings
 import com.hongguotv.core.InstallStats
 import com.hongguotv.core.InstallStatsReporter
 import java.util.concurrent.Executors
 
 /**
  * 匿名安装/活跃统计：每个进程启动静默上报一次。
- * 仅携带随机安装 ID 与应用版本号；不重试、不缓存、不阻塞、失败即静默丢弃。
+ * 仅携带随机安装 ID、应用版本号、设备去重键哈希与系统 API 级别；不重试、不缓存、不阻塞、失败即静默丢弃。
  */
 object InstallStatsPing {
     private const val PREFS = "install_stats"
@@ -17,6 +19,13 @@ object InstallStatsPing {
 
     @Volatile
     private var started = false
+
+    /** 个别机型读 ANDROID_ID 会抛异常；取不到就返回 null，上报侧当作未上报。 */
+    private fun androidId(context: Context): String? = try {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+    } catch (_: Throwable) {
+        null
+    }
 
     fun startOnce(context: Context) {
         if (started) return
@@ -30,7 +39,11 @@ object InstallStatsPing {
                     id = InstallStats.newInstallId()
                     prefs.edit().putString(KEY_ID, id).apply()
                 }
-                InstallStatsReporter().ping(id, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
+                InstallStatsReporter().ping(
+                    id, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE,
+                    deviceKey = InstallStats.deviceKey(androidId(app)),
+                    sdkInt = Build.VERSION.SDK_INT,
+                )
             } catch (_: Throwable) {
             }
         }

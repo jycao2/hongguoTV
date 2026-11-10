@@ -47,6 +47,62 @@ class InstallStatsReporterTest {
     }
 
     @Test
+    fun deviceKeyIsStableAcrossInstallsAndDiffersByDevice() {
+        val key = InstallStats.deviceKey("9774d56d682e549c")
+        assertTrue(key, key.matches(Regex("^[0-9a-f]{16}$")))
+        // 同一个 ANDROID_ID 必须得到同一个键：重装换 install_id 后仍能认出同一台设备
+        assertEquals(key, InstallStats.deviceKey("9774d56d682e549c"))
+        assertEquals(key, InstallStats.deviceKey("  9774d56d682e549c  "))
+        assertNotEquals(key, InstallStats.deviceKey("0000000000000000"))
+    }
+
+    @Test
+    fun deviceKeyToleratesMissingAndroidId() {
+        // 读不到 ANDROID_ID 时传空串，上报侧不下发该参数，不得因此拒发
+        assertEquals("", InstallStats.deviceKey(null))
+        assertEquals("", InstallStats.deviceKey(""))
+        assertEquals("", InstallStats.deviceKey("   "))
+    }
+
+    @Test
+    fun pingCarriesDeviceKeyAndSdk() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertTrue(reporter.ping("abcdef0123456789", "0.30.11+58", 10458, "0123456789abcdef", 28))
+        val url = transport.urls.single()
+        assertTrue(url, url.contains("a=0123456789abcdef"))
+        assertTrue(url, url.contains("s=28"))
+    }
+
+    @Test
+    fun pingWithoutOptionalFieldsKeepsOldShape() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertTrue(reporter.ping("abcdef0123456789", "0.28.0+50", 10250))
+        val url = transport.urls.single()
+        assertFalse(url, url.contains("a="))
+        assertFalse(url, url.contains("s="))
+    }
+
+    @Test
+    fun pingRejectsMalformedDeviceKey() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertFalse(reporter.ping("abcdef0123456789", "1.0", 1, "NOTHEX", 28))
+        assertFalse(reporter.ping("abcdef0123456789", "1.0", 1, "abc", 28))
+        assertTrue(transport.urls.isEmpty())
+    }
+
+    @Test
+    fun pingRejectsOutOfRangeSdk() {
+        val transport = FakeTransport(200)
+        val reporter = InstallStatsReporter("https://stats.example.com", transport)
+        assertFalse(reporter.ping("abcdef0123456789", "1.0", 1, "", 7))
+        assertFalse(reporter.ping("abcdef0123456789", "1.0", 1, "", 101))
+        assertTrue(transport.urls.isEmpty())
+    }
+
+    @Test
     fun serverErrorReturnsFalse() {
         val transport = FakeTransport(500)
         assertFalse(InstallStatsReporter("https://stats.example.com", transport).ping("abcdef0123", "1.0", 1))
