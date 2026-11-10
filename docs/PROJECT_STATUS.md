@@ -1,36 +1,37 @@
 # 项目现状
 
-更新日期：2026-09-21。
+更新日期：2026-11-10。
 
-## 已确认范围
+## 当前形态
 
-自家 Android 8.0 电视使用；React Native 优先，保留分平台构建与部署。首版采用电视客户端连接独立 Node 内容服务；Apple TV 保留工程骨架，其他平台尚未交付。
+- 客户端：`kotlin-tv/` —— **Kotlin + Android 原生 View + Media3** 的独立电视 APK，安装后联网直连内容站点。无自建服务端，无需 Node / Docker / 服务器地址。最低 Android 5.0（API 21），ARM32 / ARM64 / x86 / x86_64 通用。
+- 当前版本：`0.30.10`（versionCode = 10400 + CI 构建编号）。版本改动见 [更新日志](CHANGELOG.md)，构建与发布细则见 [kotlin-tv/README](../kotlin-tv/README.md) 与 [自动更新机制](../kotlin-tv/AUTO_UPDATES.md)。
+- 发版：手动触发 `.github/workflows/release.yml`，出双包——`-android8.apk`（minSdk 26，自动更新通道）与 `-android5.apk`（minSdk 21，Release 页手动安装）；Release 同步至 hongguoTV-updates 仓库。
+- 配套仓库：[hongguoTV](https://github.com/jycao2/hongguoTV)（本仓库，电视端）· [hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（手机遥控入口管理）· [hongguoTV-updates](https://github.com/jycao2/hongguoTV-updates)（版本更新、下载与 issue）。
 
-## 已实现
+## 主要能力（截至 0.30.10）
 
-- RN TV 0.81.5-2、React 19.1.0、react-native-video 6.19.3、TypeScript 工程与锁文件。
-- 推荐、搜索、分页、详情选集、播放器控制和自动连播。
-- 本地收藏、最近观看和按分集 ID 恢复进度。
-- 服务设置、进程连通检测、错误展示与一次播放重新解析。
-- 独立内容服务、媒体 Range / HEAD / 背压处理、可选口令、缓存清理。
-- 内容探测脚本、续播与 HTTP 行为测试、Android APK 构建脚本和 Docker 部署配置。
+浏览（首页接着看 / 收藏有更新 / 稍后看 / 热门发现、题材分类、热播榜、随机荐剧）、搜索（键盘/联想/结果三栏同屏、扫码输入）、播放（自动连播、跨季连播、跳片头片尾、倍速、清晰度、定时停止、鼠标手势）、手机遥控（扫码直连、一句话指令、指令集帮助页）、片源（三方 CMS 源、聚合搜索、换源播放、测速优选）、本地库（WebDAV / NAS）、弹幕（官方弹幕源、关键词屏蔽）、收藏（分组、更新检查、红果云端收藏）、账号（扫码登录 + 手机号验证码登录、云端观看记录/收藏同步）、本地备份与自动恢复、应用内自动更新（含国内镜像兜底）、网络代理（实验室功能）。
 
-## 已取得证据
+功能明细与隐私说明见根目录 [README](../README.md)。
 
-- 12 项自动化测试与 TypeScript 检查通过；APK 版本号 2，与首版同签名。
-- API 36 TV 模拟器中验证了 720p / 1080p、1.3 倍字体、第二页返回、末尾选集分组、单键暂停与长按快进释放。
-- 2026-09-21 首页实际返回 24 部剧。
-- 3 部测试剧的搜索均匹配目标 ID，分集数为 86、85、71；分集 ID 无重复。
-- 每部首、中、末集共 9 个媒体片段均返回 206，64 KiB 长度与 MP4 文件头符合预期。
-- 第一部首集前 10 秒通过 FFmpeg 解码。
-- GitHub Actions 的 Node 22 检查和测试、两份 Compose 配置校验、AMD64 / ARM64 镜像构建与容器启动检查通过。ARM64 使用 QEMU；具体部署见 [Docker 指南](DOCKER.md)。
+## 与 0.1.x React Native 方案的关系
 
-构建和模拟器的最终证据见 [首版交付说明](FIRST_RELEASE.md)，脱敏原始探测结果保存在 `outputs/probe.json`。
+项目最初（2026-09）采用 React Native TV 客户端 + 独立 Node 内容服务（Docker 部署，API v1 协议）。该方案已被 Kotlin 原生直连方案整体取代，RN 工程与 Node 服务源码均不在本仓库，相关交付文档已归并为 [0.1.x React Native 方案存档](LEGACY-RN-0.1x.md)。
 
-## 尚需验收
+## docs 文档索引
 
-- 用户实际 Android 8.0 电视的安装、硬件解码、遥控器、长时间连播和休眠恢复。
-- 自然过期的播放地址、网络中断恢复、长时间服务资源占用。
-- Apple TV / iOS / Web 的构建、交互与媒体兼容性；现有共享边界不等于这些平台已可用。
-
-平台请求签名和媒体处理仍依赖固定版本的第三方实现，成功记录只代表本次样本与时间点，不能保证后续平台兼容性。
+| 文档 | 内容 | 状态 |
+| --- | --- | --- |
+| [CHANGELOG.md](CHANGELOG.md) | 面向使用者的版本改动（0.28.0 基线起） | 随发版更新 |
+| [ACCOUNT_SYNC.md](ACCOUNT_SYNC.md) | 红果账号登录与云端同步 | 扫码/手机号登录、手动同步均已实现 |
+| [THIRD_SOURCES.md](THIRD_SOURCES.md) | 三方片源模块原始设计与二期规划 | 已实现（0.20.0 起），二期未做 |
+| [LOCAL_BACKUP_RESTORE.md](LOCAL_BACKUP_RESTORE.md) | 本地备份与自动恢复设计 | 已实现 |
+| [ALIYUN_DRIVE_BACKUP.md](ALIYUN_DRIVE_BACKUP.md) | 阿里云盘云备份方案 | 待评审，未实施 |
+| [MAINACTIVITY_SPLIT_PLAN.md](MAINACTIVITY_SPLIT_PLAN.md) | MainActivity 渐进式拆分计划 | 已评审，暂缓实施 |
+| [CARD_METRICS_FEASIBILITY.md](CARD_METRICS_FEASIBILITY.md) | 评分/收藏数展示可行性报告 | 方案 1 已实现，方案 2 否决 |
+| [SHORT_DRAMA_PLATFORM_RESEARCH.md](SHORT_DRAMA_PLATFORM_RESEARCH.md) | 接入其他短剧平台调研 | 调研结论仍有效 |
+| [voice-cheatsheet.md](voice-cheatsheet.md) | 语音指令速查表（脚本生成，勿手改） | 随词表重新生成 |
+| [xiaoai-voice.md](xiaoai-voice.md) | 巴法云语音链路搭建指南 | 可选自建链路，保留参考 |
+| [LEGACY-RN-0.1x.md](LEGACY-RN-0.1x.md) | 0.1.x React Native 方案存档 | 历史 |
+| handover/ | 会话交接文档 | 未跟踪入库与否待定 |
