@@ -17,7 +17,7 @@
 
 ## 与 0.1.x React Native 方案的关系
 
-项目最初（2026-09）采用 React Native TV 客户端 + 独立 Node 内容服务（Docker 部署，API v1 协议）。该方案已被 Kotlin 原生直连方案整体取代，RN 工程与 Node 服务源码均不在本仓库，相关交付文档已归并为 [0.1.x React Native 方案存档](LEGACY-RN-0.1x.md)。
+项目最初（2026-09）采用 React Native TV 客户端 + 独立 Node 内容服务（Docker 部署，API v1 协议），v0.1.0 / v0.1.1 发布于 N3urda/hongguoTV Releases。该方案已被 Kotlin 原生直连方案整体取代，RN 工程与 Node 服务源码均不在本仓库，相关交付文档已随方案废弃移除；如需追溯可参考当时 Release 附件中的源码包。
 
 ## docs 文档索引
 
@@ -33,5 +33,4 @@
 | [SHORT_DRAMA_PLATFORM_RESEARCH.md](SHORT_DRAMA_PLATFORM_RESEARCH.md) | 接入其他短剧平台调研 | 调研结论仍有效 |
 | [voice-cheatsheet.md](voice-cheatsheet.md) | 语音指令速查表（脚本生成，勿手改） | 随词表重新生成 |
 | [xiaoai-voice.md](xiaoai-voice.md) | 巴法云语音链路搭建指南 | 可选自建链路，保留参考 |
-| [LEGACY-RN-0.1x.md](LEGACY-RN-0.1x.md) | 0.1.x React Native 方案存档 | 历史 |
 | handover/ | 会话交接文档 | 未跟踪入库与否待定 |
