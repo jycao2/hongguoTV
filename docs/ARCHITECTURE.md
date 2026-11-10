@@ -66,7 +66,7 @@ react-native-video 的 v6 文档列出 Android ExoPlayer、iOS / tvOS AVPlayer �
 
 先确认首版平台闭环，再建设完整页面和其他平台构建。模拟器、接口 JSON 和测试视频的成功分别记录，不能代替目标电视上的真实内容验收。
 
-## TV 展示与输入边界（v0.1.1）
+## TV 展示与输入边界
 
 `src/ui/tv/TVGrid.tsx` 管理列表焦点、整行滚动与返回定位；`DetailTV.tsx` 管理详情和 20 集分组；`layout.ts` 提供逻辑尺寸安全边距与位置边界。`Player.tsx` 将视频主操作状态与更多操作面板分开，主状态的方向键直接跳转，面板内的方向键移动焦点。
 

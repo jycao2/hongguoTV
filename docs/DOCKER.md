@@ -4,7 +4,7 @@ Docker 运行独立内容服务，电视安装 APK 后连接它。目标为家�
 
 ## 使用源码或 Docker 部署包
 
-从 [v0.1.1 Release](https://github.com/N3urda/hongguoTV/releases/tag/v0.1.1) 下载 `hongguotv-0.1.1-docker.zip` 并解压，也可以克隆完整仓库。在解压后的根目录执行：
+克隆完整仓库。在仓库根目录执行：
 
 ```sh
 cp .env.example .env
@@ -20,14 +20,14 @@ docker compose --env-file .env -f server/compose.yaml ps
 BRIDGE_BIND_IP=0.0.0.0
 BRIDGE_PORT=8787
 BRIDGE_TOKEN=
-HONGGUOTV_VERSION=0.1.1
+HONGGUOTV_VERSION=latest
 ```
 
 `BRIDGE_TOKEN` 留空表示不启用口令，填入值后电视端也应填写相同口令；不要提交实际 `.env`。`BRIDGE_BIND_IP` 控制宿主机监听网卡，默认开放宿主机各网卡；可填宿主机家庭网络地址。`BRIDGE_PORT` 是电视访问的宿主机端口，容器内始终为 8787。`HONGGUOTV_VERSION` 仅供下面的预构建镜像模式使用。
 
 ## 使用 GitHub 预构建镜像
 
-镜像地址：`ghcr.io/jycao2/hongguotv-bridge:0.1.1`，同时提供 `latest`。根目录的 `compose.yaml` 默认固定到 `0.1.1`，Docker 根据宿主机架构选择镜像。
+镜像地址：`ghcr.io/jycao2/hongguotv-bridge`，默认使用 `latest` 标签，Docker 根据宿主机架构选择镜像。
 
 当前仓库与容器包按私有访问使用，需要有包读取权限的 GitHub 账号先登录 GHCR。可使用 classic PAT 的 `read:packages` 权限；通过 Docker 的交互式密码提示输入，不要把令牌写入命令历史或 Compose 文件：
 
@@ -59,7 +59,7 @@ docker compose -f server/compose.yaml logs --tail=100
 
 `.github/workflows/verify-publish.yml` 在代码推送和 PR 时执行 TypeScript 检查、自动化测试、Compose 配置校验，以及 AMD64 / ARM64 镜像构建与启动检查。ARM64 启动检查使用 QEMU。检查包含非 root 运行、只读文件系统、宿主机映射端口、带口令健康检查，以及未认证请求被拒绝。
 
-推送稳定版本标签（如 `v0.1.1`）时，所有检查通过后发布对应版本和 `latest` 标签到 GHCR。第三方 Actions 固定提交 SHA，认证使用 GitHub 提供的临时 `GITHUB_TOKEN`，不在仓库内存储发布令牌。
+推送稳定版本标签时，所有检查通过后发布对应版本和 `latest` 标签到 GHCR。第三方 Actions 固定提交 SHA，认证使用 GitHub 提供的临时 `GITHUB_TOKEN`，不在仓库内存储发布令牌。
 
 当前执行结果见 [GitHub Actions](https://github.com/N3urda/hongguoTV/actions/workflows/verify-publish.yml)。容器启动检查与媒体接口、电视播放分别验收，不能相互替代。
 
