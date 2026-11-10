@@ -550,8 +550,8 @@ class MainActivity: Activity() {
             // 账号事件只在云端数据实际变化时才重建列表页：读取过程的每条状态文本
             // （正在读取/已读取 N 部/读取失败）都会触发 changed()，若全部重建，
             // 用户在最近观看/收藏页往下滚的几秒内会被整页弹回顶部 2~3 次（issue #19.2）。
-            // 签名=登录态+云端记录数+云端收藏数；数据到达/清空时才变化。
-            val sig=if(accountManager.signedIn) 1+accountManager.cloudRows().size*1000+accountManager.cloudFavoriteRows().size else 0
+            // 签名=登录态+云端记录数+云端收藏数+上新计数；数据到达/清空/上新角标变化时才变化。
+            val sig=if(accountManager.signedIn) 1+accountManager.cloudRows().size+accountManager.cloudFavoriteRows().size*1000+(library.updatedCloudFavorites()+library.cloudNewCount())*1000000 else 0
             if(sig!=lastCloudSig) {
                 lastCloudSig=sig
                 // isLoaded 必须查：recreate()（换主题/缩放）会新建 AccountManager 并可能立刻回调，
@@ -1551,7 +1551,9 @@ class MainActivity: Activity() {
             adapter.cloudFavStart=localCount
             adapter.headers=buildMap {
                 if(localCount>0) put(0,"本机收藏")
-                put(localCount+if(localCount>0) 1 else 0,"云端收藏")
+                // 云端区标题聚合上新计数：进来一眼看到有多少部更新
+                val cloudUpdates=library.updatedCloudFavorites()+library.cloudNewCount()
+                put(localCount+if(localCount>0) 1 else 0,"云端收藏"+if(cloudUpdates>0) " · $cloudUpdates 部有更新" else "")
             }
         }
         val grid=GridLayoutManager(this,cols)
@@ -1805,7 +1807,17 @@ class MainActivity: Activity() {
             }
         })
     }
-    private inner class CardHolder(val card: LinearLayout,val artwork: FrameLayout,val image: ImageView,val rank: TextView,val title: TextView,val badge: TextView): RecyclerView.ViewHolder(card) {
+    /** 从新季标题提取季数（《xxx 2》/ 第2季 / 第二季）；提取不出返回 null，角标退化为「新季已上线」。 */
+    private fun seasonNumberOf(title: String?): Int? {
+        if(title.isNullOrBlank()) return null
+        Regex("第\\s*([0-9]+)\\s*季").find(title)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("第\\s*([一二三四五六七八九])\\s*季").find(title)?.groupValues?.get(1)?.let { return "一二三四五六七八九".indexOf(it)+1 }
+        if(Regex("第\\s*十\\s*季").containsMatchIn(title)) return 10
+        Regex("(\\d+)\\s*$").find(title)?.groupValues?.get(1)?.toIntOrNull()?.let { return if(it in 2..99) it else null }
+        return null
+    }
+
+    private inner class CardHolder(val card: LinearLayout,val artwork: FrameLayout,val image: ImageView,val rank: TextView,val title: TextView,val badge: TextView,val updateTag: TextView): RecyclerView.ViewHolder(card) {
         var boundId=""
     }
     private inner class CatalogAdapter(val displayed: MutableList<Series>,val cols: Int): RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -1865,6 +1877,9 @@ class MainActivity: Activity() {
             artwork.addView(image,FrameLayout.LayoutParams(-1,-1))
             val rank=TextView(this@MainActivity).apply { textSize=11f; setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(4),dp(8),dp(4)) }
             artwork.addView(rank,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
+            // 云端收藏上新角标（已更新 N 集 / 第 X 季已上线 / 新收藏）：挂在海报右上角
+            val updateTag=TextView(this@MainActivity).apply { textSize=11f; setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(4),dp(8),dp(4)); visibility=View.GONE }
+            artwork.addView(updateTag,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END))
             // 部分机型单行/两行标题实测行高不一致，minLines 保底失效；用换行探针实测两行高度并固定，热度/集数标签才能对齐
             val title=text("测\n测",14f).apply { gravity=Gravity.TOP; includeFontPadding=true; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
             title.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
@@ -1874,7 +1889,7 @@ class MainActivity: Activity() {
             card.addView(title,lp(-1,titleHeight))
             card.addView(badge,lp(-1,-2))
             card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
-            return CardHolder(card,artwork,image,rank,title,badge)
+            return CardHolder(card,artwork,image,rank,title,badge,updateTag)
         }
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
             if(getItemViewType(position)==TYPE_HEADER) { (holder.itemView as TextView).text=headers[position]; return }
@@ -1885,6 +1900,24 @@ class MainActivity: Activity() {
             val cloudRow=if(di>=cloudStart) cloudRows.getOrNull(di-cloudStart) else null
             val cloudFav=if(di>=cloudFavStart) cloudFavs.getOrNull(di-cloudFavStart) else null
             val cloudFavProgress=if(cloudFav!=null) accountManager.cloudRows().firstOrNull { it.series.id==item.id } else null
+            // 云端收藏上新状态：加更琥珀、新季/新收藏红；角标挂海报右上，副标题行同步提示
+            val cloudFavUpdate=cloudFav?.let { library.cloudUpdate(it.series.id) }
+            val cloudFavAdded=cloudFavUpdate?.added ?: 0
+            val cloudFavNew=cloudFav!=null && library.isCloudNew(item.id)
+            val cloudFavSeason=cloudFavUpdate?.takeIf { it.hasNewSeason }
+            val cloudFavTag=when {
+                cloudFav==null -> null
+                cloudFavSeason!=null -> seasonNumberOf(cloudFavSeason.newSeasonTitle)?.let { "第$it 季已上线" } ?: "新季已上线"
+                cloudFavAdded>0 -> "已更新 $cloudFavAdded 集"
+                cloudFavNew -> "新收藏"
+                else -> null
+            }
+            val cloudFavSuffix=when {
+                cloudFavSeason!=null -> "《${cloudFavSeason.newSeasonTitle ?: "新季"}》已上线"
+                cloudFavAdded>0 -> "+$cloudFavAdded 集更新"
+                cloudFavNew -> "新收藏"
+                else -> ""
+            }
             if(di==0) resultFirstCard=holder.card
             val card=holder.card
             card.tag=item.id; card.contentDescription=item.title
@@ -1914,11 +1947,19 @@ class MainActivity: Activity() {
                 holder.rank.visibility=View.VISIBLE
                 card.contentDescription=if(cloudRow!=null) "云端记录，${item.title}，第 ${cloudRow.episodeIndex+1} 集" else "云端收藏，${item.title}"
             } else holder.rank.visibility=View.GONE
+            if(cloudFavTag!=null) {
+                val urgent=cloudFavSeason!=null || cloudFavNew
+                holder.updateTag.text=cloudFavTag
+                holder.updateTag.setTextColor(if(urgent) Color.rgb(121,31,31) else Color.rgb(99,56,6))
+                holder.updateTag.background=rounded(if(urgent) Color.rgb(247,193,193) else Color.rgb(250,222,166),6)
+                holder.updateTag.visibility=View.VISIBLE
+                card.contentDescription="$cloudFavTag，${card.contentDescription}"
+            } else holder.updateTag.visibility=View.GONE
             holder.title.text=item.title
             val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
             // 收藏管理模式：角标前缀 ✓ 表示已勾选，确认键只切换勾选不进详情
             val managePicked=tab==3 && favoriteManage && item.id in favoriteSelected
-            holder.badge.text=if(cloudRow!=null) "第 ${cloudRow.episodeIndex+1} 集 · ${formatTime(cloudRow.position)} · 云端" else if(cloudFav!=null) (if(cloudFavProgress!=null) "第 ${cloudFavProgress.episodeIndex+1} 集 · ${formatTime(cloudFavProgress.position)} · " else "")+"云端" else if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.text=if(cloudRow!=null) "第 ${cloudRow.episodeIndex+1} 集 · ${formatTime(cloudRow.position)} · 云端" else if(cloudFav!=null) (if(cloudFavProgress!=null) "第 ${cloudFavProgress.episodeIndex+1} 集 · ${formatTime(cloudFavProgress.position)} · " else "")+"云端"+if(cloudFavSuffix.isEmpty()) "" else " · $cloudFavSuffix" else if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
             holder.badge.setTextColor(if(managePicked) gold else if(ranked || tab==3) accent else muted)
             if(tab==3 && !favoriteManage) favoriteBadges[item.id]=holder.badge
             card.setOnClickListener {
@@ -1926,7 +1967,12 @@ class MainActivity: Activity() {
                 if(tab==3 && favoriteManage) {
                     if(!favoriteSelected.remove(item.id)) favoriteSelected+=item.id
                     catalogAdapter?.notifyItemChanged(position); refreshFavoriteManageBar()
-                } else if(cloudRow!=null) openDetail(item,true,cloud=cloudRow) else if(cloudFav!=null) openDetail(item,cloudFavProgress!=null,cloud=cloudFavProgress) else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
+                } else if(cloudRow!=null) openDetail(item,true,cloud=cloudRow) else if(cloudFav!=null) {
+                    // 点进详情即视为看过：重置上新基线、清掉角标与「新收藏」标记
+                    library.acknowledgeCloudFavorite(item.id, CloudAccountClient.episodeTotal(item.badge), System.currentTimeMillis())
+                    catalogAdapter?.notifyItemChanged(position)
+                    openDetail(item,cloudFavProgress!=null,cloud=cloudFavProgress)
+                } else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
             }
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
             card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
@@ -5152,7 +5198,7 @@ class MainActivity: Activity() {
                 true
             }
             // 主动查一次收藏更新：有新集时收藏页角标会亮，语音查完去收藏页就能看到
-            "favorite.check" -> { favoriteMonitor.check(); voiceSay("正在检查收藏更新"); true }
+            "favorite.check" -> { favoriteMonitor.check(); if(accountManager.signedIn) accountManager.refreshFavorites(); voiceSay("正在检查收藏更新"); true }
             "update.check" -> { updater.checkNow(anchor); true }
             "check.interface" -> { showInterfaceCheck(anchor); true }
             "cache.clear" -> {

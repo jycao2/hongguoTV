@@ -116,6 +116,8 @@ class Library(context: Context) {
                 "later" -> state.later().let { rows -> { LibraryDisk.series(rows) } }
                 "progress" -> state.history().let { rows -> { LibraryDisk.history(rows) } }
                 "favoriteUpdates" -> state.updates().let { rows -> { LibraryDisk.updates(rows) } }
+                "cloudUpdates" -> state.cloudUpdates().let { rows -> { LibraryDisk.updates(rows) } }
+                "cloudNewIds" -> state.cloudNewIds().let { ids -> { ids } }
                 "favoriteGroups" -> state.groupsSnapshot().let { rows -> { LibraryDisk.groups(rows) } }
                 "searches" -> state.searches().let { rows -> { SearchHistory.encode(rows) } }
                 "watched" -> state.watched().let { ids -> { ids } }
@@ -160,6 +162,18 @@ class Library(context: Context) {
     fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean = false, newSeason: Series? = null) {
         if (state().observeFavorite(id, count, now, acknowledge, newSeason)) persist("favoriteUpdates")
     }
+    // ---- 云端收藏上新基线：与红果书架对账的本机状态，不进备份 ----
+    fun cloudUpdate(id: String) = state().cloudUpdate(id)
+    fun cloudBaselineCount() = state().cloudBaselineCount()
+    fun updatedCloudFavorites() = state().updatedCloudFavorites()
+    fun cloudNewCount() = state().cloudNewCount()
+    fun isCloudNew(id: String) = state().isCloudNew(id)
+    fun observeCloudFavorite(id: String, count: Int, now: Long, markNew: Boolean = false, newSeason: Series? = null): Boolean =
+        state().observeCloudFavorite(id, count, now, markNew, newSeason).also { if (it) persist("cloudUpdates", "cloudNewIds") }
+    fun acknowledgeCloudFavorite(id: String, count: Int, now: Long): Boolean =
+        state().acknowledgeCloudFavorite(id, count, now).also { if (it) persist("cloudUpdates", "cloudNewIds") }
+    fun pruneCloudFavorites(keepIds: Set<String>): Boolean =
+        state().pruneCloudFavorites(keepIds).also { if (it) persist("cloudUpdates", "cloudNewIds") }
     fun cachedHome(type: ContentType): CatalogPage? {
         state()
         val age = System.currentTimeMillis() - (homeSavedAt[type] ?: return null)
@@ -262,7 +276,8 @@ class Library(context: Context) {
 
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
-        index = LibraryIndex(merged, state().updates())
+        // 云端收藏基线是设备与红果书架之间的对账状态：恢复备份不改变它，原样带过
+        index = LibraryIndex(merged, state().updates(), state().cloudUpdates(), state().cloudNewIds())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
         // 三方源、观看历史与收藏各自合并：任一侧异常都只跳过该段，不影响其余记录恢复
         if(incoming.thirdSources.isNotEmpty()) runCatching { thirdSourcesRestore?.invoke(incoming.thirdSources) }

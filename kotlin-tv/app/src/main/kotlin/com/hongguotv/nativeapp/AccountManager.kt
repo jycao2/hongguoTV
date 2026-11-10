@@ -97,6 +97,12 @@ class AccountManager(private val context: Context, private val library: Library)
             .build()
     private val client = CloudAccountClient(http)
     private val store = AccountStore(context)
+    /** 换季嫌疑剧的详情补查：只对集数回退的收藏逐部拉详情确认 newerSeasons，1.5 秒一部的节奏。 */
+    private val seasonRepository = ContentRepository(http)
+    private val seasonScope = RequestScope()
+    private val checkWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "hongguotv-cloud-check") }
+    private val seasonChecks = ArrayDeque<Pair<String, Int>>()
+    @Volatile private var seasonChecking = false
     @Volatile private var generation = 0
     @Volatile private var closed = false
     private var credentials: AccountCredentials? = null
@@ -231,14 +237,65 @@ class AccountManager(private val context: Context, private val library: Library)
                     .onSuccess { rows ->
                         cloudFavorites = rows
                         favoritesLoaded = true
-                        status = "已读取 ${cloudFavorites.size} 部云端收藏"
+                        val suspects = reconcileCloudFavorites(rows)
+                        val updates = library.updatedCloudFavorites() + library.cloudNewCount()
+                        status = "已读取 ${cloudFavorites.size} 部云端收藏" + if (updates > 0) "，$updates 部有更新" else ""
                         changed()
+                        scheduleSeasonChecks(suspects)
                     }
                     .onFailure { error ->
                         status = "云端收藏读取失败：${safeError(error)}"
                         changed()
                     }
                 onDone?.invoke()
+            }
+        }
+    }
+
+    /**
+     * 云端收藏上新对账：书架响应自带每剧当前集数，与本地基线 diff 即可，0 额外请求。
+     * 集数变大 → 「已更新 N 集」；书架新条目 → 「新收藏」；集数回退（疑似换季重置）
+     * 不直接计加更，返回给调用方补查详情确认新季。基线只存本机，不进备份。
+     */
+    private fun reconcileCloudFavorites(rows: List<CloudFavorite>): List<Pair<String, Int>> {
+        if (!library.isLoaded) return emptyList()
+        val now = System.currentTimeMillis()
+        val suspects = mutableListOf<Pair<String, Int>>()
+        // 首次建立基线时全部静默：之后书架新出现的条目才值得标「新收藏」
+        val baselineExisted = library.cloudBaselineCount() > 0
+        for (row in rows) {
+            val count = CloudAccountClient.episodeTotal(row.series.badge)
+            if (count <= 0) continue
+            val known = library.cloudUpdate(row.series.id)
+            if (known != null && count < known.total) { suspects += row.series.id to count; continue }
+            library.observeCloudFavorite(row.series.id, count, now, markNew = baselineExisted && known == null)
+        }
+        library.pruneCloudFavorites(rows.mapTo(HashSet()) { it.series.id })
+        return suspects
+    }
+
+    /** 换季嫌疑逐部补查详情：查到 newerSeasons 才挂「第 X 季已上线」，查不到就静默换基线。 */
+    private fun scheduleSeasonChecks(suspects: List<Pair<String, Int>>) {
+        if (suspects.isEmpty() || closed) return
+        seasonChecks.addAll(suspects)
+        if (!seasonChecking) processSeasonChecks()
+    }
+
+    private fun processSeasonChecks() {
+        val next = seasonChecks.removeFirstOrNull()
+        if (next == null || closed) { seasonChecking = false; return }
+        seasonChecking = true
+        val token = generation
+        checkWorker.execute {
+            val result = runCatching { seasonScope.run { seasonRepository.detail(next.first) } }
+            main.post {
+                if (closed || token != generation) { seasonChecking = false; return@post }
+                result.onSuccess { detail ->
+                    val season = detail.newerSeasons.lastOrNull()
+                    library.observeCloudFavorite(next.first, next.second, System.currentTimeMillis(), newSeason = season)
+                    changed()
+                }
+                main.postDelayed({ processSeasonChecks() }, 1_500L)
             }
         }
     }
@@ -278,6 +335,7 @@ class AccountManager(private val context: Context, private val library: Library)
                 reread?.onSuccess { rows ->
                     cloudFavorites = rows
                     favoritesLoaded = true
+                    reconcileCloudFavorites(rows)
                 }
                 status = if (failed > 0) "收藏同步完成：上传 $pushed 部，失败 $failed 部"
                 else "收藏同步完成：上传 $pushed 部，跳过 $skipped 部"
@@ -733,6 +791,7 @@ class AccountManager(private val context: Context, private val library: Library)
         onAccountChanged = null
         closed = true
         generation++
+        seasonChecks.clear()
         http.dispatcher.cancelAll()
         worker.execute {
             http.connectionPool.evictAll()

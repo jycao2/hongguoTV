@@ -5,7 +5,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Main-thread-owned library. JSON is parsed once, and getters never parse or sort. */
-class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = emptyMap()) {
+class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = emptyMap(),
+                   cloudUpdates: Map<String, FavoriteUpdate> = emptyMap(), cloudNewIds: Set<String> = emptySet()) {
     private var favoriteRows = data.favorites.distinctBy { it.id }.take(500)
     private var favoriteIds = favoriteRows.map { it.id }.toSet()
     private var laterRows = data.later.distinctBy { it.id }.take(100)
@@ -17,6 +18,10 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
     private var searchRows = data.searches.take(20)
     private var updateRows = updates.filterKeys { it in favoriteIds }
     private var updateCount = updateRows.values.count { it.added > 0 }
+    /** 云端收藏的更新基线：与红果书架对账用的本机状态，独立于本机收藏、不进备份。 */
+    private var cloudUpdateRows = cloudUpdates.entries.take(500).associate { it.key to it.value }.toMutableMap()
+    /** 云端书架里上次检查后新出现的条目，展示「新收藏」角标，点进详情后移除。 */
+    private var cloudNewIds = cloudNewIds.take(500).toMutableSet()
     private var groupById = data.favoriteGroups.filterKeys { it in favoriteIds }
     var settings = data.settings
 
@@ -33,6 +38,13 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
     fun updates() = updateRows
     fun favoriteUpdate(id: String) = updateRows[id]
     fun updatedFavorites() = updateCount
+    fun cloudUpdate(id: String) = cloudUpdateRows[id]
+    fun cloudUpdates() = cloudUpdateRows.toMap()
+    fun cloudBaselineCount() = cloudUpdateRows.size
+    fun updatedCloudFavorites() = cloudUpdateRows.values.count { it.hasUpdate }
+    fun isCloudNew(id: String) = id in cloudNewIds
+    fun cloudNewCount() = cloudNewIds.size
+    fun cloudNewIds() = cloudNewIds.toSet()
     fun groups() = favoriteRows.mapNotNull { groupById[it.id] }.distinct()
     fun groupOf(id: String) = groupById[id]
     fun groupsSnapshot() = groupById.toMap()
@@ -99,6 +111,58 @@ class LibraryIndex(data: BackupData, updates: Map<String, FavoriteUpdate> = empt
         updateCount += (if (next.hasUpdate) 1 else 0) - (if (previous?.hasUpdate == true) 1 else 0)
         return true
     }
+
+    /**
+     * 云端收藏基线：count 来自云端书架自带的集数。
+     * 首次记录（无基线）默认静默；调用方明确 markNew（此前已有基线、本次书架新出现的条目）才记「新收藏」；
+     * 集数变小（疑似换季）不直接计入加更，由调用方补查详情后经 newSeason 传入。
+     */
+    fun observeCloudFavorite(id: String, count: Int, now: Long, markNew: Boolean = false, newSeason: Series? = null): Boolean {
+        if (count <= 0) return false
+        val previous = cloudUpdateRows[id]
+        if (previous == null) {
+            cloudUpdateRows[id] = FavoriteUpdate.first(count, now)
+            if (markNew) cloudNewIds += id
+            return true
+        }
+        // 集数回退可能是换季重置：保留旧基线，只接受新季标记或显式确认
+        if (count < previous.total) {
+            val next = previous.observeNewSeason(newSeason?.id, newSeason?.title, now)
+            if (next == previous) return false
+            cloudUpdateRows[id] = next
+            return true
+        }
+        var next = previous.observe(count, now)
+        next = next.observeNewSeason(newSeason?.id, newSeason?.title, now)
+        if (next == previous) return false
+        cloudUpdateRows[id] = next
+        return true
+    }
+
+    /** 用户点进云端收藏详情：以当前云端集数重置基线，同时清掉「新收藏」与更新角标。无功能变化返回 false。 */
+    fun acknowledgeCloudFavorite(id: String, count: Int, now: Long): Boolean {
+        val hadNew = cloudNewIds.remove(id)
+        val current = cloudUpdateRows[id] ?: return hadNew
+        val next = when {
+            count > 0 && count >= current.total -> current.observe(count, now, acknowledge = true)
+            else -> current.observe(current.total, now, acknowledge = true)
+        }
+        if (next == current) return hadNew
+        // checkedAt 变化不算功能变化：重复确认不产生写盘，只有基线/角标真正变了才记录
+        val functional = next.total != current.total || next.added != current.added || next.hasNewSeason != current.hasNewSeason
+        if (!functional) return hadNew
+        cloudUpdateRows[id] = next
+        return true
+    }
+
+    /** 书架里已不存在的收藏（用户在手机端取消了）连带清掉基线与新标记。 */
+    fun pruneCloudFavorites(keepIds: Set<String>): Boolean {
+        val stale = cloudUpdateRows.keys - keepIds
+        val before = cloudNewIds.size
+        cloudNewIds.retainAll(keepIds)
+        if (stale.isNotEmpty()) cloudUpdateRows.keys.removeAll(stale)
+        return stale.isNotEmpty() || cloudNewIds.size != before
+    }
     fun snapshot(thirdSources: List<BackupThirdSource> = emptyList(),
                  thirdHistory: List<BackupThirdHistory> = emptyList(),
                  thirdFavorites: List<BackupThirdFavorite> = emptyList()) = BackupData(favoriteRows, historyRows, watchedIds, searchRows, settings, laterRows, hiddenIds, groupById, thirdSources, thirdHistory, thirdFavorites)
@@ -122,6 +186,10 @@ object LibraryDisk {
         }
         val rawUpdates = runCatching { JSONObject(values["favoriteUpdates"] as? String ?: "{}") }.getOrDefault(JSONObject())
         val updates = rawUpdates.keys().asSequence().mapNotNull { id -> FavoriteUpdate.decode(rawUpdates.optJSONObject(id))?.let { id to it } }.toMap()
+        // 云端收藏上新基线与书架新条目标记：只在本机与红果书架之间对账，不进备份
+        val rawCloud = runCatching { JSONObject(values["cloudUpdates"] as? String ?: "{}") }.getOrDefault(JSONObject())
+        val cloudUpdates = rawCloud.keys().asSequence().mapNotNull { id -> FavoriteUpdate.decode(rawCloud.optJSONObject(id))?.let { id to it } }.toMap()
+        val cloudNewIds = (values["cloudNewIds"] as? Set<*>)?.filterIsInstance<String>()?.toSet().orEmpty()
         // 导航模块显隐单独存放在 navHidden.<key>，随备份一起迁移；本地库默认隐藏（显式置 false 才显示）
         val navHidden = LibraryBackup.NAV_KEYS.filter { key ->
             if(key=="nas") values["navHidden.$key"] as? Boolean != false else values["navHidden.$key"] as? Boolean == true
@@ -139,7 +207,7 @@ object LibraryDisk {
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }
         return LibraryIndex(BackupData(series("favorites"), history, ids("watched"),
-            SearchHistory.decode(values["searches"] as? String ?: "[]"), settings, series("later"), ids("hidden"), groupMap), updates)
+            SearchHistory.decode(values["searches"] as? String ?: "[]"), settings, series("later"), ids("hidden"), groupMap), updates, cloudUpdates, cloudNewIds)
     }
     fun series(rows: List<Series>) = JSONArray(rows.map { it.toJson() }).toString()
     fun history(rows: List<BackupProgress>) = JSONArray(rows.map { p ->

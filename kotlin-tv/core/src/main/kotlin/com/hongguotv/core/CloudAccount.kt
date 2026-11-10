@@ -316,8 +316,8 @@ class CloudAccountClient(private val http: OkHttpClient) {
     }
 
     companion object {
-        /** badge（如「全 50 集」「更新至 12 集」）里的总集数，无法解析时按 0 处理。 */
-        private fun episodeTotal(badge: String) =
+        /** badge（如「全 50 集」「更新至 12 集」）里的总集数，无法解析时按 0 处理；App 层云端上新 diff 也用它。 */
+        fun episodeTotal(badge: String) =
             Regex("\\d+").findAll(badge).lastOrNull()?.value?.toIntOrNull() ?: 0
 
         private fun episodeBadge(row: JSONObject): String {
