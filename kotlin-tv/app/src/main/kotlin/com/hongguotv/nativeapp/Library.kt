@@ -235,7 +235,7 @@ class Library(context: Context) {
     var newReleaseWindow: String
         get() = prefs.getString("newReleaseWindow", null).orEmpty()
         set(value) { prefs.edit().putString("newReleaseWindow", value).apply() }
-    /** 左下角实时网速悬浮条：设备总收发速率，设置页或语音开关，默认关闭。本机显示偏好，不进备份。 */
+    /** 右上角实时网速悬浮条：设备总收发速率，设置页或语音开关，默认关闭。本机显示偏好，不进备份。 */
     var netSpeed: Boolean
         get() = prefs.getBoolean("netSpeed", false)
         set(value) { prefs.edit().putBoolean("netSpeed", value).apply() }

@@ -152,7 +152,7 @@
 | `theme.toggle` | 切换深/浅主题 |
 | `theme.set` | 指定主题：arg = dark \| light |
 | `clock.toggle` | 顶栏系统时间 |
-| `netspeed.toggle` | 左下角实时网速悬浮条（切换） |
+| `netspeed.toggle` | 右上角实时网速悬浮条（切换） |
 | `netspeed.set` | 显式开 / 关网速：arg = on \| off |
 | `backdrop.reset` | 恢复默认背景 |
 | `backdrop.set` | 最近一张快传图片设为电视背景 |

@@ -139,7 +139,7 @@ class MainActivity: Activity() {
     private var libraryLoadError: Throwable?=null
     private var localPermissionContinuation: (() -> Unit)?=null
     private var clockView: TextView?=null
-    /** 左下角实时网速悬浮条（设置/语音开关，默认关闭）：随每次 root 重建重新挂载。 */
+    /** 右上角实时网速悬浮条（设置/语音开关，默认关闭）：随每次 root 重建重新挂载，所有界面常显。 */
     private var netSpeedView: TextView?=null
     private var netSpeedTick: Runnable?=null
     private var lastRxBytes=-1L
@@ -754,9 +754,9 @@ class MainActivity: Activity() {
         tick.run()
     }
     /**
-     * 左下角实时网速悬浮条：显示设备总收发速率（↓ 下行 / ↑ 上行），
-     * 设置页「外观与界面」或语音开关，默认关闭。挂在每次 root 重建之后。
-     * 播放页底部是 HUD，悬浮条让位不显示（show=false），退出播放自动恢复。
+     * 右上角实时网速悬浮条：显示设备总收发速率（↓ 下行 / ↑ 上行），
+     * 设置页「外观与界面」或语音开关，默认关闭。挂在每次 root 重建之后（含播放页），
+     * 位置在 beta 标记与时钟之下避让，所有界面常显。
      */
     private fun applyNetSpeedOverlay(show: Boolean=library.netSpeed) {
         netSpeedTick?.let(main::removeCallbacks); netSpeedTick=null
@@ -768,7 +768,9 @@ class MainActivity: Activity() {
                 setPadding(dp(12),dp(5),dp(12),dp(5))
                 background=rounded(TvStyle.surface,TvStyle.outline)
             }
-            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.START).apply { leftMargin=dp(16); bottomMargin=dp(14) })
+            // 右上角纵向避让：本地包 beta 在 dp(10)、时钟在 dp(30)，时钟行高约 dp(26)
+            val top=(!BuildConfig.VERSION_NAME.contains('+')).let { if(it) dp(10) else dp(30) } + if(clockView!=null) dp(26) else 0
+            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=top; rightMargin=dp(14) })
             netSpeedView=view
         }
         val tick=object: Runnable {
@@ -3458,7 +3460,7 @@ class MainActivity: Activity() {
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         applyClock()
-        applyNetSpeedOverlay(show=false)
+        applyNetSpeedOverlay()
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; recoverySpinner?.visibility=View.GONE; transportPlay=null; sleepButton=null
@@ -5286,8 +5288,8 @@ class MainActivity: Activity() {
             }
             "netspeed.toggle" -> {
                 library.netSpeed=!library.netSpeed
-                // 播放页底部是 HUD，让位不显示；只记住开关，退出播放后自动恢复
-                applyNetSpeedOverlay(show=library.netSpeed && screen!="player")
+                // 所有界面常显（含播放页），挂在 root 上随页面重建自动恢复
+                applyNetSpeedOverlay(show=library.netSpeed)
                 voiceSay(if(library.netSpeed) "网速显示已打开" else "网速显示已关闭")
                 true
             }
@@ -5296,7 +5298,7 @@ class MainActivity: Activity() {
                 val on=cmd.arg=="on"
                 if(library.netSpeed==on) { voiceSay(if(on) "网速显示本来就是开着的" else "网速显示本来就是关着的"); return true }
                 library.netSpeed=on
-                applyNetSpeedOverlay(show=on && screen!="player")
+                applyNetSpeedOverlay(show=on)
                 voiceSay(if(on) "网速显示已打开" else "网速显示已关闭")
                 true
             }
