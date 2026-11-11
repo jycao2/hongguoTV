@@ -635,6 +635,19 @@ class TvTools(private val activity: Activity) {
         }
     }
     /** 已收文件列表：查看历史上传、按类型筛选、单条删除；确认键执行各类型的主操作。 */
+    /**
+     * 语音 / 遥控入口：取最近一个快传文件（kind 为 null 时不挑类型），回调在主线程。
+     * 「预览快传文件」「设为电视背景」都走这里，和文件列表共用同一套排序与保留策略。
+     */
+    fun recentQuickFile(kind: TransferKind?,onResult: (ReceivedFile?)->Unit) {
+        val directories=quickDirectories()
+        worker.execute {
+            val found=runCatching { TransferFiles.prune(directories); TransferFiles.list(directories) }
+                .getOrNull()?.firstOrNull { kind==null || it.kind==kind }
+            main.post { onResult(found) }
+        }
+    }
+
     fun quickFiles(anchor: View?,onPrimary: (File,TransferKind)->Unit,onTransfer: ()->Unit,onClose: ()->Unit={}) {
         val content=column(); content.addView(TvDialog.title(activity,"快传文件"))
         val status=label("正在读取…"); content.addView(status)

@@ -69,12 +69,13 @@ SECTIONS = [
     ('三、播放控制', ['play.toggle', 'play.next', 'play.prev', 'play.replay', 'player.close',
                       'panel.episodes', 'skip.intro']),
     ('四、音量', ['volume.up', 'volume.down', 'volume.mute']),
-    ('五、外观与弹窗', ['theme.toggle', 'theme.set', 'clock.toggle', 'netspeed.toggle', 'backdrop.reset', 'dialog.close']),
+    ('五、外观与弹窗', ['theme.toggle', 'theme.set', 'clock.toggle', 'netspeed.toggle', 'netspeed.set',
+                        'backdrop.reset', 'backdrop.set', 'dialog.close', 'dialog.confirm']),
     ('六、播放偏好', ['autonext.toggle', 'autoseason.toggle', 'danmaku.toggle', 'autoskip.toggle']),
     ('七、观看与收藏', ['resume.latest', 'favorite.toggle']),
     ('八、内容库与随机推荐', ['type.set', 'random.pick']),
     ('九、工具与弹窗', ['update.check', 'check.interface', 'cache.clear', 'stats.show', 'backup.show',
-                        'quick.send', 'transfer.refresh', 'transfer.files', 'transfer.clear',
+                        'quick.send', 'transfer.refresh', 'transfer.files', 'transfer.preview', 'transfer.clear',
                         'history.clear', 'remote.address', 'xiaoai.show', 'account.show',
                         'hidden.restore']),
 ]
@@ -191,10 +192,12 @@ w('- 认不出任何动作就退化成「当剧名搜」；搜不到只提示，
 w('')
 w('## 附录 D：新增一条指令')
 w('')
-w('1. `core/LanRemote.kt` 的 `REMOTE_ACTIONS` 登记键。')
-w('2. `app/MainActivity.kt` 的 `remoteAct` 加分支：成功返回 `true`，并给一句回执。')
-w('3. `core/VoiceIntent.kt` 的 `RULES` 加说法（长词写前面）。')
-w('4. 重新生成本文档，补一条单测。')
+w('1. `core/LanRemote.kt` 的 `REMOTE_ACTIONS` 登记键；带 `arg` 的顺手在 `RemoteProtocol.parse` 加值校验。')
+w('2. `core/VoiceIntent.kt` 的 `RULES` 加说法（长词写前面，别名最短三个字，防剧名误触）。')
+w('3. `app/MainActivity.kt` 的 `remoteAct` 加分支：成功返回 `true`，并给一句回执。')
+w('4. `core/src/main/resources/remote.html` 的 `CMD_GROUPS` 同步帮助抽屉里的说法。')
+w('5. 新键还要加进本脚本的 `SECTIONS`，否则只进附录 A、正文表格会漏行；然后重新生成本文档。')
+w('6. 补单测：「该命中」与「不该命中」各来一条，旧说法不能被新规则抢走。')
 w('')
 
 io.open(OUT, 'w', encoding='utf-8', newline='').write('\n'.join(out) + '\n')

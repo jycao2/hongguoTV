@@ -174,9 +174,12 @@ val REMOTE_ACTIONS = setOf(
     "theme.toggle",     // 切换深/浅主题
     "theme.set",        // 指定主题：arg = dark | light
     "clock.toggle",     // 顶栏系统时间
-    "netspeed.toggle",  // 左下角实时网速悬浮条
+    "netspeed.toggle",  // 左下角实时网速悬浮条（切换）
+    "netspeed.set",     // 显式开 / 关网速：arg = on | off
     "backdrop.reset",   // 恢复默认背景
+    "backdrop.set",     // 最近一张快传图片设为电视背景
     "dialog.close",     // 关掉当前最上层的弹窗（没有弹窗时不执行）
+    "dialog.confirm",   // 点最上层确认框的「确认」（接收上传 / 安装 / 设背景）
     // 播放偏好（设置页里的开关）
     "autonext.toggle",  // 自动连播
     "autoseason.toggle",// 系列剧连播
@@ -218,6 +221,7 @@ val REMOTE_ACTIONS = setOf(
     "transfer.refresh", // 刷新手机快传的二维码
     "transfer.files",   // 打开快传文件列表
     "transfer.clear",   // 清空快传收到的全部文件
+    "transfer.preview", // 全屏预览 / 播放最近一个快传文件
     "history.clear",    // 清空搜索历史（主站 + 片源）
     "remote.address",   // 遥控地址
     "xiaoai.show",      // 小爱同学设置
@@ -353,6 +357,9 @@ object RemoteProtocol {
                     id == "random.pick" && arg.isNotEmpty() && arg !in REMOTE_TYPE_KEYS -> null
                     id == "volume.mute" && arg !in setOf("", "on", "off") -> null
                     id == "proxy.set" && arg !in setOf("", "on", "off") -> null
+                    id == "netspeed.set" && arg !in setOf("on", "off") -> null
+                    // 无参数动作：界面层只该收到空 arg，带尾巴的一律在入口拒掉
+                    id in setOf("backdrop.set", "dialog.confirm", "transfer.preview") && arg.isNotEmpty() -> null
                     id == "sleep.set" && sleepTarget(arg) == null && arg != "off" -> null
                     else -> RemoteCommand.Act(id, arg)
                 }

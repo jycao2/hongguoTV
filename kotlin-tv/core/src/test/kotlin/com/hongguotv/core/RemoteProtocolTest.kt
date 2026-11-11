@@ -50,6 +50,20 @@ class RemoteProtocolTest {
         assertNull(parse("""{"cmd":"watch","query":"x","episode":1.5}"""))
     }
 
+    @Test fun `quick transfer and dialog acts validate at the edge`() {
+        assertEquals(RemoteCommand.Act("netspeed.set", "on"), parse("""{"cmd":"act","id":"netspeed.set","arg":"on"}"""))
+        assertEquals(RemoteCommand.Act("netspeed.set", "off"), parse("""{"cmd":"act","id":"netspeed.set","arg":"off"}"""))
+        assertEquals(RemoteCommand.Act("transfer.preview"), parse("""{"cmd":"act","id":"transfer.preview"}"""))
+        assertEquals(RemoteCommand.Act("backdrop.set"), parse("""{"cmd":"act","id":"backdrop.set"}"""))
+        assertEquals(RemoteCommand.Act("dialog.confirm"), parse("""{"cmd":"act","id":"dialog.confirm"}"""))
+        // 显式开关必须给值；无参数动作不能带尾巴，界面层只该收到自己认识的值
+        assertNull(parse("""{"cmd":"act","id":"netspeed.set"}"""))
+        assertNull(parse("""{"cmd":"act","id":"netspeed.set","arg":"maybe"}"""))
+        assertNull(parse("""{"cmd":"act","id":"transfer.preview","arg":"2"}"""))
+        assertNull(parse("""{"cmd":"act","id":"backdrop.set","arg":"on"}"""))
+        assertNull(parse("""{"cmd":"act","id":"dialog.confirm","arg":"yes"}"""))
+    }
+
     @Test fun `new acts validate their arguments at the edge`() {
         assertEquals(RemoteCommand.Act("type.set", "short"), parse("""{"cmd":"act","id":"type.set","arg":"short"}"""))
         assertEquals(RemoteCommand.Act("random.pick", ""), parse("""{"cmd":"act","id":"random.pick"}"""))

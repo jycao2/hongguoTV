@@ -29,6 +29,8 @@ object TvDialog {
 
     /** 弹窗正文滚动区的标记：遥控上下键靠它找到该滚哪一块（见 [dispatchRemoteKey]）。 */
     private const val TAG_BODY = "tvdialog:body"
+    /** 确认框「确认」按钮的标记：语音「确认接收」直接点它，不去猜焦点落在哪个按钮上。 */
+    private const val TAG_CONFIRM = "tvdialog:confirm"
 
     /** 当前存活的弹窗，后进的在最上层。遥控要作用在它上面，见 [topmostDialog]。
      *  用 Dialog 而非 AlertDialog 登记：选集面板（EpisodePanel）和 NAS 播放器是独立 Dialog 窗口，同样要能被遥控。 */
@@ -52,6 +54,16 @@ object TvDialog {
     fun topmostDialog(): Dialog? {
         live.removeAll { !it.isShowing }
         return live.lastOrNull()
+    }
+
+    /**
+     * 语音 / 遥控的「确认接收」：点最上层确认框的「确认」按钮。
+     * 不看当前焦点，免得焦点停在「取消」时一句确认把接收给取消了；没有确认按钮就返回 false。
+     */
+    fun confirmTopmost(): Boolean {
+        val decor = topmostDialog()?.window?.decorView ?: return false
+        val ok = decor.findViewWithTag<View>(TAG_CONFIRM) ?: return false
+        return ok.isEnabled && ok.performClick()
     }
 
     /**
@@ -396,7 +408,7 @@ object TvDialog {
             setPadding(0, dp(activity, 14), 0, 0)
         }
         val cancel = capsuleButton(activity, "取消") {}
-        val ok = capsuleButton(activity, "确认") { action() }
+        val ok = capsuleButton(activity, "确认") { action() }.apply { tag = TAG_CONFIRM }
         buttons.addView(cancel, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(activity, 12) })
         buttons.addView(ok, LinearLayout.LayoutParams(-2, -2))
         content.addView(buttons)

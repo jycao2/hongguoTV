@@ -53,15 +53,28 @@ object VoiceIntent {
         // 外观与界面
         Rule(listOf("显示时间", "显示时钟", "时间显示", "顶栏时间"),
             RemoteCommand.Act("clock.toggle"), "已切换时间显示"),
-        Rule(listOf("显示网速", "隐藏网速", "打开网速", "关闭网速", "关掉网速", "网速显示"),
+        // 网速：显式「打开/关闭」必须落到 set，不能再用切换——已经开着时说「打开网速」
+        // 反而被关掉，是最容易挨骂的一种反馈。只说「切换网速」才走 toggle。
+        Rule(listOf("隐藏网速显示", "关闭网速显示", "关掉网速显示", "隐藏网速", "关闭网速", "关掉网速"),
+            RemoteCommand.Act("netspeed.set", "off"), "网速显示已关闭"),
+        Rule(listOf("打开网速显示", "显示网速悬浮条", "显示网速", "打开网速", "开启网速"),
+            RemoteCommand.Act("netspeed.set", "on"), "网速显示已打开"),
+        Rule(listOf("切换网速", "网速显示", "网速悬浮条"),
             RemoteCommand.Act("netspeed.toggle"), "已切换网速显示"),
         Rule(listOf("恢复默认背景", "默认背景", "恢复背景"),
             RemoteCommand.Act("backdrop.reset"), "已恢复默认背景"),
+        // 全屏预览浮动条上的「设为电视背景」：取最近一张快传图片，一句话直接生效
+        Rule(listOf("把快传图片设为背景", "用快传图片做背景", "快传图片做背景", "设置电视背景", "设为电视背景"),
+            RemoteCommand.Act("backdrop.set"), "已设置电视背景"),
         // 关弹窗。必须和「关弹幕」严格分开：两者只差一个字，早先没有这条规则时
         // 「关闭弹窗」被模糊匹配吃成了切弹幕——喊关窗口结果把字幕评论开了。
         Rule(listOf("关闭弹窗", "关掉弹窗", "关弹窗", "关闭弹框", "关掉弹框", "关弹框",
             "关闭窗口", "关掉窗口", "关窗口", "关闭对话框", "关掉对话框", "关闭提示框"),
             RemoteCommand.Act("dialog.close"), "关闭弹窗"),
+        // 确认最上层弹窗：手机遥控上传的「接收 N 个文件」、安装 APK、设为背景都走这一句。
+        // 没有弹窗时返回 false，让语音层兜底，不对着空气点确认。
+        Rule(listOf("确认接收", "同意接收", "确定接收", "点击确认", "按下确认", "确认执行", "确认操作", "点确认"),
+            RemoteCommand.Act("dialog.confirm"), "已确认"),
         // 播放偏好
         Rule(listOf("自动连播", "自动播放下一集", "播完自动下一集"),
             RemoteCommand.Act("autonext.toggle"), "已切换自动连播"),
@@ -145,6 +158,10 @@ object VoiceIntent {
             RemoteCommand.Act("transfer.refresh"), "二维码已刷新"),
         Rule(listOf("打开快传文件", "快传文件", "查看快传文件", "看看快传文件", "打开收到的文件", "收到的文件", "传过来的文件"),
             RemoteCommand.Act("transfer.files"), "快传文件"),
+        // 11-11 新增的全屏预览：图片进纯净预览、视频直接播、APK 弹安装确认，和列表里点一行一致。
+        // 「预览快传文件」比「快传文件」长，精确匹配取最长的别名，不会抢走打开列表的说法。
+        Rule(listOf("预览快传文件", "预览刚传的文件", "打开刚传的文件", "看看刚传的文件", "预览最新文件", "查看最新文件", "全屏预览"),
+            RemoteCommand.Act("transfer.preview"), "快传文件预览"),
         Rule(listOf("清空快传文件", "清空收到的文件", "清空传过来的文件", "删掉快传文件", "删除快传文件", "清空文件"),
             RemoteCommand.Act("transfer.clear"), "清空快传文件"),
         // 搜索历史主站与片源各存一份，一句话两边一起清——人不会记得自己在哪一栏搜过。

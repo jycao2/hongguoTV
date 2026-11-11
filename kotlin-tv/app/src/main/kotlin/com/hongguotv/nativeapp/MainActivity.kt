@@ -5221,12 +5221,31 @@ class MainActivity: Activity() {
                 voiceSay(if(library.netSpeed) "网速显示已打开" else "网速显示已关闭")
                 true
             }
+            // 显式开 / 关：说「打开网速」时本来开着，就该保持开着，而不是被切成关
+            "netspeed.set" -> {
+                val on=cmd.arg=="on"
+                if(library.netSpeed==on) { voiceSay(if(on) "网速显示本来就是开着的" else "网速显示本来就是关着的"); return true }
+                library.netSpeed=on
+                applyNetSpeedOverlay(show=on && screen!="player")
+                voiceSay(if(on) "网速显示已打开" else "网速显示已关闭")
+                true
+            }
             "backdrop.reset" -> {
                 resetBackdrop("plain")
                 refreshBackdropSetting?.invoke()
                 voiceSay("已恢复默认背景")
                 true
             }
+            // 预览浮层里的「设为电视背景」按钮，语音一句话直接对最近一张快传图片生效
+            "backdrop.set" -> {
+                tvTools.recentQuickFile(TransferKind.IMAGE) { hit ->
+                    if(hit==null) voiceSay("还没有快传图片，先用手机快传传一张")
+                    else { setQuickBackdrop(hit.file); voiceSay("已把 ${hit.name} 设为电视背景") }
+                }
+                true
+            }
+            // 上传整批接收 / 安装 APK / 设为背景这类确认框：没有确认按钮时不执行
+            "dialog.confirm" -> if(TvDialog.confirmTopmost()) { voiceSay("已确认"); true } else false
             // 只关弹窗，不代替「返回」：没有弹窗时什么都不做，免得一句话把人从当前页退走。
             "dialog.close" -> {
                 val dialog=TvDialog.topmostDialog() ?: return false
@@ -5347,6 +5366,14 @@ class MainActivity: Activity() {
                 true
             }
             "transfer.files" -> { openQuickFiles(anchor); true }
+            // 全屏预览 / 播放最近收到的文件，与在「快传文件」列表里点一行完全同一条路径
+            "transfer.preview" -> {
+                tvTools.recentQuickFile(null) { hit ->
+                    if(hit==null) voiceSay("还没有快传文件")
+                    else { voiceSay("正在打开 ${hit.name}"); handleQuickTransfer(hit.file,hit.kind,true,anchor) }
+                }
+                true
+            }
             "transfer.clear" -> {
                 tvTools.clearQuickFiles { count,bytes ->
                     voiceSay(if(count<=0) "快传文件本来就是空的"

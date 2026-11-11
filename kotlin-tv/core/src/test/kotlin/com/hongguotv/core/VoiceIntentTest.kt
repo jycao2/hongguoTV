@@ -68,8 +68,9 @@ class VoiceIntentTest {
         assertEquals("autoskip.toggle" to "", act("自动跳过"))
         assertEquals("danmaku.toggle" to "", act("关掉弹幕"))
         assertEquals("clock.toggle" to "", act("显示时间"))
-        assertEquals("netspeed.toggle" to "", act("显示网速"))
-        assertEquals("netspeed.toggle" to "", act("关闭网速"))
+        // 网速改成显式开 / 关：说「显示网速」时本来开着不该被切成关
+        assertEquals("netspeed.set" to "on", act("显示网速"))
+        assertEquals("netspeed.set" to "off", act("关闭网速"))
     }
 
     @Test
@@ -374,6 +375,40 @@ class VoiceIntentTest {
             if(cmd is RemoteCommand.Act) {
                 assertTrue("「$text」产出的 ${cmd.id} 不在白名单里", cmd.id in REMOTE_ACTIONS)
             }
+        }
+    }
+
+    // ------------------------------------------------------------ 11-11 新增动作
+
+    /** 新功能补的四个动作 + 网速显式开关：长词优先，旧说法不能被新规则抢走。 */
+    @Test
+    fun quickTransferAndDialogActsAreUnambiguous() {
+        assertEquals("netspeed.set" to "on", act("显示网速"))
+        assertEquals("netspeed.set" to "on", act("打开网速显示"))
+        assertEquals("netspeed.set" to "off", act("隐藏网速"))
+        assertEquals("netspeed.set" to "off", act("关闭网速显示"))
+        assertEquals("netspeed.set" to "off", act("关掉网速"))
+        assertEquals("netspeed.toggle" to "", act("切换网速"))
+        assertEquals("netspeed.toggle" to "", act("网速显示"))
+        assertEquals("transfer.preview" to "", act("预览快传文件"))
+        assertEquals("transfer.preview" to "", act("全屏预览"))
+        assertEquals("backdrop.set" to "", act("设为电视背景"))
+        assertEquals("backdrop.set" to "", act("把快传图片设为背景"))
+        assertEquals("dialog.confirm" to "", act("确认接收"))
+        assertEquals("dialog.confirm" to "", act("点确认"))
+        // 旧说法原地不动
+        assertEquals("transfer.files" to "", act("打开快传文件"))
+        assertEquals("transfer.files" to "", act("快传文件"))
+        assertEquals("backdrop.reset" to "", act("恢复默认背景"))
+        assertEquals("dialog.close" to "", act("关闭弹窗"))
+        assertEquals("quick.send" to "", act("手机快传"))
+    }
+
+    /** 两个字的光杆词不能当指令：那是剧名的地盘，别名一律最短三个字。 */
+    @Test
+    fun shortBareWordsAreNotCommands() {
+        for(word in listOf("确认", "网速", "预览", "背景")) {
+            assertNull("「$word」不该产出动作键", act(word))
         }
     }
 
