@@ -4765,6 +4765,7 @@ class MainActivity: Activity() {
             PhoneRemoteSession(this,address,{ remoteTarget() },remoteController,{ remoteResumeList() },{ remoteResumeAll() },
                 cover={ artwork.bytes(it) },
                 upload={ name,length,stream -> tvTools.receiveRemoteUpload(name,length,stream) },
+                batchUpload={ items,stream -> tvTools.receiveRemoteBatchUpload(items,stream) },
                 onClients={ syncRemoteEntry() }) {
                 remote=null; syncRemoteEntry()
             }.also { session -> remote=session; remoteStartTries=0 }

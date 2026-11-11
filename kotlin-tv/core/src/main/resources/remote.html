@@ -332,13 +332,13 @@
   <div class="menu" id="menu">
     <button id="m-exit">返回上一级（退回详情或收起菜单）</button>
     <button id="m-cmds">指令集（能听懂的说法）</button>
-    <button id="m-upload">上传文件到电视</button>
+    <button id="m-upload">上传文件到电视（可多选）</button>
     <button id="m-detach">断开遥控</button>
     <div class="addr" id="m-addr"></div>
   </div>
 </div>
 <div class="banner" id="banner">电视已暂停。请在电视上重新打开红果TV，回来后会接着遥控。</div>
-<!-- 三点菜单里的「上传文件到电视」：选完文件直接发，电视端弹确认 -->
+<!-- 三点菜单里的「上传文件到电视」：可多选，整批一次请求、电视只弹一次确认 -->
 <input type="file" id="up-file" multiple hidden>
 <div class="uptoast" id="uptoast"></div>
 
@@ -1021,8 +1021,9 @@
   };
 
   // ------------------------------------------------------------ 上传文件到电视
-  // 走遥控会话的 /upload：电视收到后先弹确认框，用户点「确认」才开始收字节。
-  // 因此进度会停在原地等确认，停滞超过两秒就把提示切成「请在电视上确认」。
+  // 一次选多个文件只发一条 /upload-batch：电视整批只弹一次确认，确认后一起接收。
+  // 请求体 = 8 位十进制清单长度 + ASCII 清单(c/n0/s0/n1/s1…) + 各文件原始字节。
+  // 清单不含文件内容，所以点「取消」时整批一个字节都不落地。
   (function(){
     var input = $("up-file"), toast = $("uptoast");
     if(!input || !toast) return;
@@ -1033,7 +1034,14 @@
       if(n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
       return (n / 1073741824).toFixed(1) + " GB";
     }
-    /** hold=true：进度类提示，不自动消失；上传结束用 hide 或下一句覆盖。 */
+    /** 清单经 encodeURIComponent 后全是 ASCII，直接按字节装入 Uint8Array。 */
+    function ascii(s){
+      var a = new Uint8Array(s.length);
+      for(var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 255;
+      return a;
+    }
+    function pad8(n){ var s = String(n); while(s.length < 8) s = "0" + s; return s; }
+    /** hold=true：进度类提示，不自动消失；上传结束用下一句覆盖。 */
     function note(text, hold){
       toast.textContent = text;
       toast.classList.add("on");
@@ -1048,19 +1056,16 @@
     };
     input.onchange = function(){
       var files = Array.prototype.slice.call(input.files || []);
-      if(files.length) uploadNext(files, 0, 0);
-    };
-    function uploadNext(files, index, okCount){
-      if(index >= files.length){
-        stopStall();
-        var text = okCount === files.length
-          ? ("已发送 " + files.length + " 个文件到电视")
-          : ("已发送 " + okCount + "/" + files.length + " 个文件到电视");
-        note(text, false);
-        input.value = "";
-        return;
-      }
-      var file = files[index];
+      if(!files.length) return;
+      var total = 0;
+      for(var i = 0; i < files.length; i++) total += files[i].size;
+      if(files.length > 20){ note("一次最多选 20 个文件，请分批上传", false); return; }
+      if(total > 2147483648){ note("一次最多上传 2 GB，请分批上传", false); return; }
+      var meta = "c=" + files.length;
+      for(var i = 0; i < files.length; i++)
+        meta += "&n" + i + "=" + encodeURIComponent(files[i].name) + "&s" + i + "=" + files[i].size;
+      var metaBytes = ascii(meta);
+      var blob = new Blob([ascii(pad8(metaBytes.length)), metaBytes].concat(files));
       var xhr = new XMLHttpRequest();
       lastLoaded = -1; lastAt = Date.now(); waiting = false; done = false;
       stopStall();
@@ -1068,33 +1073,32 @@
         if(done || waiting || lastLoaded < 0) return;
         if(Date.now() - lastAt > 2000){
           waiting = true;
-          note("等待确认 · 请在电视上点「确认」接收 " + file.name, true);
+          note("等待确认 · 请在电视上点「确认」，一起接收 " + files.length + " 个文件", true);
         }
       }, 800);
-      xhr.open("POST", "/" + token + "/upload?name=" + encodeURIComponent(file.name));
+      xhr.open("POST", "/" + token + "/upload-batch");
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
       xhr.upload.onprogress = function(e){
         if(!e.lengthComputable) return;
         if(e.loaded !== lastLoaded){ lastLoaded = e.loaded; lastAt = Date.now(); waiting = false; }
-        note("正在发送 " + (index + 1) + "/" + files.length + " · "
-          + Math.round(e.loaded * 100 / e.total) + "% · " + file.name, true);
+        note("正在发送 " + files.length + " 个文件 · " + human(total) + " · "
+          + Math.round(e.loaded * 100 / e.total) + "%", true);
       };
       xhr.onload = function(){
         done = true; stopStall();
-        var ok = xhr.status === 200;
-        if(ok) okCount++;
-        note(ok ? ("已接收 · " + file.name)
-          : ("未接收 · " + file.name + " · " + (xhr.responseText || "电视未响应")), false);
-        setTimeout(function(){ uploadNext(files, index + 1, okCount); }, ok ? 500 : 1400);
+        note(xhr.status === 200
+          ? ("已接收 · " + (xhr.responseText || (files.length + " 个文件")))
+          : ("未接收 · " + (xhr.responseText || "电视未响应")), false);
+        input.value = "";
       };
       xhr.onerror = function(){
         done = true; stopStall();
         note("连接已断开，请重新扫码连接电视", false);
         input.value = "";
       };
-      note("正在发送 " + (index + 1) + "/" + files.length + " · " + human(file.size) + " · " + file.name, true);
-      xhr.send(file);
-    }
+      note("正在发送 " + files.length + " 个文件 · " + human(total), true);
+      xhr.send(blob);
+    };
   })();
   function closeCmds(){ $("cdrawer").classList.remove("on"); }
   $("cds-x").onclick = closeCmds;

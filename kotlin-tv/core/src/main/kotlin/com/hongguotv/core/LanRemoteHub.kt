@@ -20,6 +20,11 @@ import java.util.concurrent.atomic.AtomicLong
  * 端口稳定的意义：关掉二维码窗口再点开，手机上那个地址还能继续用。
  * 端口被别的进程抢走时不能死磕，直接换一个，宁可这条地址失效也不能起不来。
  */
+/** 整批上传的硬上限：清单 8KB、一批最多 20 个文件、整批 4GB（单文件仍受 2GB 限制）。 */
+private const val MAX_BATCH_META = 8 * 1024
+private const val MAX_BATCH_FILES = 20
+private const val MAX_BATCH_BYTES = 4L * 1024 * 1024 * 1024
+
 private fun openListener(preferredPort: Int): ServerSocket {
     if(preferredPort > 0) runCatching {
         return ServerSocket().apply {
@@ -67,6 +72,12 @@ class LanRemoteHub(
      * 返回 (是否接收, 回给手机的提示文字)。null 表示未接入，路由回 403。
      */
     private val receiveUpload: ((String, Long, InputStream) -> Pair<Boolean, String>)? = null,
+    /**
+     * 手机一次选多个文件：整批只在第一个请求里弹一次确认，确认后按清单顺序收完。
+     * 入参是 (文件名, 字节数) 列表与请求体流；实现负责弹确认、校验、落盘。
+     * null 表示未接入，路由回 403（旧页面仍可走 [receiveUpload] 逐文件确认）。
+     */
+    private val receiveBatchUpload: ((List<Pair<String, Long>>, InputStream) -> Pair<Boolean, String>)? = null,
     private val onExpired: () -> Unit = {},
     /**
      * 外部注入的门禁密钥；null 则随机生成。
@@ -243,6 +254,7 @@ class LanRemoteHub(
             }
             method == "POST" && route == "/cmd" -> handleCommand(socket, input, headers)
             method == "POST" && route == "/upload" -> handleUpload(socket, input, headers, query)
+            method == "POST" && route == "/upload-batch" -> handleBatchUpload(socket, input, headers)
             else -> reply(socket, 405, "不支持的操作")
         }
     }
@@ -324,6 +336,71 @@ class LanRemoteHub(
         socket.soTimeout = QuickTransferServer.IDLE_TIMEOUT_MS
         val result = runCatching { handler(name, length, input) }.getOrElse { false to "电视写入文件失败" }
         reply(socket, if(result.first) 200 else 403, result.second)
+    }
+
+    /**
+     * 多文件一次接收。
+     *
+     * 请求体 = 8 位十进制清单长度 + ASCII 清单 + 各文件原始字节（按清单顺序拼接）。
+     * 清单只有文件名与字节数、不含任何文件内容：用户在电视上点「确认」之前只读这段
+     * 元数据，点取消则整批一个字节都不落地；确认之后才按清单顺序从同一条流里收完，
+     * 所以一次选 N 个文件只会弹一次确认框。
+     */
+    private fun handleBatchUpload(socket: Socket, input: InputStream, headers: Map<String, String>) {
+        allowOrigin(socket, headers) ?: return
+        val handler = receiveBatchUpload ?: return reply(socket, 403, "电视未开启批量上传")
+        if(headers.containsKey("transfer-encoding")) return reply(socket, 400, "请求格式错误")
+        val length = headers["content-length"]?.toLongOrNull()?.takeIf { it in 1..MAX_BATCH_BYTES }
+            ?: return reply(socket, 413, "整批文件过大")
+        // 上传可能持续几分钟，而 handle() 为了省线程只给了 4 秒读超时
+        socket.soTimeout = QuickTransferServer.IDLE_TIMEOUT_MS
+        val prefix = ByteArray(8)
+        if(!readFully(input, prefix)) return reply(socket, 400, "清单格式错误")
+        val metaLength = String(prefix, Charsets.US_ASCII).toIntOrNull()?.takeIf { it in 1..MAX_BATCH_META }
+            ?: return reply(socket, 400, "清单格式错误")
+        if(8L + metaLength >= length) return reply(socket, 400, "清单格式错误")
+        val meta = ByteArray(metaLength)
+        if(!readFully(input, meta)) return reply(socket, 400, "清单不完整")
+        val items = parseBatchMeta(String(meta, Charsets.US_ASCII))
+            ?: return reply(socket, 400, "文件清单不合法")
+        var total = 0L
+        for(item in items) {
+            val next = total + item.second
+            if(next <= total || next > length) return reply(socket, 400, "文件清单与请求体不一致")
+            total = next
+        }
+        if(8L + metaLength + total != length) return reply(socket, 400, "文件清单与请求体不一致")
+        val result = runCatching { handler(items, input) }.getOrElse { false to "电视写入文件失败" }
+        reply(socket, if(result.first) 200 else 403, result.second)
+    }
+
+    /** 清单是 `c=<数量>&n0=<urlencoded>&s0=<字节数>&...`，全 ASCII，避免引入 JSON 依赖。 */
+    private fun parseBatchMeta(meta: String): List<Pair<String, Long>>? {
+        val fields = mutableMapOf<String, String>()
+        for(part in meta.split('&')) {
+            val at = part.indexOf('=')
+            if(at <= 0) return null
+            if(fields.put(part.substring(0, at), part.substring(at + 1)) != null) return null
+        }
+        val count = fields["c"]?.toIntOrNull()?.takeIf { it in 1..MAX_BATCH_FILES } ?: return null
+        val items = ArrayList<Pair<String, Long>>(count)
+        for(index in 0 until count) {
+            val name = fields["n$index"]?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrNull() }
+                ?.takeIf { it.isNotBlank() && it.length <= 255 } ?: return null
+            val size = fields["s$index"]?.toLongOrNull()?.takeIf { it in 1..TransferRules.MAX_BYTES } ?: return null
+            items.add(name to size)
+        }
+        return items
+    }
+
+    private fun readFully(input: InputStream, target: ByteArray): Boolean {
+        var offset = 0
+        while(offset < target.size) {
+            val read = input.read(target, offset, target.size - offset)
+            if(read < 0) return false
+            offset += read
+        }
+        return true
     }
 
     /** 多设备共用一条限速窗口：真有人刷屏时，无论从哪台手机来都该被挡住。 */

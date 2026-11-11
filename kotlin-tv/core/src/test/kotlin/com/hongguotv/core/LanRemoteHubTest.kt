@@ -546,4 +546,99 @@ class LanRemoteHubTest {
             assertEquals(400, code(request(it, "POST", "/upload", "x")))
         }
     }
+
+    // ---------------------------------------------------------------- 整批上传
+
+    /** 整批上传专用 Hub：只关心批量接收回调，不接单文件回调。 */
+    private fun batchHub(
+        receive: (List<Pair<String, Long>>, java.io.InputStream) -> Pair<Boolean, String>?
+    ): LanRemoteHub = LanRemoteHub(
+        address = "127.0.0.1",
+        post = { it.run() },
+        target = { null },
+        controller = { null },
+        receiveBatchUpload = { items, input -> receive(items, input) ?: (false to "未接收") }
+    )
+
+    /** 按协议拼请求体：8 位十进制清单长度 + ASCII 清单 + 各文件原始字节。 */
+    private fun batch(server: LanRemoteHub, files: List<Pair<String, String>>, metaOverride: String? = null): String {
+        val meta = metaOverride ?: buildString {
+            append("c=").append(files.size)
+            files.forEachIndexed { index, (name, content) ->
+                append("&n").append(index).append('=').append(java.net.URLEncoder.encode(name, "UTF-8"))
+                append("&s").append(index).append('=').append(content.toByteArray(Charsets.UTF_8).size)
+            }
+        }
+        val prefix = meta.toByteArray(Charsets.US_ASCII).size.toString().padStart(8, '0')
+        val body = prefix + meta + files.joinToString("") { it.second }
+        return request(server, "POST", "/upload-batch", body)
+    }
+
+    @Test fun `batch upload streams every file after one approval`() {
+        var calls = 0
+        val seen = mutableListOf<Pair<String, String>>()
+        val server = batchHub { items, input ->
+            calls++
+            items.forEach { (name, length) ->
+                val buffer = ByteArray(length.toInt())
+                var offset = 0
+                while(offset < buffer.size) {
+                    val read = input.read(buffer, offset, buffer.size - offset)
+                    if(read < 0) break
+                    offset += read
+                }
+                seen.add(name to String(buffer, 0, offset, Charsets.UTF_8))
+            }
+            true to "已保存 ${items.size} 个文件"
+        }
+        server.use {
+            val response = batch(it, listOf("海报.png" to "aaa", "片段.mp4" to "bbbb", "字幕.srt" to "cc"))
+            assertEquals(200, code(response))
+            assertEquals(1, calls) // 三个文件只走进一次接收回调 = 电视只弹一次确认
+            assertEquals(listOf("海报.png" to "aaa", "片段.mp4" to "bbbb", "字幕.srt" to "cc"), seen)
+            assertTrue(response.contains("已保存 3 个文件"))
+        }
+    }
+
+    @Test fun `batch upload cancelled on the TV returns 403`() {
+        val server = batchHub { _, _ -> false to "已在电视上取消接收" }
+        server.use {
+            val response = batch(it, listOf("电影.mp4" to "data"))
+            assertEquals(403, code(response))
+            assertTrue(response.contains("已在电视上取消接收"))
+        }
+    }
+
+    @Test fun `batch upload without a handler is refused`() {
+        hub().use { server ->
+            assertEquals(403, code(batch(server, listOf("a.png" to "x"))))
+        }
+    }
+
+    @Test fun `batch upload with broken file list is rejected`() {
+        val server = batchHub { _, _ -> true to "已保存" }
+        server.use {
+            assertEquals(400, code(batch(it, listOf("a.png" to "x"), "c=2&n0=a.png")))
+            assertEquals(400, code(batch(it, listOf("a.png" to "x"), "c=21")))
+            assertEquals(400, code(batch(it, listOf("a.png" to "x"), "c=1&n0=a.png&s0=999")))
+            assertEquals(400, code(batch(it, listOf("a.png" to "x"), "n0=a.png&s0=1")))
+        }
+    }
+
+    @Test fun `batch upload keeps the single file route working`() {
+        val server = uploadHub { name, length, input ->
+            val buffer = ByteArray(length.toInt())
+            var offset = 0
+            while(offset < buffer.size) {
+                val read = input.read(buffer, offset, buffer.size - offset)
+                if(read < 0) break
+                offset += read
+            }
+            true to "已保存 · $name"
+        }
+        server.use {
+            assertEquals(200, code(upload(it, "单张.png", "one")))
+            assertEquals(403, code(batch(it, listOf("单张.png" to "one"))))
+        }
+    }
 }

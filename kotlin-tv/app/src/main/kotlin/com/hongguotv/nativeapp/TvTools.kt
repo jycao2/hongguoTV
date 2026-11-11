@@ -75,16 +75,59 @@ class TvTools(private val activity: Activity) {
      * 手机遥控页「上传文件到电视」的接收端。
      *
      * 由遥控服务的 socket 线程调用，所以这里**必须阻塞**到用户在电视上做出选择：
-     * 点「确认」才开始读请求体，点「取消」直接返回 false，一个字节都不落盘。
+     * 点「确认」才开始读文件内容，点「取消」直接返回 false，一个字节都不落盘。
+     * 单文件与整批共用同一套校验、确认与落盘，区别只在确认次数与文案：一次选多个
+     * 文件时整批只弹一次确认，确认后按顺序从同一条流里收完。
      * 保存位置与扫码快传一致，接收完就能在「快传文件」里看到。
      */
-    fun receiveRemoteUpload(name: String,length: Long,input: java.io.InputStream): Pair<Boolean,String> {
-        val safe=TransferRules.sanitize(name) ?: return false to "文件名不合法，请重试"
-        val kind=TransferRules.kindOf(safe) ?: return false to "不支持的文件类型，请传 APK、视频、图片或压缩包"
-        if(length<=0L || length>TransferRules.MAX_BYTES) return false to "文件大小不合法"
-        if(freeBytes()<length+TransferRules.MIN_FREE_BYTES) return false to "电视剩余空间不足，请先清理"
-        val message="手机想发送：\n\n$safe\n${TransferRules.humanBytes(length)}\n\n接收后可以在「快传文件」里打开。"
-        if(!askOnMain("接收手机上传",message)) return false to "已在电视上取消接收"
+    fun receiveRemoteUpload(name: String,length: Long,input: java.io.InputStream): Pair<Boolean,String> =
+        acceptUploads(listOf(name to length),input)
+
+    fun receiveRemoteBatchUpload(items: List<Pair<String,Long>>,input: java.io.InputStream): Pair<Boolean,String> =
+        acceptUploads(items,input)
+
+    private fun acceptUploads(items: List<Pair<String,Long>>,input: java.io.InputStream): Pair<Boolean,String> {
+        if(items.isEmpty()) return false to "请先选择文件"
+        val prepared=items.map { (name,length) ->
+            val safe=TransferRules.sanitize(name) ?: return false to "文件名不合法，请重试"
+            val kind=TransferRules.kindOf(safe) ?: return false to "不支持的文件类型，请传 APK、视频、图片或压缩包"
+            if(length<=0L || length>TransferRules.MAX_BYTES) return false to "文件大小不合法"
+            Triple(safe,kind,length)
+        }
+        var total=0L
+        for(item in prepared) total+=item.third
+        if(freeBytes()<total+TransferRules.MIN_FREE_BYTES) return false to "电视剩余空间不足，请先清理"
+        val message=if(prepared.size==1) {
+            "手机想发送：\n\n${prepared[0].first}\n${TransferRules.humanBytes(prepared[0].third)}\n\n接收后可以在「快传文件」里打开。"
+        } else buildString {
+            append("手机想发送 ").append(prepared.size).append(" 个文件，共 ")
+            append(TransferRules.humanBytes(total)).append("：\n\n")
+            prepared.take(5).forEach { append("· ").append(it.first).append("  ").append(TransferRules.humanBytes(it.third)).append('\n') }
+            if(prepared.size>5) append("…等 ").append(prepared.size).append(" 个文件\n")
+            append("\n接收后可以在「快传文件」里打开。")
+        }
+        val title=if(prepared.size==1) "接收手机上传" else "接收 ${prepared.size} 个文件"
+        if(!askOnMain(title,message)) return false to "已在电视上取消接收"
+        var saved=0
+        var failure=""
+        // 整批共用一条流：某个文件写失败后流位置已经错位，后面的不能再读，直接收尾
+        for((safe,kind,length) in prepared) {
+            val (ok,why)=saveUpload(safe,kind,length,input)
+            if(!ok) { failure=why; break }
+            saved++
+        }
+        if(saved>0) main.post {
+            android.widget.Toast.makeText(activity,"已接收 $saved 个文件到快传文件",android.widget.Toast.LENGTH_SHORT).show()
+        }
+        return when {
+            saved==prepared.size -> true to "已保存 $saved 个文件"
+            saved>0 -> true to "已接收 $saved/${prepared.size} 个文件，剩余未接收：$failure"
+            else -> false to failure.ifEmpty { "电视写入文件失败" }
+        }
+    }
+
+    /** 单文件落盘：调用方已经统一确认过，这里只按声明的字节数从流里切一段。 */
+    private fun saveUpload(safe: String,kind: TransferKind,length: Long,input: java.io.InputStream): Pair<Boolean,String> {
         val directory=quickDirectory(kind)
         if(!directory.exists() && !directory.mkdirs()) return false to "无法创建保存目录"
         val part=File(directory,java.util.UUID.randomUUID().toString()+TransferRules.PART_SUFFIX)
@@ -104,7 +147,6 @@ class TvTools(private val activity: Activity) {
             if(part.length()!=length) throw java.io.IOException("字节数不匹配")
             val target=File(directory,TransferRules.targetName(safe,System.currentTimeMillis()))
             if(!part.renameTo(target)) throw java.io.IOException("写入失败")
-            main.post { android.widget.Toast.makeText(activity,"已接收 ${target.name}",android.widget.Toast.LENGTH_SHORT).show() }
             true to "已保存 · ${target.name}"
         } catch(e: Throwable) {
             runCatching { part.delete() }
