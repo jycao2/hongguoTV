@@ -355,6 +355,8 @@ class MainActivity: Activity() {
     private val nav=mutableListOf<View>()
     // 二级分段首项：导航 ↓ 先落到分段，再进内容
     private var segmentFirst: View?=null
+    // 我的模块（最近观看/收藏）各分段按钮：切进我的时焦点先落当前页对应的分段，方便上下切区
+    private var segmentChipsByTab: Map<Int,View> =emptyMap()
     private val typeButtons=mutableMapOf<ContentType,View>()
     private var searchInput: View?=null
     private var searchButton: View?=null
@@ -826,7 +828,7 @@ class MainActivity: Activity() {
             }
         }
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
-        nav.clear(); segmentFirst=null; typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
+        nav.clear(); segmentFirst=null; segmentChipsByTab=emptyMap(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
         historyManage=null; historySync=null; historyRefresh=null; rankSwitch=null; rankRefresh=null; rankSubtitle=null; genreButton=null; genreClear=null; collectionBack=null; favoriteBadges.clear()
@@ -890,7 +892,8 @@ class MainActivity: Activity() {
         newRelease=saved?.newRelease ?: false; newReleaseWindow=saved?.newReleaseWindow ?: newReleaseWindow
         // 续页游标与分类条件跟着页签一起存：上新/高级筛选的 session 不能跨页签复用，否则续页拉到的是别的条件
         discoveryCursor=saved?.cursor; discoverySelection=saved?.discovery ?: discoverySelection
-        showCatalog(load=(next<=2 && catalog.isEmpty() && (next!=1 || query.isNotBlank())))
+        // 我的模块：焦点先落当前页对应的分段按钮（最近观看/收藏），上下键直接切区，不必先进卡片
+        showCatalog(load=(next<=2 && catalog.isEmpty() && (next!=1 || query.isNotBlank())),focusSegment=(next==3||next==4))
         // 切回搜索页时焦点落输入框，避免页面重建后焦点丢失
         if(next==1) searchInput?.requestFocus()
     }
@@ -931,7 +934,7 @@ class MainActivity: Activity() {
             }
         } else library.history().map { it.series }
     }
-    private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false) {
+    private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false,focusSegment: Boolean=false) {
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null; pendingCloudResume=null
         // 当前模块被隐藏时回到首页，避免停留在不可见的页签
         if(navHiddenAt(tab)) tab=0
@@ -1009,12 +1012,14 @@ class MainActivity: Activity() {
         var segmentChips: List<TextView> =emptyList()
         if(tab in 3..4) {
             val options=listOf(4 to "最近观看",3 to "收藏")
+            val visible=options.filter { !navHiddenAt(it.first) }
             val segRow=row().apply { setPadding(0,0,0,dp(8)) }
-            segmentChips=options.filter { !navHiddenAt(it.first) }.map { (index,label) ->
+            segmentChips=visible.map { (index,label) ->
                 chip(label,index==tab) { if(index!=tab) switchTab(index) }.apply {
                     textSize=14f; minHeight=dp(34); setPadding(dp(16),dp(7),dp(16),dp(7))
                 }
             }
+            segmentChipsByTab=visible.map { it.first }.zip(segmentChips).toMap()
             segmentChips.forEach { segRow.addView(it,lp(-2,-2).apply { rightMargin=dp(6) }) }
             segmentFirst=segmentChips.firstOrNull()
             if(segmentChips.isNotEmpty()) container.addView(segRow)
@@ -1531,11 +1536,11 @@ class MainActivity: Activity() {
                     if(resumeCards.isNotEmpty()) resumeCards.first().requestFocus()
                 }
             })
-        } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter,keepViewport=keepViewport)
+        } else catalogGrid(body,focusNav,focusType,focusFilter=focusFilter,keepViewport=keepViewport,focusSegment=focusSegment)
         // 页面重建后初始化联想区：回显点击联想词前的列表，或无词时收起中栏
         if(tab==1 && !advancedSearch) fetchSuggest()
     }
-    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false) {
+    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,focusFilter: Boolean=false,keepViewport: Boolean=false,focusSegment: Boolean=false) {
         // keepViewport：后台事件（云端数据到达）触发的重建，用户可能正在浏览页面。
         // 此时不走 catalogFocus 优先的常规恢复——鼠标滚轮不移动焦点，catalogFocus 停在进页首卡，
         // 常规恢复会把整屏弹回顶部（issue #19.2）；改按 scrollPositions+scrollOffsets 原位恢复。
@@ -1711,6 +1716,7 @@ class MainActivity: Activity() {
         wireFilterPanelToGrid(recycler)
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus()
+        else if(focusSegment && segmentChipsByTab.containsKey(tab)) segmentChipsByTab[tab]?.requestFocus()
         else {
             if(keepViewport) {
                 // 原位恢复：回到重建前同一位置、同一像素偏移。savedPos 是 adapter 位置（含分节标题），
@@ -5650,8 +5656,9 @@ class MainActivity: Activity() {
             resetPlaybackSession(); sleepTimer.cancel(); sleepStopped=false
             saveProgress(); library.flush(); releasePlayer()
         }
-        if(tab!=target) switchTab(target) else showCatalog()
-        nav.getOrNull(target)?.requestFocus()
+        if(tab!=target) switchTab(target) else showCatalog(focusSegment=(target==3||target==4))
+        // 我的模块（最近观看/收藏）焦点由 focusSegment 落分段按钮，不强推顶栏
+        if(!(target==3||target==4)) nav.getOrNull(target)?.requestFocus()
         return true
     }
 
