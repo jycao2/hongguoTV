@@ -1613,7 +1613,9 @@ class MainActivity: Activity() {
             // Focus entering the grid lands on the first visible CARD, keeping the user's place.
             // 首个可见项可能是分节标题（不可聚焦）：不跳过的话焦点停在 RecyclerView 本身，↓ 键从此失灵。
             isFocusable=true; isFocusableInTouchMode=true
-            setOnFocusChangeListener { _,focused -> if(focused) {
+            setOnFocusChangeListener { _,focused -> if(focused && pendingGridFocusPos==RecyclerView.NO_POSITION) {
+                // 跨区移动（pendingGridFocusPos 已挂）时焦点会暂时收到 RecyclerView 本身防首页闪跳，
+                // 此时不能抢落首卡，等 attemptPendingFocus 落到目标卡
                 var first=grid.findFirstVisibleItemPosition().coerceAtLeast(0)
                 while(first<adapter.itemCount && (adapter.isHeader(first) || adapter.isFooter(first))) first++
                 post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() }
@@ -1797,6 +1799,11 @@ class MainActivity: Activity() {
         // 焦点被回收由 grabPendingFocus 兜底接住（优先聚焦目标，而不是抢回原卡）。
         val focused=recycler.focusedChild
         if(focused==null) { recycler.scrollToPosition(pos); recycler.post { attemptPendingFocus(pos,0) }; return }
+        // 跨分节移动要滚不止一行，滚动中原焦点卡会被回收、焦点被清空，
+        // 框架兜底落到窗口第一个可聚焦项（顶栏「首页」）→ 用户看到首页高亮一闪而逝。
+        // 滚动前先把焦点收到 RecyclerView 本身（可聚焦、无高亮），滚动全程没有子卡焦点可丢；
+        // 落目标时 attemptPendingFocus 再把焦点交还卡片。focus listener 侧有 pending 守卫不抢活。
+        recycler.requestFocus()
         val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
         val step=focused.height+margin
         val current=recycler.getChildAdapterPosition(focused)
