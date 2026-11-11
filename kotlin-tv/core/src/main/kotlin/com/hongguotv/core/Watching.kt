@@ -44,6 +44,16 @@ object ResumePlayback {
     }
 }
 
+/**
+ * 整剧是否自然播完：只有最后一集播到片尾才算。
+ * 调用方负责排除「成功跳到下一季」的情况——那种剧还有得看，不该标成已看完。
+ * 抽成纯函数是为了让自动标记的边界可单测，不依赖播放器状态。
+ */
+object WatchCompletion {
+    fun finished(episodeIndex: Int,episodeCount: Int): Boolean =
+        episodeCount>0 && episodeIndex==episodeCount-1
+}
+
 /** Seen count is a high-water mark, so temporary catalog shrinkage is not a new update. */
 data class FavoriteUpdate(val total: Int,val seen: Int,val checkedAt: Long,
     val newSeasonId: String? = null,val newSeasonTitle: String? = null,val ackedSeasonId: String? = null) {

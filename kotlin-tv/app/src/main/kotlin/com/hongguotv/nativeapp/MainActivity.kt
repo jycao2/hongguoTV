@@ -3465,7 +3465,14 @@ class MainActivity: Activity() {
                         if(sleepTimer.episodeEnded()) stopForSleep()
                         else if(foreground && requestedAutoplay && !pausedForLifecycle && library.autoNext && episodeIndex<data.episodes.lastIndex) playEpisode(episodeIndex+1,savedPosition(episodeIndex+1))
                         else if(foreground && requestedAutoplay && !pausedForLifecycle && continueToNextSeason()) { /* season jump in progress */ }
-                        else { requestedAutoplay=false; p.pause(); showEndedPanel() }
+                        else {
+                            requestedAutoplay=false; p.pause()
+                            // 最后一集自然播完且没跳成下一季：自动打「整剧已看完」标记。
+                            // 首页「接着看」与手机端继续观看本就过滤 watched；历史记录保留，
+                            // 在「我的 - 观看历史」里仍能看到，徽标显示「整剧已看完」。
+                            if(WatchCompletion.finished(episodeIndex,data.episodes.size)) markSeriesWatched(data.series)
+                            showEndedPanel()
+                        }
                     }
                 }
                 /** 播放器自动切到预挂的下一集：原地交接状态，不再 stop/clearMediaItems，避免重新解析片头与重建解码器。 */
@@ -3872,8 +3879,16 @@ class MainActivity: Activity() {
     private fun skipEpisode(direction: Int): Boolean {
         if(!foreground || screen!="player") return false
         val count=detail?.episodes?.size ?: return false
+        if(count<=0) return false
         val target=episodeIndex+direction
-        if(target !in 0 until count) return false
+        // 上下键换集、媒体键、手势、语音/遥控 play.next 都走这里；到头了必须给反馈，
+        // 否则用户只看到「按了没反应」。方向对称，第一集往上同样提示。
+        if(target !in 0 until count) {
+            Toast.makeText(this,
+                if(direction>0) "已经是最后一集了 · 播完会自动标记已看完" else "已经是第一集了",
+                Toast.LENGTH_SHORT).show()
+            return false
+        }
         playEpisode(target,savedPosition(target)); showHud(); return true
     }
     private fun syncMediaSession() {
@@ -4325,10 +4340,19 @@ class MainActivity: Activity() {
         openDetail(next,resume=true,autoplay=true)
         return true
     }
+    /** 整剧播完自动标记：不重复提示，也不删历史——「我的 - 观看历史」要留着这一条。 */
+    private fun markSeriesWatched(series: Series) {
+        if(library.watched(series.id)) return
+        library.setWatched(series.id,true)
+        Toast.makeText(this,"《${series.title}》已看完 · 已移出「接着看」，可在「我的 - 观看历史」查看",Toast.LENGTH_LONG).show()
+    }
     private fun showEndedPanel() {
         val data=detail
         if(playError || data==null || !library.autoNext || !library.autoSeason || episodeIndex<data.episodes.lastIndex) {
-            playbackText.text="本集已结束"; showPanel(); return
+            // 最后一集播完但没开自动连播/跨季时，也要明确告诉用户「整部剧看完了」
+            playbackText.text=if(!playError && data!=null && WatchCompletion.finished(episodeIndex,data.episodes.size))
+                "全剧已播完 · 已标记看完" else "本集已结束"
+            showPanel(); return
         }
         val cached=library.cachedHome(library.contentType)?.items.orEmpty().filter { it.id!=data.series.id }
         if(cached.isNotEmpty()) { showRecommendationPanel(cached); return }
@@ -4933,7 +4957,9 @@ class MainActivity: Activity() {
                 it.episodeLabel.ifBlank { "第 ${it.episodeIndex+1} 集" }+" · "+formatTime(it.positionMs),
                 it.positionMs,it.durationMs,it.cover)
         }
-        return library.history().filter { it.duration>0 && !it.completed }.take(8).map {
+        // watched = 整剧已看完（末集播完自动标，或长按手动标）：继续观看不该再翻出来，
+        // 只在电视「我的 - 观看历史」里留着
+        return library.history().filter { it.duration>0 && !it.completed && !library.watched(it.series.id) }.take(8).map {
             ResumeItem(it.series.id,it.series.title,"第 ${it.episodeIndex+1} 集 · ${formatTime(it.position)}",it.position,it.duration,it.series.cover)
         }
     }
@@ -4945,14 +4971,15 @@ class MainActivity: Activity() {
                 it.episodeLabel.ifBlank { "第 ${it.episodeIndex+1} 集" }+" · "+formatTime(it.positionMs),
                 it.positionMs,it.durationMs,it.cover)
         }
-        val local=library.history().filter { it.duration>0 && !it.completed }
+        val local=library.history().filter { it.duration>0 && !it.completed && !library.watched(it.series.id) }
         val localIds=local.map { it.series.id }.toSet()
         val cloud=if(!accountManager.signedIn) emptyList() else {
             // 云端历史没拉过就顺手踢一次（异步、只踢一次），下次打开「更多」就有
             if(!accountManager.cloudHistoryLoaded && !remoteCloudKicked) {
                 remoteCloudKicked=true; accountManager.refreshHistory()
             }
-            accountManager.cloudRows().filter { it.series.id !in localIds }
+            // 本机已标看完的剧，别让云端记录又把它补回「继续观看」
+            accountManager.cloudRows().filter { it.series.id !in localIds && !library.watched(it.series.id) }
         }
         return local.map {
             ResumeItem(it.series.id,it.series.title,"第 ${it.episodeIndex+1} 集 · ${formatTime(it.position)}",it.position,it.duration,it.series.cover)

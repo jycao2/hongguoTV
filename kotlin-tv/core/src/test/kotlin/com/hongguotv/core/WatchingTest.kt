@@ -107,6 +107,14 @@ class WatchingTest {
         assertEquals(3,budget.attempts)
         budget.reset(); assertEquals(1000L,budget.delayMillis); assertTrue(budget.consume())
     }
+    @Test fun `only the last episode ending marks the whole series finished`() {
+        assertTrue(WatchCompletion.finished(0,1))
+        assertTrue(WatchCompletion.finished(19,20))
+        assertFalse(WatchCompletion.finished(18,20))
+        assertFalse(WatchCompletion.finished(0,0))
+        assertFalse(WatchCompletion.finished(-1,1))
+        assertFalse(WatchCompletion.finished(20,20))
+    }
     @Test fun `legacy global defaults stay valid and invalid values have safe defaults`() {
         assertEquals(720,PlaybackQuality.normalize(720)); assertEquals(1080,PlaybackQuality.normalize(1080))
         assertEquals(1080,PlaybackQuality.normalize(-1)); assertEquals(480,PlaybackQuality.normalize(480))
