@@ -58,6 +58,10 @@ class QuickTransferServerTest {
             assertFalse(page.contains("__TOKEN__"))
             assertFalse(page.contains("__FREE__"))
             assertFalse(page.contains("__LIMIT__"))
+            // 长文件名必须能在卡片内折行，不能靠页面横向滚动才看得全
+            val metaRule = page.lineSequence().firstOrNull { it.startsWith(".item .meta{") }.orEmpty()
+            assertTrue(metaRule.contains("overflow-wrap:anywhere"))
+            assertTrue(metaRule.contains("word-break:break-all"))
             dir.deleteRecursively()
         }
     }
@@ -77,6 +81,19 @@ class QuickTransferServerTest {
             assertTrue(file.name.endsWith("-app-release.apk"))
             assertArrayEquals(apk, file.readBytes())
             assertEquals(apk.size.toLong() to apk.size.toLong(), progress.last())
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun `success message only echoes the file name so long paths cannot overflow the card`() {
+        val dir = Files.createTempDirectory("quick-msg").toFile()
+        server(dir).use {
+            val response = request(it, "/upload?name=photo.png", plain)
+            assertTrue(response.startsWith("HTTP/1.1 200"))
+            assertTrue(response.contains("已保存 · "))
+            // 完整绝对路径既冗长又会把状态行撑出屏幕，保存位置已在页面顶部单独给出
+            assertFalse(response.contains(dir.absolutePath))
+            assertFalse(response.contains("/data/"))
             dir.deleteRecursively()
         }
     }

@@ -201,7 +201,9 @@ class QuickTransferServer(
             if(!part.renameTo(target)) throw IOException("电视写入文件失败")
             accepted = target
             receivedCount.incrementAndGet()
-            message = "已保存 · ${target.absolutePath}"
+            // 只回显文件名：完整绝对路径又长又对手机用户没用，还会把状态行顶出屏幕。
+            // 保存位置已在页面顶部单独展示，这里保持一行短文案。
+            message = "已保存 · ${target.name}"
             onProgress(name, length, length, index, count)
         } catch(_: ExpiredException) {
             code = 410; message = "二维码已过期，请在电视上重新打开快传"
@@ -262,7 +264,7 @@ class QuickTransferServer(
 }
 
 private val PAGE = """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>红果 TV · 手机快传</title><style>
-body{font:16px/1.55 sans-serif;background:#10131b;color:#f4f5f8;max-width:560px;margin:0 auto;padding:20px 18px 40px}
+body{font:16px/1.55 sans-serif;background:#10131b;color:#f4f5f8;max-width:560px;margin:0 auto;padding:20px 18px 40px;overflow-x:hidden}
 h1{font-size:22px;margin:8px 0 4px}
 p{color:#a8b0c0;margin:8px 0}
 p.space{color:#ffb4a4;font-weight:600;font-size:17px}
@@ -272,11 +274,13 @@ input{width:100%;box-sizing:border-box;font:inherit;color:#f4f5f8;background:#1a
 .pick{position:relative;display:block;margin:14px 0;background:#ff634c;border-radius:10px;overflow:hidden}
 .pick span{display:block;padding:15px;text-align:center;color:#2a0b06;font-weight:600;-webkit-tap-highlight-color:transparent;pointer-events:none}
 input.native{position:absolute;left:0;top:0;width:100%;height:100%;margin:0;padding:0;border:0;border-radius:0;background:transparent;opacity:0;font-size:16px;cursor:pointer}
-p.dir{color:#a8b0c0;font-size:12px;word-break:break-all}
-p.picked{color:#ffb4a4;font-size:14px;word-break:break-all}
-.item{background:#1a1e28;border:1px solid #2a3040;border-radius:10px;padding:12px;margin:10px 0}
-.item .name{font-size:14px;word-break:break-all}
-.item .meta{color:#a8b0c0;font-size:13px;margin-top:6px}
+/* 文件名可能是没有空格的长串（中文/数字/下划线），默认不会断行，会把卡片撑出屏幕。
+   break-all 兜住老浏览器（微信 X5），anywhere 让现代浏览器优先按容器宽度折行。 */
+p.dir{color:#a8b0c0;font-size:12px;word-break:break-all;overflow-wrap:anywhere}
+p.picked{color:#ffb4a4;font-size:14px;word-break:break-all;overflow-wrap:anywhere}
+.item{background:#1a1e28;border:1px solid #2a3040;border-radius:10px;padding:12px;margin:10px 0;box-sizing:border-box;max-width:100%;word-break:break-all;overflow-wrap:anywhere}
+.item .name{font-size:14px;word-break:break-all;overflow-wrap:anywhere}
+.item .meta{color:#a8b0c0;font-size:13px;margin-top:6px;word-break:break-all;overflow-wrap:anywhere}
 .track{height:6px;background:#2a3040;border-radius:3px;overflow:hidden;margin-top:8px}
 .fill{height:100%;width:0;background:#ff634c;transition:width .18s linear}
 .item.ok .fill{background:#1dc981}
