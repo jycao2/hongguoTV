@@ -11,6 +11,17 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.31.0 新增
+
+- **网络代理**：设置 → 实验室功能新增网络代理，可绕开片源 DNS 污染 / SNI 阻断。
+- **手机号验证码登录**。
+- **云端收藏**：本机 / 云端双区展示，自动提醒上新，支持续播。
+- **快传升级**：多文件一次选择、整批接收；图片 / 视频全屏预览。
+- **网速悬浮显示**：右上角常显（含播放页），实时上下行。
+- **播放页**：切集到头有提示；整剧播完自动标记已看完，不再出现在「接着看」。
+- **语音 / 遥控指令扩充**，并新增指令帮助页。
+- **片源增强**：CMS v1 XML、自定义请求头、导入导出 v2、单源上限提至 200。
+
 ## 0.30.10 修复
 
 - **双构建修完自动更新链路**：旧客户端（≤0.28.0）装前校验更新包「实际 minSdk == 清单声明 minSdk」，因此更新通道 APK 实际 minSdk 必须是 26。本版起 CI 出两个包：更新通道 `-android8.apk`（minSdk 26，存量 Android 8+ 用户自动更新全通）；Release 页另挂 `-android5.apk`（minSdk 21，Android 5-7 用户手动安装）。构建脚本默认 minSdk 26，出 android5 变体用 `-PHONGGUOTV_MIN_SDK=21`。CI 内以 aapt2 校验两包 minSdk 防呆。
@@ -415,9 +426,9 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.30.10-android8.apk（更新通道，minSdk 26）
+# 输出：outputs/hongguotv-kotlin-0.31.0-android8.apk（更新通道，minSdk 26）
 # Android 5-7 变体：./gradlew -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease
-# 输出：outputs/hongguotv-kotlin-0.30.10-android5.apk（minSdk 21）
+# 输出：outputs/hongguotv-kotlin-0.31.0-android5.apk（minSdk 21）
 ```
 
 ## 工程结构
