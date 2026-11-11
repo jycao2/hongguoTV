@@ -156,6 +156,8 @@ class MainActivity: Activity() {
     private var catalogFocusPos=RecyclerView.NO_POSITION
     /** 焦点当前是否在网格卡片内：用于在 Activity 层拦截下键，即使焦点被回收清空也按记住的位置继续下移 */
     private var gridFocusOwned=false
+    /** 跨区/跨行移动的目标位置：焦点卡被滚动回收时，恢复逻辑优先聚焦它而不是抢回原卡。 */
+    private var pendingGridFocusPos=RecyclerView.NO_POSITION
     private var loadingMore=false
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
@@ -1561,19 +1563,34 @@ class MainActivity: Activity() {
         val recycler=RecyclerView(this).apply {
             id=View.generateViewId(); clipToPadding=false; isVerticalScrollBarEnabled=false; itemAnimator=null
             layoutManager=grid; this.adapter=adapter
-            // Focus entering the grid lands on the first visible card, keeping the user's place.
+            // Focus entering the grid lands on the first visible CARD, keeping the user's place.
+            // 首个可见项可能是分节标题（不可聚焦）：不跳过的话焦点停在 RecyclerView 本身，↓ 键从此失灵。
             isFocusable=true; isFocusableInTouchMode=true
-            setOnFocusChangeListener { _,focused -> if(focused) { val first=grid.findFirstVisibleItemPosition().coerceAtLeast(0); post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() } } }
+            setOnFocusChangeListener { _,focused -> if(focused) {
+                var first=grid.findFirstVisibleItemPosition().coerceAtLeast(0)
+                while(first<adapter.itemCount && (adapter.isHeader(first) || adapter.isFooter(first))) first++
+                post { findViewHolderForAdapterPosition(first)?.itemView?.requestFocus() }
+            } }
             // 下键统一在 MainActivity.dispatchKeyEvent 里处理：网格重排/分页时 View 层收不到按键
         }
-        catalogRecycler=recycler; catalogAdapter=adapter; catalogFocusPos=RecyclerView.NO_POSITION; gridFocusOwned=false
+        catalogRecycler=recycler; catalogAdapter=adapter; catalogFocusPos=RecyclerView.NO_POSITION; gridFocusOwned=false; pendingGridFocusPos=RecyclerView.NO_POSITION
         recycler.viewTreeObserver.addOnGlobalFocusChangeListener { o,n ->
             if(n!=null && inCatalogGrid(n,recycler)) {
                 val pos=recycler.getChildAdapterPosition(n)
-                if(pos!=RecyclerView.NO_POSITION) { catalogFocusPos=pos; gridFocusOwned=true }
-            } else if(o!=null && inCatalogGrid(o,recycler)) gridFocusOwned=false
+                if(pos!=RecyclerView.NO_POSITION) {
+                    catalogFocusPos=pos; gridFocusOwned=true
+                    if(pos==pendingGridFocusPos) pendingGridFocusPos=RecyclerView.NO_POSITION
+                }
+            } else if(o!=null && inCatalogGrid(o,recycler)) {
+                gridFocusOwned=false
+                // 焦点卡在跨区移动中被滚出屏幕回收：把焦点抓到移动目标上，别让它落去顶栏，
+                // 也别让恢复逻辑把焦点抢回原卡、把刚滚出来的距离再滚回去（两者互搏=按了没反应）。
+                if(pendingGridFocusPos!=RecyclerView.NO_POSITION) grabPendingFocus()
+            }
             // 旧焦点为 null：焦点卡在重排中被回收，立刻补回网格，别停在顶栏「首页」
-            else if(o==null && gridFocusOwned) restoreCatalogFocus()
+            else if(o==null && gridFocusOwned) {
+                if(pendingGridFocusPos!=RecyclerView.NO_POSITION) grabPendingFocus() else restoreCatalogFocus()
+            }
         }
         adapter.footer=when {
             localCatalog() -> if(collection=="hot" && collectionReturn?.hasMore==true) FOOTER_MORE_HOT else FOOTER_NONE
@@ -1669,9 +1686,10 @@ class MainActivity: Activity() {
                 if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
                     val index=adapter.displayedIndex(pos)
                     if(index in 0 until adapter.displayed.size) {
-                        val cols=(recycler.layoutManager as? GridLayoutManager)?.spanCount ?: 1
-                        val target=index+cols
-                        if(target<=adapter.displayed.size-1) moveGridFocus(adapter.adapterPosition(target))
+                        val target=adapter.gridNeighbor(index,1)
+                        // 目标不存在（已是最后一行）也吃掉按键：别让焦点掉出网格
+                        if(target>=0) moveGridFocus(adapter.adapterPosition(target))
+                        else pendingGridFocusPos=RecyclerView.NO_POSITION
                         return true
                     }
                 }
@@ -1697,9 +1715,8 @@ class MainActivity: Activity() {
                 if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
                     val index=adapter.displayedIndex(pos)
                     if(index in 0 until adapter.displayed.size) {
-                        val cols=(recycler.layoutManager as? GridLayoutManager)?.spanCount ?: 1
-                        val target=index-cols
-                        if(target>=0 && target in adapter.displayed.indices) moveGridFocus(adapter.adapterPosition(target))
+                        val target=adapter.gridNeighbor(index,-1)
+                        if(target>=0) moveGridFocus(adapter.adapterPosition(target))
                         else {
                             // 首行：先回本页的菜单按钮（排行榜的看榜/刷新、搜索的输入行），
                             // 再按键才回顶栏；不再一步跳到顶部菜单栏。
@@ -1722,26 +1739,61 @@ class MainActivity: Activity() {
         }
         return false
     }
-    /** 把焦点移到网格内指定 adapter 位置：已布局直接移，未布局先滚动再补焦点 */
+    /** 把焦点移到网格内指定 adapter 位置：已布局直接移，未布局先滚动再补焦点（跨分节标题时一行的滚动量不够，最多补三行）。 */
     private fun moveGridFocus(pos: Int) {
         val recycler=catalogRecycler ?: return
-        val holder=recycler.findViewHolderForAdapterPosition(pos)
-        if(holder!=null) { holder.itemView.requestFocus(); return }
+        pendingGridFocusPos=pos
+        if(focusGridPos(pos)) { pendingGridFocusPos=RecyclerView.NO_POSITION; return }
         // 目标在屏幕外：只按一行高度滚动。用 scrollToPosition 会把目标整行锚到顶部，
         // 当前焦点卡瞬间被滚出屏幕并回收，焦点被清空后框架直接回落到顶栏「首页」。
         // 滚动方向必须跟着目标走：向上找目标时要往回滚，否则上一行永远进不了布局。
+        // 焦点被回收由 grabPendingFocus 兜底接住（优先聚焦目标，而不是抢回原卡）。
         val focused=recycler.focusedChild
-        if(focused!=null) {
-            val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
-            val step=focused.height+margin
-            val current=recycler.getChildAdapterPosition(focused)
-            val downward=current!=RecyclerView.NO_POSITION && pos>current
-            recycler.scrollBy(0,if(downward) step else -step)
-        } else recycler.scrollToPosition(pos)
+        if(focused==null) { recycler.scrollToPosition(pos); recycler.post { attemptPendingFocus(pos,0) }; return }
+        val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
+        val step=focused.height+margin
+        val current=recycler.getChildAdapterPosition(focused)
+        val downward=current!=RecyclerView.NO_POSITION && pos>current
+        recycler.scrollBy(0,if(downward) step else -step)
+        recycler.post { attemptPendingFocus(pos,if(downward) step else -step) }
+    }
+    /** 跨区移动中焦点被回收的兜底：优先把焦点抓到 pending 目标卡上。 */
+    private fun grabPendingFocus() {
+        val pos=pendingGridFocusPos
+        if(pos==RecyclerView.NO_POSITION) { restoreCatalogFocus(); return }
+        val recycler=catalogRecycler ?: return
         recycler.post {
-            if(screen!="catalog" || recycler!==catalogRecycler) return@post
-            recycler.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus()
+            if(screen!="catalog" || recycler!==catalogRecycler || recycler.focusedChild!=null) return@post
+            if(focusGridPos(pos)) { pendingGridFocusPos=RecyclerView.NO_POSITION; return@post }
+            // 目标还没进布局：锚过去再试一次
+            recycler.scrollToPosition(pos)
+            recycler.post {
+                if(focusGridPos(pos)) pendingGridFocusPos=RecyclerView.NO_POSITION
+            }
         }
+    }
+    /** moveGridFocus 的补焦循环：目标可见则落焦点，否则继续滚（最多三行）。 */
+    private fun attemptPendingFocus(pos: Int, step: Int) {
+        val recycler=catalogRecycler ?: return
+        if(screen!="catalog" || recycler!==catalogRecycler) return
+        if(focusGridPos(pos)) { pendingGridFocusPos=RecyclerView.NO_POSITION; return }
+        var tries=0
+        fun attempt() {
+            if(screen!="catalog" || recycler!==catalogRecycler) return
+            if(focusGridPos(pos)) { pendingGridFocusPos=RecyclerView.NO_POSITION; return }
+            if(tries<3) { tries++; recycler.scrollBy(0,step); recycler.post { attempt() } }
+        }
+        attempt()
+    }
+    /** 网格内目标位置当前可见且已挂窗则聚焦，返回是否真的落上焦点。 */
+    private fun focusGridPos(pos: Int): Boolean {
+        val recycler=catalogRecycler ?: return false
+        val view=recycler.findViewHolderForAdapterPosition(pos)?.itemView ?: return false
+        // scrap/待布局的 holder 可能还没 attach：对它 requestFocus 是假成功，焦点随后会被框架抢走
+        if(!view.isAttachedToWindow) return false
+        val took=view.requestFocus()
+        if(!took) return false
+        return recycler.focusedChild===view || recycler.focusedChild?.parent===view
     }
     /** 记住当前焦点卡位置，供列表结构变更（footer 插入/移除、分页插入）后补回焦点，避免掉到顶栏首页 */
     private fun rememberCatalogFocus() {
@@ -1844,6 +1896,14 @@ class MainActivity: Activity() {
             for(key in headers.keys.sorted()) if(key<=position) position++
             return position
         }
+        /** displayed 下标 i 前面是否紧贴一个分节标题（标题独占一行，网格行计算要跳过）。 */
+        private fun sectionStart(index: Int): Boolean {
+            if(index<=0) return false
+            return headers.containsKey(adapterPosition(index)-1)
+        }
+        /** 同列上/下一视觉行的卡片下标：跨「本机/云端」分节标题无缝移动，没有则 -1。 */
+        fun gridNeighbor(index: Int, dir: Int): Int =
+            GridNav.neighbor(GridNav.coordinates(displayed.size,cols,::sectionStart),index,dir)
         override fun getItemCount()=displayed.size+headers.size+if(footer!=FOOTER_NONE) 1 else 0
         override fun getItemViewType(position: Int)=if(isHeader(position)) TYPE_HEADER else if(isFooter(position)) TYPE_FOOTER else TYPE_CARD
         fun updateFooter(next: Int) {
