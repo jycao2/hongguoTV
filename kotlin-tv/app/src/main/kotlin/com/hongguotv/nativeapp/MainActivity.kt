@@ -720,11 +720,10 @@ class MainActivity: Activity() {
         backdropView?.takeIf { backdropBitmap!=null }?.let { root.addView(it,FrameLayout.LayoutParams(-1,-1)) }
         val container=column(); val horizontal=dp(widthDp()*.05f); val vertical=(resources.displayMetrics.heightPixels*.05f).toInt()
         container.setPadding(horizontal,vertical,horizontal,vertical); root.addView(container,FrameLayout.LayoutParams(-1,-1))
-        // 本地测试包（versionName 不含 +构建号）右上角常驻 beta 标记，与正式包区分；播放页不显示。
-        // 网速悬浮文字开启时贴顶显示，beta 顺次下移避让
+        // 本地测试包（versionName 不含 +构建号）常驻 beta 标记放左上角（右上角留给网速/时钟），与正式包区分；播放页不显示
         if(!BuildConfig.VERSION_NAME.contains('+')) {
             root.addView(text("beta",12f,accent).apply { importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable=false },
-                FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10)+if(netSpeedShown()) dp(30) else 0; rightMargin=dp(14) })
+                FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START).apply { topMargin=dp(10); leftMargin=dp(14) })
         }
         if(title!=null) { val heading=row(); addButton(heading,"‹ 返回") { goBack() }; heading.addView(text(title,22f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER_VERTICAL },lp(0,dp(44)).apply { weight=1f }); container.addView(heading) }
         applyClock()
@@ -741,8 +740,8 @@ class MainActivity: Activity() {
             isFocusable=false; isClickable=false
             setPadding(dp(8),dp(3),dp(8),dp(3))
         }
-        // 右上角纵向堆叠：网速(贴顶) → beta(仅本地包) → 时钟，各占一行顺次下移
-        val topMargin=dp(10)+(if(netSpeedShown()) dp(30) else 0)+(if(!BuildConfig.VERSION_NAME.contains('+')) dp(20) else 0)
+        // 时钟恢复原位（右上角 dp10）；仅当网速悬浮文字开启时才下移一行避让
+        val topMargin=dp(10)+(if(netSpeedShown()) dp(30) else 0)
         root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=topMargin; rightMargin=dp(14) })
         clockView=view
         val tick=object: Runnable {
