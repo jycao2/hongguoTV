@@ -1319,8 +1319,13 @@ class MainActivity: Activity() {
             if(tab==3 && !favoriteManage) {
                 favoriteCheck=addButton(heading,"检查更新") {
                     if(favoriteMonitor.running) Toast.makeText(this,"正在检查收藏更新…",Toast.LENGTH_SHORT).show()
-                    else if(library.favorites().isEmpty()) Toast.makeText(this,"先收藏几部剧，再来检查更新",Toast.LENGTH_SHORT).show()
-                    else { favoriteMonitor.check(force=true); Toast.makeText(this,"开始检查收藏更新…",Toast.LENGTH_SHORT).show() }
+                    else if(library.favorites().isEmpty() && !accountManager.signedIn) Toast.makeText(this,"先收藏几部剧，再来检查更新",Toast.LENGTH_SHORT).show()
+                    else {
+                        // 本机收藏逐部查详情；云端收藏顺带对账书架（0 额外请求），两个区一起更新
+                        if(library.favorites().isNotEmpty()) favoriteMonitor.check(force=true)
+                        if(accountManager.signedIn && !accountManager.isBusy) accountManager.refreshFavorites()
+                        Toast.makeText(this,"开始检查收藏更新…",Toast.LENGTH_SHORT).show()
+                    }
                 }.apply { nextFocusUpId=nav[tab].id }
                 favoriteManageButton=addButton(heading,"管理") {
                     favoriteManage=true; favoriteSelected.clear(); showCatalog()
@@ -1576,6 +1581,9 @@ class MainActivity: Activity() {
         // 已登录但云端收藏还没拉到（启动时拉取失败等）：进页面顺手补拉一次，完成后 onAccountChanged 重建展示
         if(tab==3 && !favoriteManage && collection==null && accountManager.signedIn &&
             !accountManager.cloudFavoritesLoaded && !accountManager.isBusy) accountManager.refreshFavorites()
+        // 云端收藏的续播角标来自云端观看记录：没拉到同样顺手补拉，拉到后经签名变化重建
+        if(tab==3 && !favoriteManage && collection==null && accountManager.signedIn &&
+            !accountManager.cloudHistoryLoaded && !accountManager.isBusy) accountManager.refreshHistory()
         val localCount=displayed.size
         if(cloudRows.isNotEmpty()) displayed+=cloudRows.map { it.series }
         if(cloudFavs.isNotEmpty()) displayed+=cloudFavs.map { it.series }
@@ -2025,6 +2033,14 @@ class MainActivity: Activity() {
             val cloudRow=if(di>=cloudStart) cloudRows.getOrNull(di-cloudStart) else null
             val cloudFav=if(di>=cloudFavStart) cloudFavs.getOrNull(di-cloudFavStart) else null
             val cloudFavProgress=if(cloudFav!=null) accountManager.cloudRows().firstOrNull { it.series.id==item.id } else null
+            // 云端优先；云端记录还没拉到/没这部时退回本机播放记录，一样能续播
+            val cloudFavLocalResume=if(cloudFav!=null && cloudFavProgress==null) library.progress(item.id) else null
+            val cloudFavResumeLabel=when {
+                cloudFavProgress!=null -> "第 ${cloudFavProgress.episodeIndex+1} 集 · ${formatTime(cloudFavProgress.position)}"
+                cloudFavLocalResume!=null -> "第 ${cloudFavLocalResume.episodeIndex+1} 集 · ${formatTime(cloudFavLocalResume.position)}"
+                else -> null
+            }
+            val cloudFavCanResume=cloudFavProgress!=null || cloudFavLocalResume!=null
             // 云端收藏上新状态：加更琥珀、新季/新收藏红；角标挂海报右上，副标题行同步提示
             val cloudFavUpdate=cloudFav?.let { library.cloudUpdate(it.series.id) }
             val cloudFavAdded=cloudFavUpdate?.added ?: 0
@@ -2084,9 +2100,11 @@ class MainActivity: Activity() {
             val progress=if(tab==4 || collection=="resume") library.progress(item.id) else null
             // 收藏管理模式：角标前缀 ✓ 表示已勾选，确认键只切换勾选不进详情
             val managePicked=tab==3 && favoriteManage && item.id in favoriteSelected
-            holder.badge.text=if(cloudRow!=null) "第 ${cloudRow.episodeIndex+1} 集 · ${formatTime(cloudRow.position)} · 云端" else if(cloudFav!=null) (if(cloudFavProgress!=null) "第 ${cloudFavProgress.episodeIndex+1} 集 · ${formatTime(cloudFavProgress.position)} · " else "")+"云端"+if(cloudFavSuffix.isEmpty()) "" else " · $cloudFavSuffix" else if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
+            holder.badge.text=if(cloudRow!=null) "第 ${cloudRow.episodeIndex+1} 集 · ${formatTime(cloudRow.position)} · 云端" else if(cloudFav!=null) (cloudFavResumeLabel?.let { "$it · " } ?: "")+(if(cloudFavUpdate!=null) "更新至 ${cloudFavUpdate.total} 集" else "尚未检查更新")+if(cloudFavSuffix.isEmpty()) "" else " · $cloudFavSuffix" else if(tab==3) (if(favoriteManage && managePicked) "✓ " else "")+library.favoriteLabel(item.id) else if(ranked) rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge
             holder.badge.setTextColor(if(managePicked) gold else if(ranked || tab==3) accent else muted)
-            if(tab==3 && !favoriteManage) favoriteBadges[item.id]=holder.badge
+            // 只登记本机收藏卡的角标：同剧在云端区再出现一次时不能登记（favoriteBadges 按 id 存、
+            // 后绑定的会覆盖前一个，刷新本机 label 会把文字写进云端卡的角标）
+            if(tab==3 && !favoriteManage && cloudFav==null) favoriteBadges[item.id]=holder.badge
             card.setOnClickListener {
                 catalogFocus=item.id
                 if(tab==3 && favoriteManage) {
@@ -2096,7 +2114,8 @@ class MainActivity: Activity() {
                     // 点进详情即视为看过：重置上新基线、清掉角标与「新收藏」标记
                     library.acknowledgeCloudFavorite(item.id, CloudAccountClient.episodeTotal(item.badge), System.currentTimeMillis())
                     catalogAdapter?.notifyItemChanged(position)
-                    openDetail(item,cloudFavProgress!=null,cloud=cloudFavProgress)
+                    // 云端记录优先续播；没有就用本机播放记录（云端收藏不等于没看过）
+                    openDetail(item,cloudFavCanResume,cloud=cloudFavProgress)
                 } else openDetail(item,tab==4 || collection=="resume" || collection=="updates")
             }
             card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
