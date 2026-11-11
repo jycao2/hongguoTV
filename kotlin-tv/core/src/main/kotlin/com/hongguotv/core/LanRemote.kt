@@ -174,6 +174,7 @@ val REMOTE_ACTIONS = setOf(
     "theme.toggle",     // 切换深/浅主题
     "theme.set",        // 指定主题：arg = dark | light
     "clock.toggle",     // 顶栏系统时间
+    "netspeed.toggle",  // 左下角实时网速悬浮条
     "backdrop.reset",   // 恢复默认背景
     "dialog.close",     // 关掉当前最上层的弹窗（没有弹窗时不执行）
     // 播放偏好（设置页里的开关）

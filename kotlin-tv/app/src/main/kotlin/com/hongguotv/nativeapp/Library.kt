@@ -235,6 +235,10 @@ class Library(context: Context) {
     var newReleaseWindow: String
         get() = prefs.getString("newReleaseWindow", null).orEmpty()
         set(value) { prefs.edit().putString("newReleaseWindow", value).apply() }
+    /** 左下角实时网速悬浮条：设备总收发速率，设置页或语音开关，默认关闭。本机显示偏好，不进备份。 */
+    var netSpeed: Boolean
+        get() = prefs.getBoolean("netSpeed", false)
+        set(value) { prefs.edit().putBoolean("netSpeed", value).apply() }
     /** 导航栏「片源」入口是否隐藏：默认隐藏，用户可在设置里单独显示；随备份一起恢复。 */
     var sourceHidden: Boolean
         get() = state().settings.sourceHidden

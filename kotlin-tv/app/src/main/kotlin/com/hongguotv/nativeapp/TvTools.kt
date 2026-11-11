@@ -17,6 +17,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -71,10 +72,16 @@ class TvTools(private val activity: Activity) {
     private fun quickDirectories()=TransferKind.entries.map { quickDirectory(it) }.distinct()
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
-    private fun open(next: AlertDialog,anchor: View?,onDismiss: (()->Unit)?=null) {
+    private fun open(next: AlertDialog,anchor: View?,fullscreen: Boolean=false,onDismiss: (()->Unit)?=null) {
         dialog?.dismiss(); dialog=next
         next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null }; if(anchor?.isAttachedToWindow==true) anchor.requestFocus(); onDismiss?.invoke() }
-        next.show()
+        if(fullscreen) {
+            // 全屏预览：铺满整屏的纯黑底、去掉压暗层，图片/视频等比占满可用空间
+            next.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.BLACK))
+            next.show()
+            next.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
+            next.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        } else next.show()
     }
     fun close() { dialog?.dismiss(); phone?.close(); phone=null }
     fun destroy() { close(); worker.shutdownNow() }
@@ -385,27 +392,34 @@ class TvTools(private val activity: Activity) {
         }
         startSession()
     }
-    /** 快传图片预览：后台解码大图，弹窗内显示实际保存路径，并可直接设为电视背景。 */
+    /**
+     * 快传图片全屏预览：整屏黑底等比显示，进入时只显示图片本身，
+     * 确认键或点击画面才唤出顶部信息条（文件名+路径）与底部操作条，再按一次隐藏。
+     * 唤出时焦点落在「关闭」，返回键先收起浮层、再按退出。
+     */
     fun previewImage(anchor: View?,file: File,onSetBackdrop: ()->Unit) {
-        val content=column(); content.addView(TvDialog.title(activity,file.name))
-        content.addView(label("位置 · ${file.absolutePath}",11f).apply { setTextColor(TvStyle.muted) })
-        val status=label("正在加载…",12f).apply { text="正在加载…"; setTextColor(TvStyle.muted) }
-        content.addView(status)
-        val image=ImageView(activity).apply { scaleType=ImageView.ScaleType.FIT_CENTER; setPadding(0,dp(8),0,dp(8)) }
-        content.addView(image,LinearLayout.LayoutParams(-1,dp(400)))
-        val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(10),0,0) }
+        val status=label("正在加载…",13f).apply { setTextColor(0x99FFFFFF.toInt()); gravity=Gravity.CENTER; setPadding(dp(24),dp(12),dp(24),dp(12)) }
+        val image=ImageView(activity).apply { scaleType=ImageView.ScaleType.FIT_CENTER }
+        val root=FrameLayout(activity).apply { setBackgroundColor(Color.BLACK); isClickable=true }
+        root.addView(image,FrameLayout.LayoutParams(-1,-1))
+        root.addView(status,FrameLayout.LayoutParams(-2,-2,Gravity.CENTER))
+        val info=fullscreenInfoBar(file.name,file.absolutePath)
+        root.addView(info,FrameLayout.LayoutParams(-1,-2,Gravity.TOP))
+        // 底部操作条：左提示、右按钮，压在全屏图上
+        val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(20),dp(8),dp(20),dp(12)) }
         lateinit var next: AlertDialog
         val close=TvDialog.capsuleButton(activity,"关闭") { next.dismiss() }
         val set=TvDialog.capsuleButton(activity,"设为电视背景") { next.dismiss(); onSetBackdrop() }
         close.id=View.generateViewId(); set.id=View.generateViewId()
         close.nextFocusRightId=set.id; set.nextFocusLeftId=close.id
+        actions.addView(fullscreenHint("返回键退出"),LinearLayout.LayoutParams(0,-2,1f))
         actions.addView(close,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(12) })
         actions.addView(set,LinearLayout.LayoutParams(-2,-2))
-        content.addView(actions)
-        next=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,next,widthDp=560)
-        open(next,anchor)
-        close.post { if(this@TvTools.dialog===next) close.requestFocus() }
+        root.addView(actions,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+        next=AlertDialog.Builder(activity).setView(root).create()
+        val chrome=toggleChrome(next,info,actions,onShow={ close.requestFocus() })
+        root.setOnClickListener { chrome(info.visibility!=View.VISIBLE) }
+        open(next,anchor,fullscreen=true)
         worker.execute {
             val bitmap=runCatching { previewBitmap(file) }.getOrNull()
             main.post {
@@ -415,28 +429,76 @@ class TvTools(private val activity: Activity) {
             }
         }
     }
-    /** 快传视频播放：内置播放器弹窗，确认键暂停/继续，返回键退出。 */
+    /**
+     * 快传视频全屏播放：整屏黑底等比播放，进入时只显示画面，
+     * 确认键或点击画面唤出/收起顶部信息与底部提示；浮层显示时确认键改为暂停/继续，
+     * 播放/暂停键随时可用；返回键先收起浮层、再按退出；播完自动退出。
+     */
     fun playVideo(anchor: View?,file: File) {
-        val content=column(); content.addView(TvDialog.title(activity,file.name))
-        content.addView(label("位置 · ${file.absolutePath}",11f).apply { setTextColor(TvStyle.muted) })
-        val status=label("正在播放 · 确认键暂停，返回键退出",12f).apply { setTextColor(TvStyle.muted) }
         val view=PlayerView(activity).apply { useController=false; isFocusable=false; setBackgroundColor(Color.BLACK) }
-        content.addView(view,LinearLayout.LayoutParams(-1,dp(380)))
-        content.addView(status)
-        val next=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
-        TvDialog.styleWindow(activity,next,widthDp=620)
+        val root=FrameLayout(activity).apply { setBackgroundColor(Color.BLACK); isClickable=true }
+        root.addView(view,FrameLayout.LayoutParams(-1,-1))
+        val info=fullscreenInfoBar(file.name,file.absolutePath)
+        root.addView(info,FrameLayout.LayoutParams(-1,-2,Gravity.TOP))
+        val hint=fullscreenHint("确认键暂停 / 继续 · 返回键退出")
+        root.addView(hint,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+        val next=AlertDialog.Builder(activity).setView(root).create()
         val player=ExoPlayer.Builder(activity).build()
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
         player.prepare(); player.playWhenReady=true
         view.player=player
-        next.setOnKeyListener { _,key,event ->
-            if(event.action==KeyEvent.ACTION_DOWN && (key==KeyEvent.KEYCODE_DPAD_CENTER || key==KeyEvent.KEYCODE_ENTER || key==KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)) {
-                player.playWhenReady=!player.playWhenReady
-                status.text=if(player.playWhenReady) "正在播放 · 确认键暂停，返回键退出" else "已暂停 · 确认键继续，返回键退出"
-                true
-            } else false
+        player.addListener(object: androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if(playbackState==androidx.media3.common.Player.STATE_ENDED) next.dismiss()
+            }
+        })
+        fun syncHint() {
+            hint.text=if(player.playWhenReady) "确认键唤出浮层后暂停 / 继续 · 返回键退出" else "已暂停 · 确认键继续 · 返回键退出"
         }
+        val chrome=toggleChrome(next,info,hint,
+            onCenterVisible={ player.playWhenReady=!player.playWhenReady; syncHint(); true },
+            onMediaKey={ player.playWhenReady=!player.playWhenReady; syncHint(); true })
+        root.setOnClickListener { chrome(info.visibility!=View.VISIBLE) }
         open(next,anchor) { player.release(); view.player=null }
+    }
+    /**
+     * 全屏预览浮层开关：初始隐藏全部浮层，统一接管对话框按键——
+     * 确认键在浮层隐藏时唤出（[onCenterVisible] 处理浮层显示时的确认键），
+     * 返回键先收起浮层、再按才退出。返回 (visible)->Unit 供点击画面时切换。
+     */
+    private fun toggleChrome(dialog: AlertDialog,vararg layers: View,
+        onCenterVisible: (()->Boolean)?=null,onMediaKey: (()->Boolean)?=null,onShow: (()->Unit)?=null): (Boolean)->Unit {
+        layers.forEach { it.visibility=View.GONE }
+        var visible=false
+        fun show(value: Boolean) {
+            if(dialog!==this@TvTools.dialog) return
+            visible=value
+            layers.forEach { it.visibility=if(value) View.VISIBLE else View.GONE }
+            onShow?.takeIf { value }?.invoke()
+        }
+        dialog.setOnKeyListener { _,key,event ->
+            if(event.action!=KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when(key) {
+                KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER ->
+                    if(!visible) { show(true); true } else onCenterVisible?.invoke() ?: false
+                KeyEvent.KEYCODE_BACK -> if(visible) { show(false); true } else false
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> onMediaKey?.invoke() ?: false
+                else -> false
+            }
+        }
+        return ::show
+    }
+    /** 全屏预览顶部信息条：半透明黑底，文件名加亮、路径弱化，深浅主题都可读。 */
+    private fun fullscreenInfoBar(name: String,path: String)=LinearLayout(activity).apply {
+        orientation=LinearLayout.VERTICAL; setPadding(dp(20),dp(12),dp(20),dp(10))
+        background=GradientDrawable().apply { setColor(0x88000000.toInt()) }
+        addView(label(name,16f).apply { setTextColor(Color.WHITE) })
+        addView(label("位置 · $path",11f).apply { setTextColor(0x99FFFFFF.toInt()) })
+    }
+    /** 全屏预览底部弱化提示文字。 */
+    private fun fullscreenHint(value: String)=TextView(activity).apply {
+        text=value; textSize=12f; setTextColor(0x99FFFFFF.toInt())
+        setPadding(dp(20),dp(8),dp(20),dp(12))
     }
     /** 按屏幕宽度采样解码，避免超大图片直接把内存打满。 */
     private fun previewBitmap(file: File): Bitmap? {
@@ -477,7 +539,7 @@ class TvTools(private val activity: Activity) {
         val status=label("正在读取…"); content.addView(status)
         val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
         TvDialog.styleWindow(activity,dialog,widthDp=520)
-        open(dialog,anchor,onClose)
+        open(dialog,anchor,onDismiss=onClose)
         val directories=quickDirectories()
         worker.execute {
             val files=runCatching { TransferFiles.prune(directories); TransferFiles.list(directories) }.getOrNull()

@@ -69,7 +69,7 @@ SECTIONS = [
     ('三、播放控制', ['play.toggle', 'play.next', 'play.prev', 'play.replay', 'player.close',
                       'panel.episodes', 'skip.intro']),
     ('四、音量', ['volume.up', 'volume.down', 'volume.mute']),
-    ('五、外观与弹窗', ['theme.toggle', 'theme.set', 'clock.toggle', 'backdrop.reset', 'dialog.close']),
+    ('五、外观与弹窗', ['theme.toggle', 'theme.set', 'clock.toggle', 'netspeed.toggle', 'backdrop.reset', 'dialog.close']),
     ('六、播放偏好', ['autonext.toggle', 'autoseason.toggle', 'danmaku.toggle', 'autoskip.toggle']),
     ('七、观看与收藏', ['resume.latest', 'favorite.toggle']),
     ('八、内容库与随机推荐', ['type.set', 'random.pick']),

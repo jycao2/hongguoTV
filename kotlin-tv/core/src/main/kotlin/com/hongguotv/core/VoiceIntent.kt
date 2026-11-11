@@ -53,6 +53,8 @@ object VoiceIntent {
         // 外观与界面
         Rule(listOf("显示时间", "显示时钟", "时间显示", "顶栏时间"),
             RemoteCommand.Act("clock.toggle"), "已切换时间显示"),
+        Rule(listOf("显示网速", "隐藏网速", "打开网速", "关闭网速", "关掉网速", "网速显示"),
+            RemoteCommand.Act("netspeed.toggle"), "已切换网速显示"),
         Rule(listOf("恢复默认背景", "默认背景", "恢复背景"),
             RemoteCommand.Act("backdrop.reset"), "已恢复默认背景"),
         // 关弹窗。必须和「关弹幕」严格分开：两者只差一个字，早先没有这条规则时

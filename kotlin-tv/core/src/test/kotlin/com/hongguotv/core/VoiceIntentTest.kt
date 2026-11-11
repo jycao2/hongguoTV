@@ -68,6 +68,8 @@ class VoiceIntentTest {
         assertEquals("autoskip.toggle" to "", act("自动跳过"))
         assertEquals("danmaku.toggle" to "", act("关掉弹幕"))
         assertEquals("clock.toggle" to "", act("显示时间"))
+        assertEquals("netspeed.toggle" to "", act("显示网速"))
+        assertEquals("netspeed.toggle" to "", act("关闭网速"))
     }
 
     @Test

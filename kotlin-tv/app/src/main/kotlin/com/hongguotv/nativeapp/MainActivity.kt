@@ -139,6 +139,11 @@ class MainActivity: Activity() {
     private var libraryLoadError: Throwable?=null
     private var localPermissionContinuation: (() -> Unit)?=null
     private var clockView: TextView?=null
+    /** 左下角实时网速悬浮条（设置/语音开关，默认关闭）：随每次 root 重建重新挂载。 */
+    private var netSpeedView: TextView?=null
+    private var netSpeedTick: Runnable?=null
+    private var lastRxBytes=-1L
+    private var lastTxBytes=-1L
     private var clockTick: Runnable?=null
     private var workScope: RequestScope?=null
     private var workJob: java.util.concurrent.Future<*>?=null
@@ -720,6 +725,7 @@ class MainActivity: Activity() {
         }
         if(title!=null) { val heading=row(); addButton(heading,"‹ 返回") { goBack() }; heading.addView(text(title,22f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER_VERTICAL },lp(0,dp(44)).apply { weight=1f }); container.addView(heading) }
         applyClock()
+        applyNetSpeedOverlay()
         return container
     }
     /** Re-adds the optional top-right clock after every root rebuild; ticks on minute boundaries. */
@@ -744,6 +750,47 @@ class MainActivity: Activity() {
         }
         clockTick=tick
         tick.run()
+    }
+    /**
+     * 左下角实时网速悬浮条：显示设备总收发速率（↓ 下行 / ↑ 上行），
+     * 设置页「外观与界面」或语音开关，默认关闭。挂在每次 root 重建之后。
+     * 播放页底部是 HUD，悬浮条让位不显示（show=false），退出播放自动恢复。
+     */
+    private fun applyNetSpeedOverlay(show: Boolean=library.netSpeed) {
+        netSpeedTick?.let(main::removeCallbacks); netSpeedTick=null
+        if(!library.isLoaded || !show || !library.netSpeed) { netSpeedView?.let { root.removeView(it) }; netSpeedView=null; lastRxBytes=-1; lastTxBytes=-1; return }
+        if(netSpeedView==null) {
+            val view=text("网速 · 测量中…",12f,muted).apply {
+                importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                isFocusable=false; isClickable=false
+                setPadding(dp(12),dp(5),dp(12),dp(5))
+                background=rounded(TvStyle.surface,TvStyle.outline)
+            }
+            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.START).apply { leftMargin=dp(16); bottomMargin=dp(14) })
+            netSpeedView=view
+        }
+        val tick=object: Runnable {
+            override fun run() {
+                val rx=android.net.TrafficStats.getTotalRxBytes()
+                val tx=android.net.TrafficStats.getTotalTxBytes()
+                if(rx<0 || tx<0) netSpeedView?.text="网速 · 当前设备不支持"
+                else {
+                    if(lastRxBytes>=0 && lastTxBytes>=0) {
+                        netSpeedView?.text="↓ ${speedLabel(rx-lastRxBytes)}   ↑ ${speedLabel(tx-lastTxBytes)}"
+                    }
+                    lastRxBytes=rx; lastTxBytes=tx
+                }
+                main.postDelayed(this,1000L)
+            }
+        }
+        netSpeedTick=tick
+        tick.run()
+    }
+    /** 速率格式化：1 MB/s 以上一位小数，其余整数 KB/s 或 B/s。 */
+    private fun speedLabel(bytesPerSec: Long): String=when {
+        bytesPerSec>=1L shl 20 -> String.format(java.util.Locale.US,"%.1f MB/s",bytesPerSec/1048576f)
+        bytesPerSec>=1024L -> "${bytesPerSec/1024} KB/s"
+        else -> "$bytesPerSec B/s"
     }
     private fun loadCover(view: ImageView,url: String) {
         var ancestor: View?=view
@@ -935,7 +982,7 @@ class MainActivity: Activity() {
         lateinit var quickTool: TextView
         quickTool=button(if(tightNav) "快传" else "手机快传",false) {
             tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{},
-                { tvTools.quickFiles(quickTool,{ f,k -> handleQuickTransfer(f,k) },{ tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{}) },{}) })
+                { tvTools.quickFiles(quickTool,{ f,k -> handleQuickTransfer(f,k,true,quickTool) },{ tvTools.quickTransfer(quickTool,{ file,kind -> handleQuickTransfer(file,kind) },{}) },{}) })
         }.apply { textSize=13f; minHeight=dp(if(tightNav) 36 else 38); val pad=dp(if(tightNav) 10 else 12); setPadding(pad,dp(7),pad,dp(7)) }
         // 遥控入口放在顶栏而不是只在设置里：用户在任何一个列表页看剧时
         // 想换手机操作，都能就地打开，不用退回首页再一路找进设置。
@@ -2359,6 +2406,12 @@ class MainActivity: Activity() {
             clockButton.text="显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}"
             applyClock()
         }
+        lateinit var netSpeedButton: TextView
+        netSpeedButton=setting(look,"网速显示  ·  ${if(library.netSpeed) "开启" else "关闭"}") {
+            library.netSpeed=!library.netSpeed
+            netSpeedButton.text="网速显示  ·  ${if(library.netSpeed) "开启" else "关闭"}"
+            applyNetSpeedOverlay()
+        }
         lateinit var backdropButton: TextView
         fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
         backdropButton=setting(look,backdropLabel()) {
@@ -3362,6 +3415,7 @@ class MainActivity: Activity() {
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         applyClock()
+        applyNetSpeedOverlay(show=false)
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; recoverySpinner?.visibility=View.GONE; transportPlay=null; sleepButton=null
@@ -5155,6 +5209,13 @@ class MainActivity: Activity() {
                 library.showClock=!library.showClock
                 applyClock()
                 voiceSay(if(library.showClock) "已显示系统时间" else "已隐藏系统时间")
+                true
+            }
+            "netspeed.toggle" -> {
+                library.netSpeed=!library.netSpeed
+                // 播放页底部是 HUD，让位不显示；只记住开关，退出播放后自动恢复
+                applyNetSpeedOverlay(show=library.netSpeed && screen!="player")
+                voiceSay(if(library.netSpeed) "网速显示已打开" else "网速显示已关闭")
                 true
             }
             "backdrop.reset" -> {
