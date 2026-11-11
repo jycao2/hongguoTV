@@ -70,6 +70,63 @@ class TvTools(private val activity: Activity) {
     /** 快传落盘目录：都在 filesDir 下，卸载应用时随应用数据一起清除。 */
     private fun quickDirectory(kind: TransferKind)=File(activity.filesDir,TransferRules.directoryName(kind))
     private fun quickDirectories()=TransferKind.entries.map { quickDirectory(it) }.distinct()
+
+    /**
+     * 手机遥控页「上传文件到电视」的接收端。
+     *
+     * 由遥控服务的 socket 线程调用，所以这里**必须阻塞**到用户在电视上做出选择：
+     * 点「确认」才开始读请求体，点「取消」直接返回 false，一个字节都不落盘。
+     * 保存位置与扫码快传一致，接收完就能在「快传文件」里看到。
+     */
+    fun receiveRemoteUpload(name: String,length: Long,input: java.io.InputStream): Pair<Boolean,String> {
+        val safe=TransferRules.sanitize(name) ?: return false to "文件名不合法，请重试"
+        val kind=TransferRules.kindOf(safe) ?: return false to "不支持的文件类型，请传 APK、视频、图片或压缩包"
+        if(length<=0L || length>TransferRules.MAX_BYTES) return false to "文件大小不合法"
+        if(freeBytes()<length+TransferRules.MIN_FREE_BYTES) return false to "电视剩余空间不足，请先清理"
+        val message="手机想发送：\n\n$safe\n${TransferRules.humanBytes(length)}\n\n接收后可以在「快传文件」里打开。"
+        if(!askOnMain("接收手机上传",message)) return false to "已在电视上取消接收"
+        val directory=quickDirectory(kind)
+        if(!directory.exists() && !directory.mkdirs()) return false to "无法创建保存目录"
+        val part=File(directory,java.util.UUID.randomUUID().toString()+TransferRules.PART_SUFFIX)
+        return try {
+            java.io.FileOutputStream(part).use { output ->
+                val buffer=ByteArray(64*1024)
+                var received=0L
+                while(received<length) {
+                    val want=minOf(buffer.size.toLong(),length-received).toInt()
+                    val read=input.read(buffer,0,want)
+                    if(read<0) throw java.io.IOException("上传中断")
+                    output.write(buffer,0,read)
+                    received+=read
+                }
+                output.flush()
+            }
+            if(part.length()!=length) throw java.io.IOException("字节数不匹配")
+            val target=File(directory,TransferRules.targetName(safe,System.currentTimeMillis()))
+            if(!part.renameTo(target)) throw java.io.IOException("写入失败")
+            main.post { android.widget.Toast.makeText(activity,"已接收 ${target.name}",android.widget.Toast.LENGTH_SHORT).show() }
+            true to "已保存 · ${target.name}"
+        } catch(e: Throwable) {
+            runCatching { part.delete() }
+            false to "电视写入文件失败"
+        }
+    }
+
+    /** 在电视上弹确认框并阻塞等结果；超时按「不接收」处理，同时把框收掉。 */
+    private fun askOnMain(title: String,message: String,timeoutSeconds: Long=120L): Boolean {
+        val latch=java.util.concurrent.CountDownLatch(1)
+        val approved=java.util.concurrent.atomic.AtomicBoolean(false)
+        val shown=java.util.concurrent.atomic.AtomicReference<AlertDialog?>()
+        main.post {
+            val next=TvDialog.confirm(activity,title,message) { approved.set(true) }
+            next.setOnDismissListener { latch.countDown() }
+            shown.set(next)
+            next.show()
+        }
+        val answered=runCatching { latch.await(timeoutSeconds,java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
+        if(!answered) main.post { runCatching { shown.get()?.takeIf { it.isShowing }?.dismiss() } }
+        return answered && approved.get()
+    }
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
     private fun open(next: AlertDialog,anchor: View?,fullscreen: Boolean=false,onDismiss: (()->Unit)?=null) {
@@ -308,7 +365,8 @@ class TvTools(private val activity: Activity) {
         }
         open(dialog,anchor) { main.removeCallbacks(countdownTick); onClose() }
         dialog.window?.decorView?.post { status.requestFocus() }
-        fun startSession() {
+        /** [refocusRefresh] 为 true 表示这次重建是「刷新二维码」触发的，焦点要留在原按钮上。 */
+        fun startSession(refocusRefresh: Boolean=false) {
             status.text="正在生成二维码…"
             worker.execute {
                 try {
@@ -349,13 +407,15 @@ class TvTools(private val activity: Activity) {
                             progressBackgroundTintList=android.content.res.ColorStateList.valueOf(TvStyle.outline)
                         }
                         content.addView(bar,LinearLayout.LayoutParams(-1,dp(6)))
-                        val detail=label("",13f).apply { setTextColor(TvStyle.muted) }; content.addView(detail)
-                        val received=label("本次已接收 0 个文件",13f).apply { setTextColor(TvStyle.muted) }; content.addView(received)
+                        val detail=label("",13f).apply { setTextColor(TvStyle.muted); setPadding(dp(8),0,dp(8),0) }; content.addView(detail)
+                        // 进度条下的接收计数：紧贴进度条，不要默认 4dp 上下内边距撑出空隙
+                        val received=label("本次已接收 0 个文件",13f).apply { setTextColor(TvStyle.muted); setPadding(dp(8),dp(1),dp(8),dp(2)) }; content.addView(received)
                         val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(12),0,0) }
-                        val filesBtn=TvDialog.capsuleButton(activity,"快传文件") { onShowFiles() }
-                        val refresh=TvDialog.capsuleButton(activity,"刷新二维码") { startSession() }
+                        // compact：13sp 字号 + 34dp 高，四个按钮在 440dp 卡片里排得开，「完成」不会被挤窄
+                        val filesBtn=TvDialog.capsuleButton(activity,"快传文件",true) { onShowFiles() }
+                        val refresh=TvDialog.capsuleButton(activity,"刷新二维码",true) { startSession(true) }
                         // 文案压短：这一行四个胶囊按钮，6 个字会挤到换行
-                        val clear=TvDialog.capsuleButton(activity,"清空文件") {
+                        val clear=TvDialog.capsuleButton(activity,"清空文件",true) {
                             TvDialog.confirm(activity,"清空快传文件","删除通过手机快传收到的全部文件，不影响收藏、观看记录和已安装的应用。") {
                                 worker.execute {
                                     listOf(TransferKind.APK,TransferKind.OTHER).map { quickDirectory(it) }.distinct().forEach { dir ->
@@ -371,9 +431,7 @@ class TvTools(private val activity: Activity) {
                                 }
                             }.show()
                         }
-                        val close=TvDialog.capsuleButton(activity,"完成") { dialog.dismiss() }
-                        // 四个胶囊按钮横排，440dp 卡片内容宽约 352dp：默认 20dp 内边距 + 10dp 间距会多出
-                        // 一格宽度，把「完成」挤出卡片右缘（只剩一角）。这里统一收窄内边距与间距。
+                        val close=TvDialog.capsuleButton(activity,"完成",true) { dialog.dismiss() }
                         listOf(filesBtn,refresh,clear,close).forEach { it.setPadding(dp(10),0,dp(10),0) }
                         filesBtn.id=View.generateViewId(); refresh.id=View.generateViewId(); clear.id=View.generateViewId(); close.id=View.generateViewId()
                         filesBtn.nextFocusRightId=refresh.id; refresh.nextFocusLeftId=filesBtn.id; refresh.nextFocusRightId=clear.id
@@ -385,7 +443,8 @@ class TvTools(private val activity: Activity) {
                         content.addView(actions)
                         views=QuickViews(name,bar,detail,received,space)
                         main.removeCallbacks(countdownTick); main.post(countdownTick)
-                        dialog.window?.decorView?.post { close.requestFocus() }
+                        // 刷新二维码后焦点留在「刷新二维码」上，别每次跳回「完成」
+                        dialog.window?.decorView?.post { if(refocusRefresh) refresh.requestFocus() else close.requestFocus() }
                     }
                 } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机快传，请检查网络后重试。" } }
             }

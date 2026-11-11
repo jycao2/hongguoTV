@@ -485,4 +485,65 @@ class LanRemoteHubTest {
             assertNull(server.peekPending())
         }
     }
+
+    // ---------------------------------------------------------------- 上传文件
+
+    /** 遥控页「上传文件」专用 Hub：只关心接收回调，其余走默认。 */
+    private fun uploadHub(receive: (String, Long, java.io.InputStream) -> Pair<Boolean, String>?): LanRemoteHub =
+        LanRemoteHub(
+            address = "127.0.0.1",
+            post = { it.run() },
+            target = { null },
+            controller = { null },
+            receiveUpload = { name, length, input -> receive(name, length, input) ?: (false to "未接收") }
+        )
+
+    private fun upload(server: LanRemoteHub, name: String, body: String): String =
+        request(server, "POST", "/upload?name=" + java.net.URLEncoder.encode(name, "UTF-8"), body)
+
+    @Test fun `upload streams the body to the handler after approval`() {
+        val seen = StringBuilder()
+        var seenName = ""
+        val server = uploadHub { name, length, input ->
+            seenName = name
+            val buffer = ByteArray(64)
+            var left = length
+            while(left > 0) {
+                val read = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+                if(read < 0) break
+                seen.append(String(buffer, 0, read, Charsets.UTF_8))
+                left -= read
+            }
+            true to "已保存"
+        }
+        server.use {
+            val response = upload(it, "生日照片.png", "hello")
+            assertEquals(200, code(response))
+            assertEquals("生日照片.png", seenName)
+            assertEquals("hello", seen.toString())
+            assertTrue(response.contains("已保存"))
+        }
+    }
+
+    @Test fun `upload rejected on the TV returns 403 and never reads the body`() {
+        val server = uploadHub { _, _, _ -> false to "已在电视上取消接收" }
+        server.use {
+            val response = upload(it, "电影.mp4", "data")
+            assertEquals(403, code(response))
+            assertTrue(response.contains("已在电视上取消接收"))
+        }
+    }
+
+    @Test fun `upload without a handler is refused`() {
+        hub().use { server ->
+            assertEquals(403, code(upload(server, "a.png", "x")))
+        }
+    }
+
+    @Test fun `upload without a file name is rejected`() {
+        val server = uploadHub { _, _, _ -> true to "已保存" }
+        server.use {
+            assertEquals(400, code(request(it, "POST", "/upload", "x")))
+        }
+    }
 }

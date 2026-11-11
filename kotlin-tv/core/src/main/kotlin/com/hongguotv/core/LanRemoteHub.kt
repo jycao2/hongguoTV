@@ -61,6 +61,12 @@ class LanRemoteHub(
      * 返回 null 表示取不到，路由回 404，页面保留占位块。
      */
     private val coverBytes: ((String) -> ByteArray?)? = null,
+    /**
+     * 手机遥控页「上传文件到电视」：入参是文件名、字节数和请求体流。
+     * 实现在这里弹确认框、阻塞等待用户在电视上做出选择，确认后才读流落盘；
+     * 返回 (是否接收, 回给手机的提示文字)。null 表示未接入，路由回 403。
+     */
+    private val receiveUpload: ((String, Long, InputStream) -> Pair<Boolean, String>)? = null,
     private val onExpired: () -> Unit = {},
     /**
      * 外部注入的门禁密钥；null 则随机生成。
@@ -236,6 +242,7 @@ class LanRemoteHub(
                 serveCover(socket, query)
             }
             method == "POST" && route == "/cmd" -> handleCommand(socket, input, headers)
+            method == "POST" && route == "/upload" -> handleUpload(socket, input, headers, query)
             else -> reply(socket, 405, "不支持的操作")
         }
     }
@@ -289,6 +296,34 @@ class LanRemoteHub(
         }
         dispatch(command)
         reply(socket, 200, """{"ok":true${if(seq != null) ",\"seq\":$seq" else ""}}""", "application/json")
+    }
+
+    /**
+     * 手机遥控页上传文件。
+     *
+     * 与扫码快传（[QuickTransferServer]）的分工：那边由电视上主动开窗、二维码里带一次性
+     * token；这边复用遥控会话的 token，手机上随时能从「···」菜单里选文件发过来。
+     * 落盘位置一样，都是「快传文件」那几个目录。
+     *
+     * 确认放在实现里（[receiveUpload]）：请求体不先读，用户在电视上点「确认」之后
+     * 才开始收字节；点取消直接回 403，一个字节都不落地。
+     */
+    private fun handleUpload(socket: Socket, input: InputStream, headers: Map<String, String>, query: String) {
+        allowOrigin(socket, headers) ?: return
+        val handler = receiveUpload ?: return reply(socket, 403, "电视未开启手机上传")
+        if(headers.containsKey("transfer-encoding")) return reply(socket, 400, "请求格式错误")
+        val raw = Regex("(?:^|&)name=([^&]+)").find(query)?.groupValues?.get(1)
+            ?: return reply(socket, 400, "请先选择文件")
+        val name = runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrNull()
+            ?.takeIf { it.isNotBlank() && it.length <= 255 }
+            ?: return reply(socket, 400, "文件名不合法")
+        val length = headers["content-length"]?.toLongOrNull()?.takeIf { it in 1..TransferRules.MAX_BYTES }
+            ?: return reply(socket, 413, "单个文件不能超过 ${TransferRules.humanBytes(TransferRules.MAX_BYTES)}")
+        // 上传可能持续几分钟，而 handle() 为了省线程只给了 4 秒读超时：
+        // 不收宽就会在大文件传到一半时被自己掐断。
+        socket.soTimeout = QuickTransferServer.IDLE_TIMEOUT_MS
+        val result = runCatching { handler(name, length, input) }.getOrElse { false to "电视写入文件失败" }
+        reply(socket, if(result.first) 200 else 403, result.second)
     }
 
     /** 多设备共用一条限速窗口：真有人刷屏时，无论从哪台手机来都该被挡住。 */

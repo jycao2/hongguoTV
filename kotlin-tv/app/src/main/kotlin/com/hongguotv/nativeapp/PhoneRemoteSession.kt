@@ -32,6 +32,8 @@ class PhoneRemoteSession(
     private val resumeAll: () -> List<ResumeItem> = { emptyList() },
     /** 封面代取：手机直接加载原始地址过不了 CDN 校验，交回电视这边取。 */
     private val cover: (String) -> ByteArray? = { null },
+    /** 手机在遥控页「···」菜单里上传文件：电视弹确认框，确认后落盘到快传目录。 */
+    private val upload: ((String, Long, java.io.InputStream) -> Pair<Boolean, String>)? = null,
     /** 连接数变化。列表页顶栏那个入口要跟着改文案，否则永远显示「手机遥控」。 */
     private val onClients: (Int) -> Unit = {},
     private val onClosed: () -> Unit
@@ -49,6 +51,7 @@ class PhoneRemoteSession(
         resumeItems = resume,
         resumeAllItems = resumeAll,
         coverBytes = cover,
+        receiveUpload = upload,
         onExpired = { main.post { close() } },
         // 进程内复用同一把密钥：关掉窗口再打开，手机上那个页面不用重扫
         fixedToken = RemoteAccess.token,
