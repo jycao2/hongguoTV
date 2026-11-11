@@ -452,12 +452,14 @@ class TvTools(private val activity: Activity) {
                         val detail=label("",13f).apply { setTextColor(TvStyle.muted); setPadding(dp(8),0,dp(8),0) }; content.addView(detail)
                         // 进度条下的接收计数：紧贴进度条，不要默认 4dp 上下内边距撑出空隙
                         val received=label("本次已接收 0 个文件",13f).apply { setTextColor(TvStyle.muted); setPadding(dp(8),dp(1),dp(8),dp(2)) }; content.addView(received)
-                        val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.END; setPadding(0,dp(12),0,0) }
-                        // compact：13sp 字号 + 34dp 高，四个按钮在 440dp 卡片里排得开，「完成」不会被挤窄
-                        val filesBtn=TvDialog.capsuleButton(activity,"快传文件",true) { onShowFiles() }
-                        val refresh=TvDialog.capsuleButton(activity,"刷新二维码",true) { startSession(true) }
-                        // 文案压短：这一行四个胶囊按钮，6 个字会挤到换行
-                        val clear=TvDialog.capsuleButton(activity,"清空文件",true) {
+                        // 四个按钮按权重铺满整行：此前 wrap_content + 34dp 高，宽度只比高度多一点，
+                        // 24dp 圆角被裁成半圆，看起来全是圆球；且行靠右，左侧空出一大块。
+                        // 拉长后配 10dp 圆角变成长条圆角按钮，左侧空间也用上，焦点目标更大。
+                        val actions=LinearLayout(activity).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(0,dp(12),0,0) }
+                        val filesBtn=TvDialog.capsuleButton(activity,"快传文件",compact=true,radiusDp=10) { onShowFiles() }
+                        val refresh=TvDialog.capsuleButton(activity,"刷新二维码",compact=true,radiusDp=10) { startSession(true) }
+                        // 文案压短：这一行四个按钮，6 个字会挤到换行
+                        val clear=TvDialog.capsuleButton(activity,"清空文件",compact=true,radiusDp=10) {
                             TvDialog.confirm(activity,"清空快传文件","删除通过手机快传收到的全部文件，不影响收藏、观看记录和已安装的应用。") {
                                 worker.execute {
                                     listOf(TransferKind.APK,TransferKind.OTHER).map { quickDirectory(it) }.distinct().forEach { dir ->
@@ -473,15 +475,19 @@ class TvTools(private val activity: Activity) {
                                 }
                             }.show()
                         }
-                        val close=TvDialog.capsuleButton(activity,"完成",true) { dialog.dismiss() }
+                        val close=TvDialog.capsuleButton(activity,"完成",compact=true,radiusDp=10) { dialog.dismiss() }
                         listOf(filesBtn,refresh,clear,close).forEach { it.setPadding(dp(10),0,dp(10),0) }
                         filesBtn.id=View.generateViewId(); refresh.id=View.generateViewId(); clear.id=View.generateViewId(); close.id=View.generateViewId()
                         filesBtn.nextFocusRightId=refresh.id; refresh.nextFocusLeftId=filesBtn.id; refresh.nextFocusRightId=clear.id
                         clear.nextFocusLeftId=refresh.id; clear.nextFocusRightId=close.id; close.nextFocusLeftId=clear.id
-                        actions.addView(filesBtn,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
-                        actions.addView(refresh,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
-                        actions.addView(clear,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
-                        actions.addView(close,LinearLayout.LayoutParams(-2,-2))
+                        // 按字数微调权重：五个字的「刷新二维码」多分一点，避免等宽时折成两行、
+                        // 把整排按钮撑高；「完成」字少略短一点，但都比原来的圆形按钮宽得多。
+                        // setSingleLine 兜住各家电视字体偏宽的情况，宁可紧凑也不让按钮变两行。
+                        val weights=floatArrayOf(1f,1.25f,1f,0.9f)
+                        listOf(filesBtn,refresh,clear,close).forEachIndexed { index, button ->
+                            button.setSingleLine(true)
+                            actions.addView(button,LinearLayout.LayoutParams(0,-2,weights[index]).apply { if(index<3) rightMargin=dp(8) })
+                        }
                         content.addView(actions)
                         views=QuickViews(name,bar,detail,received,space)
                         main.removeCallbacks(countdownTick); main.post(countdownTick)

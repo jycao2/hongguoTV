@@ -170,9 +170,14 @@ object TvDialog {
         }
     }
 
-    /** 胶囊按钮：默认 surface 底，焦点 accent 填充 + 深色文字。compact 用于按钮多的弹窗（单行放 6 个）。 */
-    fun capsuleButton(activity: Activity, text: String, compact: Boolean = false, onClick: () -> Unit): Button {
+    /**
+     * 胶囊按钮：默认 surface 底，焦点 accent 填充 + 深色文字。compact 用于按钮多的弹窗（单行放 6 个）。
+     * [radiusDp] 可单独调小：compact 只有 34dp 高，24dp 圆角会被裁成半高，短按钮看起来就是圆形；
+     * 快传弹窗把按钮拉宽后改用 10dp，做成圆角矩形而不是全胶囊。
+     */
+    fun capsuleButton(activity: Activity, text: String, compact: Boolean = false, radiusDp: Int = 24, onClick: () -> Unit): Button {
         val dp = { v: Int -> dp(activity, v) }
+        val corner = dp(radiusDp).toFloat()
         return Button(activity).apply {
             this.text = text
             textSize = if(compact) 13f else 15f
@@ -187,13 +192,13 @@ object TvDialog {
             setPadding(dp(if(compact) 12 else 20), 0, dp(if(compact) 12 else 20), 0)
             background = GradientDrawable().apply {
                 setColor(TvStyle.surface)
-                cornerRadius = dp(24).toFloat()
+                cornerRadius = corner
                 setStroke(dp(1), TvStyle.outline)
             }
             setOnFocusChangeListener { _, focused ->
                 background = GradientDrawable().apply {
                     setColor(if(focused) TvStyle.accent else TvStyle.surface)
-                    cornerRadius = dp(24).toFloat()
+                    cornerRadius = corner
                     setStroke(dp(1), if(focused) TvStyle.accent else TvStyle.outline)
                 }
                 setTextColor(if(focused) TvStyle.background else TvStyle.text)
