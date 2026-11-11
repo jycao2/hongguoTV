@@ -44,6 +44,31 @@ class GridNavTest {
     }
 
     @Test
+    fun `up from any cloud column reaches the short local row instead of the header`() {
+        // 用户报的 bug：本机 1 张（row0 只占 col0）+ 标题 + 云端 4 张（row2 col0-3），
+        // 云端 col1-3 ↑ 旧版找不到同列卡 → -1 → 跳页头按钮；新版应夹到本机行最近的列（只有 col0）
+        val c = coords(5, 6, sections = setOf(1))
+        assertEquals(0, GridNav.neighbor(c, 1, -1))   // 云端 col0 ↑ → 本机 col0（同列）
+        assertEquals(0, GridNav.neighbor(c, 2, -1))   // 云端 col1 ↑ → 本机 col0（夹列）
+        assertEquals(0, GridNav.neighbor(c, 3, -1))
+        assertEquals(0, GridNav.neighbor(c, 4, -1))
+    }
+
+    @Test
+    fun `up clamps to nearest column of a shorter upper section`() {
+        // 本机 3 张（col0-2）+ 云端 6 张：云端 row2 col0-5，col3-5 ↑ 夹到本机行最近的列
+        val c = coords(9, 6, sections = setOf(3))
+        assertEquals(2, GridNav.neighbor(c, 6, -1))   // 云端 col3 ↑ → 本机 col2
+        assertEquals(2, GridNav.neighbor(c, 7, -1))   // 云端 col4 ↑ → 本机 col2
+        assertEquals(2, GridNav.neighbor(c, 8, -1))   // 云端 col5 ↑ → 本机 col2
+        // 云端两行时，row3 的 col0-2 ↑ 仍走同列命中（row2 是满行）
+        val c2 = coords(12, 6, sections = setOf(3))
+        assertEquals(3, GridNav.neighbor(c2, 9, -1))  // row3 col0 ↑ → row2 col0 同列
+        assertEquals(4, GridNav.neighbor(c2, 10, -1)) // row3 col1 ↑ → row2 col1 同列
+        assertEquals(5, GridNav.neighbor(c2, 11, -1)) // row3 col2 ↑ → row2 col2 同列
+    }
+
+    @Test
     fun `down on last row and up on first row return minus one`() {
         val c = coords(12, 6)
         assertEquals(-1, GridNav.neighbor(c, 6, +1))
@@ -51,12 +76,13 @@ class GridNavTest {
     }
 
     @Test
-    fun `partial last row still reachable from same column above`() {
-        // 8 张卡 6 列：row1 只有 col0-1
+    fun `down clamps to nearest column of partial last row`() {
+        // 8 张卡 6 列：row1 只有 col0-1。col2-5 ↓ 不再静默吃键，夹到最近的列
         val c = coords(8, 6)
         assertEquals(6, GridNav.neighbor(c, 0, +1))
         assertEquals(7, GridNav.neighbor(c, 1, +1))
-        assertEquals(-1, GridNav.neighbor(c, 2, +1))  // col2 下一行不存在
+        assertEquals(7, GridNav.neighbor(c, 2, +1))   // col2 ↓ → row1 col1（夹列）
+        assertEquals(7, GridNav.neighbor(c, 5, +1))   // col5 ↓ → row1 col1（夹列）
     }
 
     @Test

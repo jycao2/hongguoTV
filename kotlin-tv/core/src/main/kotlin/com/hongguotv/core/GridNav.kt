@@ -29,8 +29,13 @@ object GridNav {
     }
 
     /**
-     * 从 index 出发沿 dir（+1 下一行 / -1 上一行）找「同列最近的有卡片行」。
-     * 中间的空行（分节标题行）直接跳过；找不到（已是首行/末行）返回 -1。
+     * 从 index 出发沿 dir（+1 下一行 / -1 上一行）找目标卡片：
+     * 走到第一个「有卡片」的视觉行，同列有卡就落同列；该行更短没有同列卡时，
+     * 夹到该行最近的列（Leanback 网格的标准行为）。
+     * 中间的空行（分节标题行）直接跳过；该方向已经没有任何卡片行返回 -1。
+     *
+     * 旧版只认「同列」，收藏页本机区只有 1 张卡（只占 col0）时，云端区 col1+ 往上
+     * 全部找不到目标 → -1 → 焦点被丢给页头按钮，用户表现为「只有云端第一条能翻到本机」。
      */
     fun neighbor(coords: List<Pair<Int, Int>>, index: Int, dir: Int): Int {
         if (index !in coords.indices || dir == 0) return -1
@@ -38,8 +43,11 @@ object GridNav {
         val maxRow = coords.maxOfOrNull { it.first } ?: return -1
         var target = row + dir
         while (target in 0..maxRow) {
-            val hit = coords.indexOfFirst { it.first == target && it.second == col }
-            if (hit >= 0) return hit
+            val rowCards = coords.withIndex().filter { it.value.first == target }
+            if (rowCards.isNotEmpty()) {
+                // 同列命中时距离为 0 自然胜出；并列时 minByOrNull 取列表靠前的（列号更小，与遍历顺序一致）
+                return rowCards.minByOrNull { kotlin.math.abs(it.value.second - col) }!!.index
+            }
             target += dir   // 空行（分节标题）跳过继续找
         }
         return -1
