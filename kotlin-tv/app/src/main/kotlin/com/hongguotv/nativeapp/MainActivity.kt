@@ -1624,13 +1624,20 @@ class MainActivity: Activity() {
         }
         catalogRecycler=recycler; catalogAdapter=adapter; catalogFocusPos=RecyclerView.NO_POSITION; gridFocusOwned=false; pendingGridFocusPos=RecyclerView.NO_POSITION
         recycler.viewTreeObserver.addOnGlobalFocusChangeListener { o,n ->
+            // n===recycler：跨区移动把焦点暂存到 RecyclerView 本身（防首页闪跳），不算掉出网格。
+            // 注意不能对 recycler 自己调 getChildAdapterPosition——它挂的是父容器 LinearLayout
+            // 的 LayoutParams，强转 RecyclerView.LayoutParams 会 ClassCastException 崩溃。
             if(n!=null && inCatalogGrid(n,recycler)) {
-                val pos=recycler.getChildAdapterPosition(n)
-                if(pos!=RecyclerView.NO_POSITION) {
-                    catalogFocusPos=pos; gridFocusOwned=true
-                    if(pos==pendingGridFocusPos) pendingGridFocusPos=RecyclerView.NO_POSITION
+                if(n===recycler) {
+                    gridFocusOwned=true
+                } else {
+                    val pos=recycler.getChildAdapterPosition(n)
+                    if(pos!=RecyclerView.NO_POSITION) {
+                        catalogFocusPos=pos; gridFocusOwned=true
+                        if(pos==pendingGridFocusPos) pendingGridFocusPos=RecyclerView.NO_POSITION
+                    }
                 }
-            } else if(o!=null && inCatalogGrid(o,recycler)) {
+            } else if(o!=null && o!==recycler && inCatalogGrid(o,recycler)) {
                 gridFocusOwned=false
                 // 焦点卡在跨区移动中被滚出屏幕回收：把焦点抓到移动目标上，别让它落去顶栏，
                 // 也别让恢复逻辑把焦点抢回原卡、把刚滚出来的距离再滚回去（两者互搏=按了没反应）。
@@ -1801,9 +1808,13 @@ class MainActivity: Activity() {
         if(focused==null) { recycler.scrollToPosition(pos); recycler.post { attemptPendingFocus(pos,0) }; return }
         // 跨分节移动要滚不止一行，滚动中原焦点卡会被回收、焦点被清空，
         // 框架兜底落到窗口第一个可聚焦项（顶栏「首页」）→ 用户看到首页高亮一闪而逝。
-        // 滚动前先把焦点收到 RecyclerView 本身（可聚焦、无高亮），滚动全程没有子卡焦点可丢；
+        // 滚动前把焦点收到 RecyclerView 本身（可聚焦、无高亮），滚动全程没有子卡焦点可丢；
         // 落目标时 attemptPendingFocus 再把焦点交还卡片。focus listener 侧有 pending 守卫不抢活。
+        // 注意 RecyclerView 构造时是 FOCUS_AFTER_DESCENDANTS，直接 requestFocus 会先去聚焦
+        // 第一个可见子卡（错误落点）；要临时切成 FOCUS_BEFORE_DESCENDANTS 强制落在自身。
+        recycler.descendantFocusability=ViewGroup.FOCUS_BEFORE_DESCENDANTS
         recycler.requestFocus()
+        recycler.descendantFocusability=ViewGroup.FOCUS_AFTER_DESCENDANTS
         val margin=(focused.layoutParams as? RecyclerView.LayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0
         val step=focused.height+margin
         val current=recycler.getChildAdapterPosition(focused)
