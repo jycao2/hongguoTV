@@ -720,10 +720,11 @@ class MainActivity: Activity() {
         backdropView?.takeIf { backdropBitmap!=null }?.let { root.addView(it,FrameLayout.LayoutParams(-1,-1)) }
         val container=column(); val horizontal=dp(widthDp()*.05f); val vertical=(resources.displayMetrics.heightPixels*.05f).toInt()
         container.setPadding(horizontal,vertical,horizontal,vertical); root.addView(container,FrameLayout.LayoutParams(-1,-1))
-        // 本地测试包（versionName 不含 +构建号）右上角常驻 beta 标记，与正式包区分；播放页不显示
+        // 本地测试包（versionName 不含 +构建号）右上角常驻 beta 标记，与正式包区分；播放页不显示。
+        // 网速悬浮文字开启时贴顶显示，beta 顺次下移避让
         if(!BuildConfig.VERSION_NAME.contains('+')) {
             root.addView(text("beta",12f,accent).apply { importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable=false },
-                FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10); rightMargin=dp(14) })
+                FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10)+if(netSpeedShown()) dp(30) else 0; rightMargin=dp(14) })
         }
         if(title!=null) { val heading=row(); addButton(heading,"‹ 返回") { goBack() }; heading.addView(text(title,22f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER_VERTICAL },lp(0,dp(44)).apply { weight=1f }); container.addView(heading) }
         applyClock()
@@ -740,8 +741,8 @@ class MainActivity: Activity() {
             isFocusable=false; isClickable=false
             setPadding(dp(8),dp(3),dp(8),dp(3))
         }
-        // Local test builds show the beta badge in the same corner; keep both visible.
-        val topMargin=if(BuildConfig.VERSION_NAME.contains('+')) dp(10) else dp(30)
+        // 右上角纵向堆叠：网速(贴顶) → beta(仅本地包) → 时钟，各占一行顺次下移
+        val topMargin=dp(10)+(if(netSpeedShown()) dp(30) else 0)+(if(!BuildConfig.VERSION_NAME.contains('+')) dp(20) else 0)
         root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=topMargin; rightMargin=dp(14) })
         clockView=view
         val tick=object: Runnable {
@@ -754,10 +755,12 @@ class MainActivity: Activity() {
         tick.run()
     }
     /**
-     * 右上角实时网速悬浮条：显示设备总收发速率（↓ 下行 / ↑ 上行），
+     * 右上角顶部实时网速悬浮文字：显示设备总收发速率（↓ 下行 / ↑ 上行），
      * 设置页「外观与界面」或语音开关，默认关闭。挂在每次 root 重建之后（含播放页），
-     * 位置在 beta 标记与时钟之下避让，所有界面常显。
+     * 贴屏幕最顶端（dp10），纯文字无底色；beta 标记与时钟顺次下移避让，所有界面常显。
      */
+    /** 网速悬浮文字当前是否应显示：右上角 beta/时钟纵向避让的依据。 */
+    private fun netSpeedShown()=library.isLoaded && library.netSpeed
     private fun applyNetSpeedOverlay(show: Boolean=library.netSpeed) {
         netSpeedTick?.let(main::removeCallbacks); netSpeedTick=null
         if(!library.isLoaded || !show || !library.netSpeed) { netSpeedView?.let { root.removeView(it) }; netSpeedView=null; lastRxBytes=-1; lastTxBytes=-1; return }
@@ -765,12 +768,9 @@ class MainActivity: Activity() {
             val view=text("网速 · 测量中…",12f,muted).apply {
                 importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 isFocusable=false; isClickable=false
-                setPadding(dp(12),dp(5),dp(12),dp(5))
-                background=rounded(TvStyle.surface,TvStyle.outline)
+                setPadding(dp(8),dp(3),dp(8),dp(3))
             }
-            // 右上角纵向避让：本地包 beta 在 dp(10)、时钟在 dp(30)，时钟行高约 dp(26)
-            val top=(!BuildConfig.VERSION_NAME.contains('+')).let { if(it) dp(10) else dp(30) } + if(clockView!=null) dp(26) else 0
-            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=top; rightMargin=dp(14) })
+            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10); rightMargin=dp(14) })
             netSpeedView=view
         }
         val tick=object: Runnable {
