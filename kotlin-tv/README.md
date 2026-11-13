@@ -11,6 +11,14 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.31.1 新增与修复
+
+- **播放页鼠标快捷按钮**：底部一行「播放 / 暂停 · 选集 · 收藏」，鼠标一动浮现，静止 3 秒自动收起；主播放器与第三方片源一致。
+- 快捷按钮配色跟随系统主题，控制条展开时自动让位，不遮挡画面。
+- **修复倍速连播音画不同步**：自动连播下一集时画面回到 1 倍速、声音维持原倍速，在线播放与 NAS 本地库均已修复。
+- **修复榜单焦点跳动**：排行榜、上新、AI 剧榜翻页后焦点回到第一张卡片，鼠标滚轮不再与焦点来回抢。
+- **修复手势换集弹层**：鼠标上下滑动换集不再弹出控制条和按键提示，遥控器换集仍保留提示。
+
 ## 0.31.0 新增
 
 - **网络代理**：设置 → 实验室功能新增网络代理，可绕开片源 DNS 污染 / SNI 阻断。
@@ -426,9 +434,9 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.31.0-android8.apk（更新通道，minSdk 26）
+# 输出：outputs/hongguotv-kotlin-0.31.1-android8.apk（更新通道，minSdk 26）
 # Android 5-7 变体：./gradlew -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease
-# 输出：outputs/hongguotv-kotlin-0.31.0-android5.apk（minSdk 21）
+# 输出：outputs/hongguotv-kotlin-0.31.1-android5.apk（minSdk 21）
 ```
 
 ## 工程结构
