@@ -419,6 +419,14 @@ class MainActivity: Activity() {
     private var playerExit: TextView?=null
     /** 最近一次操作是不是鼠标做的：遥控一按就翻回 false，按钮随之收起。 */
     private var mouseSeen=false
+    /** 播放页鼠标快捷按钮行：播放/暂停、选集、收藏。鼠标一动浮现，静止 3 秒收起。 */
+    private var pointerLayer: FrameLayout?=null
+    private var pointerFav: TextView?=null
+    private var pointerPlay: TextView?=null
+    private var pointerAlive=false
+    private val hidePointerControls=Runnable { pointerAlive=false; updatePointerLayer() }
+    /** 最近一次输入是否来自指针（鼠标/触控板）：滚轮只滚视口，网格不该为它补焦点。 */
+    private var pointerInput=false
     private var speedDialog: AlertDialog?=null
     private var pendingSeek: Long?=null
     private var playError=false
@@ -762,16 +770,16 @@ class MainActivity: Activity() {
     private fun netSpeedShown()=library.isLoaded && library.netSpeed
     private fun applyNetSpeedOverlay(show: Boolean=library.netSpeed) {
         netSpeedTick?.let(main::removeCallbacks); netSpeedTick=null
-        if(!library.isLoaded || !show || !library.netSpeed) { netSpeedView?.let { root.removeView(it) }; netSpeedView=null; lastRxBytes=-1; lastTxBytes=-1; return }
-        if(netSpeedView==null) {
-            val view=text("网速 · 测量中…",12f,muted).apply {
-                importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                isFocusable=false; isClickable=false
-                setPadding(dp(8),dp(3),dp(8),dp(3))
-            }
-            root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10); rightMargin=dp(14) })
-            netSpeedView=view
+        // base()/播放器重建会直接清空 root，旧引用即使非空也已经不在屏幕上，必须重新挂载。
+        netSpeedView?.let { root.removeView(it) }; netSpeedView=null
+        if(!library.isLoaded || !show || !library.netSpeed) { lastRxBytes=-1; lastTxBytes=-1; return }
+        val view=text("网速 · 测量中…",12f,muted).apply {
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isFocusable=false; isClickable=false
+            setPadding(dp(8),dp(3),dp(8),dp(3))
         }
+        root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(10); rightMargin=dp(14) })
+        netSpeedView=view
         val tick=object: Runnable {
             override fun run() {
                 val rx=android.net.TrafficStats.getTotalRxBytes()
@@ -829,6 +837,7 @@ class MainActivity: Activity() {
             }
         }
         homeScreen=null; selectionPreview=null; catalogRecycler=null; catalogAdapter=null; loadingMore=false
+        catalogFocusPos=RecyclerView.NO_POSITION
         nav.clear(); segmentFirst=null; segmentChipsByTab=emptyMap(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         azFirst=null; azLastRow.clear(); suggestRow=null; suggestFirst=null; suggestTicket++; main.removeCallbacks(pendingSuggest)
         suggestVertical=false; searchBody=null; keyboardKeys=emptyMap(); keyboardRows=emptyList(); historyFirst=null; historyItems=emptyList(); suggestScrollRef=null; resultFirstCard=null
@@ -1627,7 +1636,7 @@ class MainActivity: Activity() {
             // Focus entering the grid lands on the first visible CARD, keeping the user's place.
             // 首个可见项可能是分节标题（不可聚焦）：不跳过的话焦点停在 RecyclerView 本身，↓ 键从此失灵。
             isFocusable=true; isFocusableInTouchMode=true
-            setOnFocusChangeListener { _,focused -> if(focused && pendingGridFocusPos==RecyclerView.NO_POSITION) {
+            setOnFocusChangeListener { _,focused -> if(focused && !pointerInput && pendingGridFocusPos==RecyclerView.NO_POSITION) {
                 // 跨区移动（pendingGridFocusPos 已挂）时焦点会暂时收到 RecyclerView 本身防首页闪跳，
                 // 此时不能抢落首卡，等 attemptPendingFocus 落到目标卡
                 var first=grid.findFirstVisibleItemPosition().coerceAtLeast(0)
@@ -1882,6 +1891,11 @@ class MainActivity: Activity() {
     }
     private fun restoreCatalogFocus() {
         val recycler=catalogRecycler ?: return
+        // 焦点不在网格里，或正在用鼠标：都不补焦点。
+        // 滚轮只滚视口，被回收卡片的 parent 链已断，inCatalogGrid 认不出它曾属于网格，
+        // gridFocusOwned 仍是 true；这时按旧位置 scrollToPosition 会把整屏拉回旧卡，
+        // 再和框架把焦点送去顶栏「首页」来回互搏（issue #22.1）。
+        if(!gridFocusOwned || pointerInput) return
         val pos=catalogFocusPos
         if(pos==RecyclerView.NO_POSITION) return
         recycler.post {
@@ -3451,12 +3465,38 @@ class MainActivity: Activity() {
             hud.addView(progressBar,lp(-1,dp(26)))
             keyHints=text(keyHintText(),13f,muted).apply { setPadding(0,dp(12),0,0) }; hud.addView(keyHints)
             // 鼠标一动就把退出按钮与鼠标手势提示放出来；遥控一按（见 dispatchKeyEvent）再收回去
-            TvPointer.onHover(root) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() } }
+            TvPointer.onHover(root) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() }; pokePointerControls() }
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             // 转圈单独挂在根布局正中央，不占底部 HUD 空间；播放失败自动重试时才可见。
             recoverySpinner=ProgressBar(this,null,android.R.attr.progressBarStyle).apply { indeterminateTintList=android.content.res.ColorStateList.valueOf(accent); visibility=View.GONE }
             root.addView(recoverySpinner,FrameLayout.LayoutParams(dp(56),dp(56),Gravity.CENTER))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+            // 鼠标快捷按钮（issue #22.3）：底部一行「播放/暂停 · 选集 · 收藏」，配色走 TvStyle 系统样式。
+            // 鼠标一动浮现、静止 3 秒收起；控制条展开时让位给控制条，不与它重叠。
+            val cornerLayer=FrameLayout(this); pointerLayer=cornerLayer
+            fun cornerButton(label: String,onClick: ()->Unit)=text(label,14f,white).apply {
+                isFocusable=false; isClickable=true
+                setPadding(dp(18),dp(9),dp(18),dp(9))
+                background=rounded(TvStyle.surface,TvStyle.outline)
+                setOnClickListener { onClick() }
+            }
+            val cornerRow=row().apply { gravity=Gravity.CENTER_VERTICAL }
+            pointerPlay=cornerButton("▶ 播放") { togglePlayback() }
+            cornerRow.addView(pointerPlay,lp(-2,-2).apply { rightMargin=dp(12) })
+            lateinit var cornerEpisodes: TextView
+            cornerEpisodes=cornerButton("选集") { showEpisodePanel(cornerEpisodes); updatePointerLayer() }
+            cornerRow.addView(cornerEpisodes,lp(-2,-2).apply { rightMargin=dp(12) })
+            pointerFav=cornerButton("☆ 收藏") {
+                val d=detail ?: return@cornerButton
+                favoriteMonitor.stop()
+                val saved=library.toggle(d.series)
+                if(saved) library.observeFavorite(d.series.id,d.episodes.size,System.currentTimeMillis(),acknowledge=true)
+                updatePointerLayer()
+            }
+            cornerRow.addView(pointerFav,lp(-2,-2))
+            cornerLayer.addView(cornerRow,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(28) })
+            cornerLayer.visibility=View.GONE
+            root.addView(cornerLayer,FrameLayout.LayoutParams(-1,-1))
         }
         applyClock()
         applyNetSpeedOverlay()
@@ -3541,6 +3581,10 @@ class MainActivity: Activity() {
                     recovery.reset(); autoRecovery=false; cancelRecovery()
                     downgradeEpisode=nextId; downgradeCount=0
                     startPosition=0; pendingSeek=null; outroTriggered=false; ffActive=false
+                    // 无缝切换时新一集的视频编码/分辨率可能变化，ExoPlayer 重建视频解码器后
+                    // 部分设备（极米 Z6X 等）不会继承 PlaybackParameters，出现视频回到 1x、
+                    // 音频维持原倍速的音画不同步。这里显式重设倍速，同时把快进态恢复到正常倍速。
+                    p.setPlaybackSpeed(effectiveSpeed())
                     outroSkipSeconds=library.skipMark(data.series.id)?.outroSeconds ?: 0
                     prefetchAttempts=0; prefetchAttemptAt=0
                     requestedAutoplay=true; pausedForLifecycle=false
@@ -3812,6 +3856,7 @@ class MainActivity: Activity() {
     private fun hidePlaybackOverlay() {
         main.removeCallbacks(hideHud)
         panel=false; controls.visibility=View.GONE; controls.clearFocus(); hud.visibility=View.GONE
+        updatePointerLayer()
     }
     /** 播放屏鼠标手势：垂直滑动换集（仿红果原版，不弹选集面板），单击呼出/收起控制条。挂在根布局上，非播放屏直接放行。 */
     private fun setupMouseGestures() {
@@ -3827,7 +3872,7 @@ class MainActivity: Activity() {
                 // 所以 total>0 才是上滑=下一集；onFling 用的是速度原始符号（上滑为负），两条路不要混。
                 if(Math.abs(total)>resources.displayMetrics.heightPixels*0.2f) {
                     locked=true
-                    skipEpisode(if(total>0) 1 else -1)
+                    skipEpisode(if(total>0) 1 else -1,reveal=false)
                 }
                 return true
             }
@@ -3836,7 +3881,7 @@ class MainActivity: Activity() {
                 // 快速轻扫位移可能不够 20%，用速度兜底；要求纵向明显占优，避免误伤横向拖动
                 if(Math.abs(vy)>Math.abs(vx)*1.4f && Math.abs(vy)>2000f) {
                     locked=true
-                    skipEpisode(if(vy<0) 1 else -1)
+                    skipEpisode(if(vy<0) 1 else -1,reveal=false)
                 }
                 return true
             }
@@ -3850,7 +3895,7 @@ class MainActivity: Activity() {
         root.setOnTouchListener { _,e ->
             if(screen!="player") return@setOnTouchListener false
             // 鼠标点一下就记住：控制条上的退出按钮与鼠标手势提示跟着出现
-            if(TvPointer.isPointer(e) && !mouseSeen) { mouseSeen=true; refreshPointerUi() }
+            if(TvPointer.isPointer(e)) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() }; pokePointerControls() }
             // 鼠标右键退出播放。TV 上很多遥控器把右键映射成 BACK（那条走 dispatchKeyEvent），
             // 这里接的是真正的鼠标次级键：插着鼠标的人下意识右键，不该什么反应都没有。
             if(e.actionMasked==MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY)!=0) {
@@ -3879,12 +3924,34 @@ class MainActivity: Activity() {
     private fun refreshPointerUi() {
         playerExit?.visibility=if(mouseSeen) View.VISIBLE else View.GONE
         keyHints?.text=keyHintText()
+        updatePointerLayer()
+    }
+    /** 鼠标快捷按钮：只在「播放页 + 用过鼠标 + 最近有动静 + 控制条没展开」时出现，避免压住控制条。 */
+    private fun updatePointerLayer() {
+        val layer=pointerLayer ?: return
+        if(screen!="player") { layer.visibility=View.GONE; return }
+        val show=mouseSeen && pointerAlive && hud.visibility!=View.VISIBLE && episodePanel==null && !playError
+        layer.visibility=if(show) View.VISIBLE else View.GONE
+        if(show) {
+            val d=detail
+            pointerFav?.text=if(d!=null && library.favorite(d.series.id)) "★ 已收藏" else "☆ 收藏"
+            pointerPlay?.text=if(player?.playWhenReady==true) "⏸ 暂停" else "▶ 播放"
+        }
+    }
+    /** 鼠标有动静：快捷按钮续命 3 秒。 */
+    private fun pokePointerControls() {
+        if(screen!="player" || !mouseSeen) return
+        pointerAlive=true
+        main.removeCallbacks(hidePointerControls)
+        main.postDelayed(hidePointerControls,3000)
+        updatePointerLayer()
     }
 
     private fun showHud() {
         if(screen!="player") return
         refreshPointerUi()
         hud.visibility=View.VISIBLE; updatePlaybackText(); main.removeCallbacks(hideHud)
+        updatePointerLayer()
         if(!panel && !ffActive && player?.isPlaying==true) main.postDelayed(hideHud,4500)
     }
     private fun updatePlaybackText() {
@@ -3919,8 +3986,8 @@ class MainActivity: Activity() {
         main.removeCallbacks(seekRunnable); pendingSeek=null
         p.seekTo(position.coerceIn(0,(p.duration-500).coerceAtLeast(0))); updatePlaybackText(); syncMediaSession(); showHud()
     }
-    /** 返回是否真的切换了集数（越界返回 false），切换成功时短暂显示 hud 反馈。 */
-    private fun skipEpisode(direction: Int): Boolean {
+    /** 返回是否真的切换了集数（越界返回 false）。手势换集传 reveal=false，不弹控制条挡画面（issue #22.2）。 */
+    private fun skipEpisode(direction: Int,reveal: Boolean=true): Boolean {
         if(!foreground || screen!="player") return false
         val count=detail?.episodes?.size ?: return false
         if(count<=0) return false
@@ -3933,7 +4000,7 @@ class MainActivity: Activity() {
                 Toast.LENGTH_SHORT).show()
             return false
         }
-        playEpisode(target,savedPosition(target)); showHud(); return true
+        playEpisode(target,savedPosition(target)); if(reveal) showHud(); return true
     }
     private fun syncMediaSession() {
         remotePublish()
@@ -6015,7 +6082,13 @@ class MainActivity: Activity() {
     }
     @Deprecated("TV remote back is handled through the activity")
     override fun onBackPressed()=goBack()
+    /** 鼠标移动/滚轮都走 generic motion：据此把输入方式切到指针，网格不再为滚轮补焦点。 */
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if(TvPointer.isPointer(ev)) pointerInput=true
+        return super.dispatchGenericMotionEvent(ev)
+    }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if(event.action==KeyEvent.ACTION_DOWN) pointerInput=false
         // 遥控一按就把鼠标专属的东西收起来：最近一次操作已经换人了
         if(mouseSeen && screen=="player") { mouseSeen=false; refreshPointerUi() }
         if(tab==6 && third?.onKey(event)==true) return true

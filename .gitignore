@@ -46,3 +46,6 @@ icon-preview.png
 
 # 助手本地工作记忆（每日日志），不入库
 .workbuddy/
+
+# 助手自动生成的交接包（临时产物，每次生成会变），不入库
+docs/handover/

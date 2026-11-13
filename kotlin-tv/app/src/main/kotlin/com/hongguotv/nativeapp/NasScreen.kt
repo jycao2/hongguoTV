@@ -649,12 +649,19 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
                 main.postDelayed(this, 500)
             }
         }
+        // 长按 3x 松手后要回到这里设定的倍速，而不是写死 1x
+        val speeds = floatArrayOf(1f, 1.25f, 1.5f, 2f, 3f, 0.75f)
+        val speedLabels = arrayOf("1.0x", "1.25x", "1.5x", "2.0x", "3.0x", "0.75x")
+        var speedIdx = 0
         fun loadEpisode(i: Int) {
             index = i.coerceIn(0, playlist.lastIndex)
             val ep = playlist[index]
             titleView.text = "${item.title} · ${ep.display}"
             player.setMediaItem(MediaItem.fromUri(Uri.parse(dav.fileUrl(ep.file.path))))
             player.prepare(); player.playWhenReady = true
+            // 切集后显式重设倍速：新一集视频编码变化时 ExoPlayer 重建解码器，
+            // 部分设备不会继承 PlaybackParameters，导致画面回到 1x、音频维持原倍速。
+            player.setPlaybackSpeed(speeds[speedIdx])
         }
         // 播放器专用小按钮：比全局 button() 紧凑，整行靠左排开
         fun pbtn(s: String, onClick: () -> Unit): TextView =
@@ -671,10 +678,6 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
                 setOnClickListener { onClick() }
                 layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) }
             }
-        // 长按 3x 松手后要回到这里设定的倍速，而不是写死 1x
-        val speeds = floatArrayOf(1f, 1.25f, 1.5f, 2f, 3f, 0.75f)
-        val speedLabels = arrayOf("1.0x", "1.25x", "1.5x", "2.0x", "3.0x", "0.75x")
-        var speedIdx = 0
         playBtn = pbtn("暂停") { if (player.isPlaying) player.pause() else player.play() }
         btnRow.addView(playBtn)
         btnRow.addView(pbtn("上一集") { if (index > 0) loadEpisode(index - 1) })
