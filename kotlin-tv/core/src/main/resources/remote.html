@@ -45,7 +45,11 @@
 
   .now{padding:6px 20px 0;flex:0 0 auto}
   .title{font-size:19px;font-weight:650;margin:0;letter-spacing:.01em;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    overflow:hidden;white-space:nowrap}
+  /* 标题超出宽度时来回滚动，短标题保持静止 */
+  .title>span{display:inline-block;vertical-align:top}
+  .title.scrolling>span{animation:titleMarquee var(--marq,8s) ease-in-out infinite alternate}
+  @keyframes titleMarquee{0%,10%{transform:translateX(0)}90%,100%{transform:translateX(var(--marq-x,0))}}
   .meta{font-size:12.5px;color:var(--muted);margin-top:5px}
   .meta b{color:var(--text);font-weight:600}
   .meta.warn{color:var(--warn)}
@@ -563,7 +567,11 @@
     views.browse.classList.toggle("on", browse);
     // 只在形态真的切换时收抽屉。播放中位置变化每 400ms 推一帧快照，
     // 无条件关会让选集抽屉刚打开就被下一帧关掉，看起来像「点了没反应」。
-    if(showingBrowse !== null && showingBrowse !== browse) closeDrawer();
+    if(showingBrowse !== null && showingBrowse !== browse){
+      closeDrawer();
+      // 回到遥控形态才第一次能量到面板宽度，标题滚动要按真实宽度重算
+      if(!browse) restartTitle();
+    }
     showingBrowse = browse;
     $("k-list").classList.toggle("off", !controllable);
     $("k-menu").classList.toggle("off", !controllable);
@@ -606,10 +614,39 @@
   var resumeCtx = null;
   function resumeContext(){ return !!snap && snap.screen === "third" ? "third" : "main"; }
 
+  // 标题只在内容变化时重建，快照每秒刷新也不会打断滚动动画
+  function setTitle(text){
+    var el = $("title");
+    if(el.dataset.text === text) return;
+    el.dataset.text = text;
+    el.classList.remove("scrolling");
+    var span = document.createElement("span");
+    span.textContent = text;
+    el.textContent = "";
+    el.appendChild(span);
+    // 等布局完成再量宽度，放不下才滚动
+    requestAnimationFrame(function(){
+      var over = span.scrollWidth - el.clientWidth;
+      if(over <= 2) return;
+      el.style.setProperty("--marq-x", (-over) + "px");
+      el.style.setProperty("--marq", Math.max(5, Math.round(over / 35 + 3)) + "s");
+      el.classList.add("scrolling");
+    });
+  }
+  window.addEventListener("resize", restartTitle);
+  // 面板在浏览形态下是隐藏的、量不出宽度，切回遥控时要重新判定
+  function restartTitle(){
+    var el = $("title");
+    if(el.dataset.text == null) return;
+    var text = el.dataset.text;
+    el.dataset.text = "";
+    setTitle(text);
+  }
+
   function renderPanel(){
     if(!snap) return;
     var s = snap;
-    $("title").textContent = s.title || "未在播放";
+    setTitle(s.title || "未在播放");
     // 当前线路以电视为准；activeGroup 只是选集抽屉里正在浏览的标签
     var active = s.group || 0;
     var groupName = (s.groups && s.groups[active]) ? s.groups[active].name : "正片";
