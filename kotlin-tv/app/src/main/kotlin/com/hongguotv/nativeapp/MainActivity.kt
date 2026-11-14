@@ -419,12 +419,10 @@ class MainActivity: Activity() {
     private var playerExit: TextView?=null
     /** 最近一次操作是不是鼠标做的：遥控一按就翻回 false，按钮随之收起。 */
     private var mouseSeen=false
-    /** 播放页鼠标快捷按钮行：播放/暂停、选集、收藏。鼠标一动浮现，静止 3 秒收起。 */
+    /** 播放页鼠标快捷按钮：左下「选集」、右上「收藏」，只在控制条展开时出现。 */
     private var pointerLayer: FrameLayout?=null
     private var pointerFav: TextView?=null
-    private var pointerPlay: TextView?=null
-    private var pointerAlive=false
-    private val hidePointerControls=Runnable { pointerAlive=false; updatePointerLayer() }
+    private var pointerCenter: TextView?=null
     /** 最近一次输入是否来自指针（鼠标/触控板）：滚轮只滚视口，网格不该为它补焦点。 */
     private var pointerInput=false
     private var speedDialog: AlertDialog?=null
@@ -742,14 +740,22 @@ class MainActivity: Activity() {
     private fun applyClock() {
         clockTick?.let(main::removeCallbacks); clockTick=null
         clockView?.let { root.removeView(it) }; clockView=null
-        if(!library.isLoaded || !library.showClock) return
+        val showClock=library.isLoaded && library.showClock
+        // 时钟恢复原位（右上角 dp10）；仅当网速悬浮文字开启时才下移一行避让
+        val topMargin=dp(10)+(if(netSpeedShown()) dp(30) else 0)
+        // 收藏按钮跟着时钟走：有时钟就排在时间下面，没时钟就占它原来的位置
+        pointerFav?.let { view ->
+            (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.topMargin=topMargin+(if(showClock) dp(28) else 0)
+                view.layoutParams=params
+            }
+        }
+        if(!showClock) return
         val view=text("",15f,muted).apply {
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isFocusable=false; isClickable=false
             setPadding(dp(8),dp(3),dp(8),dp(3))
         }
-        // 时钟恢复原位（右上角 dp10）；仅当网速悬浮文字开启时才下移一行避让
-        val topMargin=dp(10)+(if(netSpeedShown()) dp(30) else 0)
         root.addView(view,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { this.topMargin=topMargin; rightMargin=dp(14) })
         clockView=view
         val tick=object: Runnable {
@@ -3465,27 +3471,29 @@ class MainActivity: Activity() {
             hud.addView(progressBar,lp(-1,dp(26)))
             keyHints=text(keyHintText(),13f,muted).apply { setPadding(0,dp(12),0,0) }; hud.addView(keyHints)
             // 鼠标一动就把退出按钮与鼠标手势提示放出来；遥控一按（见 dispatchKeyEvent）再收回去
-            TvPointer.onHover(root) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() }; pokePointerControls() }
+            TvPointer.onHover(root) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() } }
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             // 转圈单独挂在根布局正中央，不占底部 HUD 空间；播放失败自动重试时才可见。
             recoverySpinner=ProgressBar(this,null,android.R.attr.progressBarStyle).apply { indeterminateTintList=android.content.res.ColorStateList.valueOf(accent); visibility=View.GONE }
             root.addView(recoverySpinner,FrameLayout.LayoutParams(dp(56),dp(56),Gravity.CENTER))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
-            // 鼠标快捷按钮（issue #22.3）：底部一行「播放/暂停 · 选集 · 收藏」，配色走 TvStyle 系统样式。
-            // 鼠标一动浮现、静止 3 秒收起；控制条展开时让位给控制条，不与它重叠。
+            // 鼠标快捷按钮（issue #25）：左下「选集」、右上「收藏」，样式同「✕ 退出」；
+            // 只在控制条展开时一起出现，鼠标单纯划过不再弹出，点一下画面才三样一起出来。
             val cornerLayer=FrameLayout(this); pointerLayer=cornerLayer
-            fun cornerButton(label: String,onClick: ()->Unit)=text(label,14f,white).apply {
+            // 快捷按钮统一跟「✕ 退出」一个样式：小字、深色半透明底、细描边
+            fun cornerButton(label: String,onClick: ()->Unit)=text(label,13f,muted).apply {
                 isFocusable=false; isClickable=true
-                setPadding(dp(18),dp(9),dp(18),dp(9))
-                background=rounded(TvStyle.surface,TvStyle.outline)
+                setPadding(dp(12),dp(5),dp(12),dp(5))
+                background=rounded(Color.argb(96,0,0,0),TvStyle.outline)
                 setOnClickListener { onClick() }
             }
-            val cornerRow=row().apply { gravity=Gravity.CENTER_VERTICAL }
-            pointerPlay=cornerButton("▶ 播放") { togglePlayback() }
-            cornerRow.addView(pointerPlay,lp(-2,-2).apply { rightMargin=dp(12) })
+            // 播放/暂停交给画面正中的按钮，左下只留「选集」
             lateinit var cornerEpisodes: TextView
             cornerEpisodes=cornerButton("选集") { showEpisodePanel(cornerEpisodes); updatePointerLayer() }
-            cornerRow.addView(cornerEpisodes,lp(-2,-2).apply { rightMargin=dp(12) })
+            // 左下角，与控制条左边距对齐
+            cornerLayer.addView(cornerEpisodes,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.START).apply {
+                leftMargin=dp(widthDp()*.05f); bottomMargin=dp(196)
+            })
             pointerFav=cornerButton("☆ 收藏") {
                 val d=detail ?: return@cornerButton
                 favoriteMonitor.stop()
@@ -3493,8 +3501,26 @@ class MainActivity: Activity() {
                 if(saved) library.observeFavorite(d.series.id,d.episodes.size,System.currentTimeMillis(),acknowledge=true)
                 updatePointerLayer()
             }
-            cornerRow.addView(pointerFav,lp(-2,-2))
-            cornerLayer.addView(cornerRow,FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(28) })
+            // 右上角排时钟后面：有时钟就在时间下面，没时钟就占时间的位置
+            val clockOn=library.isLoaded && library.showClock
+            val clockTop=dp(10)+(if(netSpeedShown()) dp(30) else 0)
+            cornerLayer.addView(pointerFav,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply {
+                topMargin=clockTop+(if(clockOn) dp(28) else 0); rightMargin=dp(14)
+            })
+            // 暂停时画面正中的播放按钮：纯图标、透明无边框，跟着控制条一起出现
+            pointerCenter=text("▶",56f,Color.argb(225,255,255,255)).apply {
+                isFocusable=false; isClickable=true
+                setPadding(dp(40),dp(26),dp(40),dp(26))
+                background=null
+                setOnClickListener {
+                    if(playError) return@setOnClickListener
+                    togglePlayback()
+                    // 续播后控制条照常 4.5 秒自动收起，别一直压在画面上
+                    if(player?.playWhenReady==true) main.postDelayed(hideHud,4500)
+                    updatePointerLayer()
+                }
+            }
+            cornerLayer.addView(pointerCenter,FrameLayout.LayoutParams(-2,-2,Gravity.CENTER))
             cornerLayer.visibility=View.GONE
             root.addView(cornerLayer,FrameLayout.LayoutParams(-1,-1))
         }
@@ -3887,7 +3913,10 @@ class MainActivity: Activity() {
             }
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 if(screen!="player" || playError) return false
-                if(hud.visibility==View.VISIBLE && !panel) hidePlaybackOverlay() else showHud()
+                if(!playbackReady) { showHud(); return true }
+                // 鼠标左键单击＝暂停/续播：暂停时把控制条和画面中间的播放按钮一起放出来
+                if(player?.playWhenReady==true) { togglePlayback(); showHud() }
+                else { togglePlayback(); hidePlaybackOverlay() }
                 return true
             }
         }
@@ -3895,7 +3924,7 @@ class MainActivity: Activity() {
         root.setOnTouchListener { _,e ->
             if(screen!="player") return@setOnTouchListener false
             // 鼠标点一下就记住：控制条上的退出按钮与鼠标手势提示跟着出现
-            if(TvPointer.isPointer(e)) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() }; pokePointerControls() }
+            if(TvPointer.isPointer(e)) { if(!mouseSeen) { mouseSeen=true; refreshPointerUi() } }
             // 鼠标右键退出播放。TV 上很多遥控器把右键映射成 BACK（那条走 dispatchKeyEvent），
             // 这里接的是真正的鼠标次级键：插着鼠标的人下意识右键，不该什么反应都没有。
             if(e.actionMasked==MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY)!=0) {
@@ -3926,25 +3955,17 @@ class MainActivity: Activity() {
         keyHints?.text=keyHintText()
         updatePointerLayer()
     }
-    /** 鼠标快捷按钮：只在「播放页 + 用过鼠标 + 最近有动静 + 控制条没展开」时出现，避免压住控制条。 */
+    /** 鼠标快捷按钮：只在「播放页 + 用过鼠标 + 控制条展开」时出现，跟着控制条一起进出。 */
     private fun updatePointerLayer() {
         val layer=pointerLayer ?: return
         if(screen!="player") { layer.visibility=View.GONE; return }
-        val show=mouseSeen && pointerAlive && hud.visibility!=View.VISIBLE && episodePanel==null && !playError
+        val show=mouseSeen && hud.visibility==View.VISIBLE && episodePanel==null && !playError
         layer.visibility=if(show) View.VISIBLE else View.GONE
+        pointerCenter?.visibility=if(show && playbackReady && player?.playWhenReady==false) View.VISIBLE else View.GONE
         if(show) {
             val d=detail
             pointerFav?.text=if(d!=null && library.favorite(d.series.id)) "★ 已收藏" else "☆ 收藏"
-            pointerPlay?.text=if(player?.playWhenReady==true) "⏸ 暂停" else "▶ 播放"
         }
-    }
-    /** 鼠标有动静：快捷按钮续命 3 秒。 */
-    private fun pokePointerControls() {
-        if(screen!="player" || !mouseSeen) return
-        pointerAlive=true
-        main.removeCallbacks(hidePointerControls)
-        main.postDelayed(hidePointerControls,3000)
-        updatePointerLayer()
     }
 
     private fun showHud() {

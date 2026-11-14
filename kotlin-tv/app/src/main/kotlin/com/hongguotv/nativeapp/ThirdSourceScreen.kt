@@ -2653,14 +2653,18 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         // 顶层挂 touch，控制层里的按钮（子 view）优先收到事件，互不打架。
         val tapGestures = android.view.GestureDetector(activity, object : android.view.GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if(overlayVisible) hideOverlay() else showOverlay()
+                val instance = player
+                if(instance == null) { if(overlayVisible) hideOverlay() else showOverlay(); return true }
+                // 鼠标左键单击＝暂停/续播：暂停时把控制层和画面中间的播放按钮一起放出来
+                if(instance.playWhenReady) { togglePlay(); showOverlay(); main.removeCallbacks(hideOverlayRun) }
+                else { togglePlay(); hideOverlay() }
                 return true
             }
         })
         host.setOnTouchListener { _, e ->
             if(mode != Mode.PLAY) return@setOnTouchListener false
             // 鼠标点一下记住来源：退出按钮与控制层的手势提示跟着出现
-            if(TvPointer.isPointer(e)) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() }; pokePointerRow() }
+            if(TvPointer.isPointer(e)) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() } }
             if(e.actionMasked == MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY) != 0) {
                 onBack()
                 return@setOnTouchListener true
@@ -2669,7 +2673,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         }
         buildOverlay(host, data, group.first)
         // 鼠标一动就把退出按钮放出来；遥控一按（见 onKey）再收回去
-        TvPointer.onHover(host) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() }; pokePointerRow() }
+        TvPointer.onHover(host) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() } }
         (activity.findViewById(android.R.id.content) as FrameLayout).addView(host, FrameLayout.LayoutParams(-1, -1))
         scheduleSave()
         // 缓冲看门狗：打开任何一集都启动，长时间卡在缓冲时自动换线路/换源
@@ -2777,24 +2781,40 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         seekBar.nextFocusRightId = seekBar.id
         overlayButtons += chain
 
-        // 鼠标快捷按钮：底部一行「播放/暂停 · 选集 · 收藏」，样式与主播放页一致。
-        // 鼠标一动浮现、静止 3 秒收起；控制层展开时让位，不与它重叠。
+        // 鼠标快捷按钮（issue #25）：左下「选集」、右上「收藏」，样式跟「✕ 退出」一致；
+        // 只在控制层展开时一起出现，鼠标单纯划过不再弹出。
         val quickLayer = FrameLayout(activity)
-        fun quickButton(label: String, onClick: () -> Unit) = text(label, 14f).apply {
+        fun quickButton(label: String, onClick: () -> Unit) = text(label, 13f, muted).apply {
             isFocusable = false; isClickable = true
-            setPadding(dp(18), dp(9), dp(18), dp(9))
-            background = rounded(TvStyle.surface, TvStyle.outline)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            background = rounded(Color.argb(90, 0, 0, 0), radius = 8)
             setOnClickListener { onClick() }
         }
-        val quickRow = row().apply { gravity = Gravity.CENTER_VERTICAL }
-        pointerPlayButton = quickButton("▶ 播放") { togglePlay() }
-        quickRow.addView(pointerPlayButton, lp(-2, -2).apply { rightMargin = dp(12) })
+        // 播放/暂停交给画面正中的按钮，左下只留「选集」
         lateinit var quickEpisodes: TextView
         quickEpisodes = quickButton("选集") { showPlayEpisodePicker(quickEpisodes) }
-        quickRow.addView(quickEpisodes, lp(-2, -2).apply { rightMargin = dp(12) })
+        // 左下角，抬到控制层上方，与控制层左边距对齐
+        quickLayer.addView(quickEpisodes, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+            leftMargin = dp(14); bottomMargin = dp(150)
+        })
         pointerFavButton = quickButton("☆ 收藏") { togglePlayFavorite() }
-        quickRow.addView(pointerFavButton, lp(-2, -2))
-        quickLayer.addView(quickRow, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(28) })
+        // 右上角，让开顶部信息条
+        quickLayer.addView(pointerFavButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(60); rightMargin = dp(14)
+        })
+        // 暂停时画面正中的播放按钮：纯图标、透明无边框，跟着控制层一起出现
+        pointerCenterButton = text("▶", 56f, Color.argb(225, 255, 255, 255)).apply {
+            isFocusable = false; isClickable = true
+            setPadding(dp(40), dp(26), dp(40), dp(26))
+            background = null
+            setOnClickListener {
+                togglePlay()
+                // 续播后续控制层自动收起；暂停时保持显示，中间的播放按钮才有地方点
+                if(player?.playWhenReady == true) main.postDelayed(hideOverlayRun, 4_500L)
+                updatePointerRow()
+            }
+        }
+        quickLayer.addView(pointerCenterButton, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         quickLayer.visibility = View.GONE
         host.addView(quickLayer, FrameLayout.LayoutParams(-1, -1))
         pointerRow = quickLayer
@@ -2967,31 +2987,21 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         updatePointerRow()
     }
 
-    // ---- 播放页鼠标快捷按钮行：播放/暂停 · 选集 · 收藏（与主播放页同一套交互）----
+    // ---- 播放页鼠标快捷按钮：左下「选集」、右上「收藏」（与主播放页同一套交互）----
     private var pointerRow: View? = null
-    private var pointerPlayButton: TextView? = null
     private var pointerFavButton: TextView? = null
-    private var pointerAlive = false
-    private val hidePointerRun = Runnable { pointerAlive = false; updatePointerRow() }
+    private var pointerCenterButton: TextView? = null
 
-    /** 只在「播放中 + 用过鼠标 + 最近有动静 + 控制层没展开」时出现，避免压住控制层。 */
+    /** 只在「播放中 + 用过鼠标 + 控制层展开」时出现，跟着控制层一起进出。 */
     private fun updatePointerRow() {
-        val show = mode == Mode.PLAY && pointerSeen && pointerAlive && !overlayVisible
+        val show = mode == Mode.PLAY && pointerSeen && overlayVisible
         pointerRow?.visibility = if(show) View.VISIBLE else View.GONE
+        pointerCenterButton?.visibility = if(show && player?.playWhenReady == false) View.VISIBLE else View.GONE
         if(show) {
-            pointerPlayButton?.text = if(player?.playWhenReady == true) "⏸ 暂停" else "▶ 播放"
             val data = detail; val source = detailSource
             val fav = data != null && source != null && store.favorites().any { it.sourceApi == source.api && it.videoId == data.video.id }
             pointerFavButton?.text = if(fav) "★ 已收藏" else "☆ 收藏"
         }
-    }
-
-    /** 鼠标有动静：快捷按钮续命 3 秒。 */
-    private fun pokePointerRow() {
-        if(mode != Mode.PLAY || !pointerSeen) return
-        pointerAlive = true
-        main.removeCallbacks(hidePointerRun); main.postDelayed(hidePointerRun, 3_000L)
-        updatePointerRow()
     }
 
     /** 播放页选集：与详情页同一个 episodePicker，选中即切集。 */
@@ -3021,6 +3031,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         overlayTopView?.visibility = View.VISIBLE
         overlay?.visibility = View.VISIBLE
         updatePlayUi()
+        updatePointerRow()
         main.removeCallbacks(hideOverlayRun)
         main.postDelayed(hideOverlayRun, 10_000L)
         // 快进预览期间不抢焦点：焦点跳到按钮会中断对左右键的拦截
@@ -3329,8 +3340,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         outroTriggered = false
         overlayVisible = false; overlayButtons.clear()
         overlay = null; overlayTopView = null; progressFill = null; progressTrackView = null; playTime = null
-        pointerAlive = false; main.removeCallbacks(hidePointerRun)
-        pointerRow = null; pointerPlayButton = null; pointerFavButton = null
+        pointerRow = null; pointerFavButton = null; pointerCenterButton = null
         progressThumb = null; progressBubble = null; seekBarView = null; playerView = null
         playLoading = null; playErrorText = null
         playerHost?.let { host -> (host.parent as? FrameLayout)?.removeView(host) }
