@@ -11,6 +11,14 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.32.0 新增与修复
+
+- **恢复全部剧集播放**：11-16 官方播放接口改判旧签名整族失效，所有第三方客户端同时不能播。本版接入新版请求签名（Android `v04.10.03`），取址路径与三个签名头一并切换，实测非前 3 集的第 70 集取到 1080P，自动连播正常。**旧版本客户端请尽快升级**。
+- **鼠标右键动作可自定义**：播放中默认右键退出，也可改为「播放/暂停」「选集」「显隐控制条」「播放设置」；设置项只在接入真鼠标或触控板时出现。
+- **鼠标单击画面暂停/续播**：底部快捷按钮精简为「选集 · 收藏」，播放/暂停交给画面正中按钮；主播放器与第三方片源一致。
+- **三方片源过滤 m3u8 插播广告**：播放器读取清单时剔除广告分片，不再中途跳广告。
+- **手机遥控标题超长横向滚动**：只有超出宽度才往返滚动，短标题保持静止。
+
 ## 0.31.1 新增与修复
 
 - **播放页鼠标快捷按钮**：底部一行「播放 / 暂停 · 选集 · 收藏」，鼠标一动浮现，静止 3 秒自动收起；主播放器与第三方片源一致。
@@ -434,9 +442,9 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.31.1-android8.apk（更新通道，minSdk 26）
+# 输出：outputs/hongguotv-kotlin-0.32.0-android8.apk（更新通道，minSdk 26）
 # Android 5-7 变体：./gradlew -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease
-# 输出：outputs/hongguotv-kotlin-0.31.1-android5.apk（minSdk 21）
+# 输出：outputs/hongguotv-kotlin-0.32.0-android5.apk（minSdk 21）
 ```
 
 ## 工程结构
