@@ -49,6 +49,11 @@ class PlaybackExtras(context: Context) {
         get() = prefs.getString(KEY_UPDOWN, UPDOWN_PANEL)?.takeIf { it in listOf(UPDOWN_PANEL, UPDOWN_SWITCH) } ?: UPDOWN_PANEL
         set(value) { prefs.edit().putString(KEY_UPDOWN, value).apply() }
 
+    /** 播放中鼠标右键的行为：默认退出播放，也可改成暂停/播放、选集、显隐控制条、播放设置。 */
+    var mouseRightAction: String
+        get() = prefs.getString(KEY_MOUSE_RIGHT, MOUSE_EXIT)?.takeIf { it in MOUSE_ACTIONS } ?: MOUSE_EXIT
+        set(value) { prefs.edit().putString(KEY_MOUSE_RIGHT, value).apply() }
+
     companion object {
         private const val PREFS = "playback-extras-v1"
         private const val KEY_BLOCKED = "blockedWords"
@@ -58,6 +63,7 @@ class PlaybackExtras(context: Context) {
         private const val KEY_FAST_SPEED = "longPressSpeed"
         private const val KEY_MENU = "menuKeyAction"
         private const val KEY_UPDOWN = "dpadUpDownAction"
+        private const val KEY_MOUSE_RIGHT = "mouseRightAction"
         val SEEK_STEPS = listOf(10, 15, 30, 60)
         val FAST_SPEEDS = listOf(2f, 3f, 4f)
         const val MENU_PANEL = "panel"
@@ -65,6 +71,12 @@ class PlaybackExtras(context: Context) {
         const val MENU_DANMAKU = "danmaku"
         const val UPDOWN_PANEL = "panel"
         const val UPDOWN_SWITCH = "switch"
+        const val MOUSE_EXIT = "exit"
+        const val MOUSE_PLAY = "play"
+        const val MOUSE_EPISODES = "episodes"
+        const val MOUSE_HUD = "hud"
+        const val MOUSE_PANEL = "panel"
+        val MOUSE_ACTIONS = listOf(MOUSE_EXIT, MOUSE_PLAY, MOUSE_EPISODES, MOUSE_HUD, MOUSE_PANEL)
         private val DEFAULT_BLOCKED = setOf("加群", "微信", "公众号", "QQ群")
     }
 }

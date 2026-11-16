@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import android.content.Context
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -23,6 +24,24 @@ object TvPointer {
         return (source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
             (source and InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD ||
             (source and InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS
+    }
+
+    /**
+     * 当前是否处于「鼠标模式」：接了真鼠标（或触控板）。
+     *
+     * 只用于设置页决定要不要显示「鼠标右键」这一项，误判成本低：
+     * 名字里带 irtouch 的设备排除——这台 TCL 的 `gIrTouch_Mouse` 是伪装成鼠标的红外触摸层，
+     * 不排除的话遥控器用户也会看到一条用不上的设置。
+     */
+    fun hasMouse(context: Context): Boolean {
+        val manager = context.getSystemService(Context.INPUT_SERVICE) as? android.hardware.input.InputManager ?: return false
+        return manager.inputDeviceIds.any { id ->
+            val device = manager.getInputDevice(id) ?: return@any false
+            val sources = device.sources
+            ((sources and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
+                (sources and InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD) &&
+                !device.name.contains("irtouch", ignoreCase = true)
+        }
     }
 
     /**

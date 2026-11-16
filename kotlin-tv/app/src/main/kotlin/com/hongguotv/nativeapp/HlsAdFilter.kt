@@ -17,7 +17,7 @@ import java.io.ByteArrayOutputStream
  *
  * 只处理 URI 含 m3u8 且内容确为 HLS 清单的请求，其余请求原样透传。
  */
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 class HlsAdFilterDataSource private constructor(
     private val upstream: DataSource
 ) : DataSource {

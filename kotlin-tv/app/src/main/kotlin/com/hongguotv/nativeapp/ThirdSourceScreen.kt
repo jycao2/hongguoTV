@@ -2665,8 +2665,16 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             if(mode != Mode.PLAY) return@setOnTouchListener false
             // 鼠标点一下记住来源：退出按钮与控制层的手势提示跟着出现
             if(TvPointer.isPointer(e)) { if(!pointerSeen) { pointerSeen = true; showExitForPointer() } }
+            // 右键动作跟随「遥控器按键」里的设置，默认退出播放
             if(e.actionMasked == MotionEvent.ACTION_DOWN && (e.buttonState and MotionEvent.BUTTON_SECONDARY) != 0) {
-                onBack()
+                when(PlaybackExtras(activity).mouseRightAction) {
+                    PlaybackExtras.MOUSE_PLAY -> if(instance.playWhenReady) { togglePlay(); showOverlay() } else { togglePlay(); hideOverlay() }
+                    PlaybackExtras.MOUSE_EPISODES -> { showOverlay(); showPlayEpisodePicker(host) }
+                    PlaybackExtras.MOUSE_HUD -> if(overlayVisible) hideOverlay() else showOverlay()
+                    // 第三方片源没有独立设置面板，播放设置＝展开控制层；再点一次右键收起
+                    PlaybackExtras.MOUSE_PANEL -> if(overlayVisible) hideOverlay() else showOverlay()
+                    else -> onBack()
+                }
                 return@setOnTouchListener true
             }
             tapGestures.onTouchEvent(e)
@@ -2790,23 +2798,23 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             background = rounded(Color.argb(90, 0, 0, 0), radius = 8)
             setOnClickListener { onClick() }
         }
-        // 播放/暂停交给画面正中的按钮，左下只留「选集」
+        // 播放/暂停交给画面正中的按钮；左下「选集 · 收藏」排一行
         lateinit var quickEpisodes: TextView
         quickEpisodes = quickButton("选集") { showPlayEpisodePicker(quickEpisodes) }
+        pointerFavButton = quickButton("☆ 收藏") { togglePlayFavorite() }
+        val quickRow = row().apply { gravity = Gravity.CENTER_VERTICAL }
+        quickRow.addView(quickEpisodes, lp(-2, -2))
+        quickRow.addView(pointerFavButton, lp(-2, -2).apply { leftMargin = dp(12) })
         // 左下角，抬到控制层上方，与控制层左边距对齐
-        quickLayer.addView(quickEpisodes, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+        quickLayer.addView(quickRow, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
             leftMargin = dp(14); bottomMargin = dp(150)
         })
-        pointerFavButton = quickButton("☆ 收藏") { togglePlayFavorite() }
-        // 右上角，让开顶部信息条
-        quickLayer.addView(pointerFavButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
-            topMargin = dp(60); rightMargin = dp(14)
-        })
-        // 暂停时画面正中的播放按钮：纯图标、透明无边框，跟着控制层一起出现
-        pointerCenterButton = text("▶", 56f, Color.argb(225, 255, 255, 255)).apply {
+        // 暂停时画面正中的播放按钮：图标带半透明矩形底，跟着控制层一起出现
+        pointerCenterButton = text("▶", 42f, Color.argb(225, 255, 255, 255)).apply {
             isFocusable = false; isClickable = true
-            setPadding(dp(40), dp(26), dp(40), dp(26))
-            background = null
+            setPadding(dp(30), dp(22), dp(30), dp(22))
+            // 纯色圆角矩形、无描边（方案 B）：55% 黑底，和 HUD 同一套色
+            background = rounded(Color.argb(140, 0, 0, 0), radius = 12)
             setOnClickListener {
                 togglePlay()
                 // 续播后续控制层自动收起；暂停时保持显示，中间的播放按钮才有地方点
