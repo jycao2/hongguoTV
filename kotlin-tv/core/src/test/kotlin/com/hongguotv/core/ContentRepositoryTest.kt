@@ -108,6 +108,8 @@ class ContentRepositoryTest {
     private fun videoInfo() =
         """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
+    // 2026-11-16 起取址第一步固定先探手机端 v5 模型接口；用例里的 mock 对它返回空/无 code，随即回退到旧路由。
+    private val v5Path="/novel/player/multi_video_model/player/v1"
 
     @Test fun videoTabRouteSuppliesPlaybackModel() {
         val paths=mutableListOf<String>()
@@ -121,7 +123,8 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        assertEquals(tabPath,paths.first())
+        assertEquals(v5Path,paths.first())
+        assertEquals(tabPath,paths.drop(1).first())
     }
 
     @Test fun newRouteVideoModelCanBeStringEncodedJson() {
@@ -166,7 +169,7 @@ class ContentRepositoryTest {
             else """{"data":{"video_model":{"fallback_api":"https://example.com/stream"}}}"""
         }
         assertEquals("1080P",repo.stream("123").quality)
-        assertEquals(tabPath,paths.first())
+        assertEquals(tabPath,paths.first{ it!=v5Path })
         assertTrue(paths.contains("/novel/player/multi_video_model/v1/"))
         assertTrue(paths.contains("/novel/player/video_model/v1/"))
     }

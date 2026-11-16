@@ -1,6 +1,7 @@
 package com.hongguotv.core
 
 fun main(args: Array<String>) {
+    if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
     val repository=ContentRepository()
     if(args.contains("--ranking")) {
         try {
@@ -29,7 +30,10 @@ fun main(args: Array<String>) {
     val started=System.currentTimeMillis()
     // --stream-only：只验证详情与播放链路，跳过搜索和首页，避免内容接口偶发故障挡住播放排查。
     val streamOnly=args.contains("--stream-only")
-    val seriesArg=args.firstOrNull { it.matches(Regex("[0-9]{1,30}")) }
+    // 剧集号参数是 `--episode N` 的值，别把它当成剧集 ID。
+    val seriesArg=args.withIndex().firstOrNull { (index,value) ->
+        value.matches(Regex("[0-9]{1,30}")) && args.getOrNull(index-1)!="--episode"
+    }?.value
     if(!streamOnly) {
         val search=repository.search(keyword,type=type); println("searchMs=${System.currentTimeMillis()-started}; search=${search.items.size}; hasMore=${search.hasMore}")
         if(type==ContentType.COMIC && search.hasMore) {
@@ -58,7 +62,8 @@ fun main(args: Array<String>) {
         repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
         return
     }
-    val stream=repository.stream(detail.episodes.first())
+    val episodeIndex=args.getOrNull(args.indexOf("--episode")+1)?.toIntOrNull() ?: 0
+    val stream=repository.stream(detail.episodes.getOrElse(episodeIndex) { detail.episodes.last() })
     RemoteVideo(repository.http,stream).use { remote ->
         remote.prepare(); val first=remote.read(0,1024*1024)
         val tail=remote.read((remote.total-65536).coerceAtLeast(0),65536)

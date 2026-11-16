@@ -4,7 +4,8 @@ package com.hongguotv.core
 import java.util.Base64
 import kotlin.random.Random
 
-internal object VendorConstants {
+/** 公开可见性只为本机的 `:app-phone` 实验模块（`regenerate()`）；该模块不入库，正式包不受影响。 */
+object VendorConstants {
     const val VIDEO_UA = "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
     const val APP_UA = "com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)"
     // 设备身份与进程指纹：原硬编码值来自公开抓包样本，已被平台封禁。

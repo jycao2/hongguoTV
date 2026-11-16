@@ -644,7 +644,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  签名与匿名身份均如此），而这条 GET 接口同刻正常返回 `code 0` 与完整 `video_list`。
      *  参数取自官方 `GetVideoModelRequest` 的 snake_case 字段，缺任一字段会回 `100103`。
      *  失败一律返回 null，由调用方回退旧接口，不改变旧的空响应与身份轮换语义。 */
-    private fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile, level: Int = 1, preferAlt: Boolean = false): JSONObject? {
+    internal fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile, level: Int = 1, preferAlt: Boolean = false): JSONObject? {
         val extra=linkedMapOf(
             "video_id" to id, "video_id_type" to "0", "device_level" to level.toString(),
             "need_all_video_definition" to "1", "need_mp4_align" to "0",
@@ -672,8 +672,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             } catch (problem: RuntimeException) {
                 continue
             }
-            val root=runCatching { JSONObject(body) }.getOrNull() ?: continue
-            if(root.optInt("code",root.optInt("Code",-1))!=0) continue
+            val root=runCatching { JSONObject(body) }.getOrNull()
+            if(root==null) {
+                probeLog?.invoke("tab $base 非JSON body=${body.take(120)}")
+                continue
+            }
+            if(root.optInt("code",root.optInt("Code",-1))!=0) {
+                probeLog?.invoke("tab $base code=${root.optInt("code",-1)} body=${body.take(160)}")
+                continue
+            }
             val data=root.optJSONObject("data") ?: continue
             val rows=data.optJSONObject("video_model_data") ?: data
             val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: continue
@@ -686,7 +693,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  旧接口按「旧路径 → 新路径 → 带场景段」依次尝试，第一个能取到 `video_model` 的用；
      *  记住上次成功的路由优先复用、其余路由各试一次，避免把请求量放大。
      *  空响应基本是「当前匿名身份已被站方用尽」：立刻换一台匿名设备再扫一轮，仍空才算失败。 */
-    private fun videoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
+    internal fun videoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
         modelCache.get(id,clock())?.let { return it }
         val model=fetchVideoModel(id,level,preferAlt).put(LEVEL_KEY,level)
         modelCache.put(id,model,clock())
@@ -694,6 +701,12 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     }
     private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
         val identity=playbackSession.profile(http)
+        // 2026-11-16 起旧链路（video_tab / video_model / multi_video_model）全部降级为 200+0 字节，
+        // 现行只有手机端 v5 签名路径还能取到 video_model，因此把它放在最前面。
+        MobilePlayback.model(id,identity,http,signer,clock())?.let { model ->
+            probeLog?.invoke("v5 命中 id=$id")
+            return model.put(ROUTE_KEY,"v5|player")
+        }
         tabVideoModel(id,identity,level,preferAlt)?.let { return it }
         // 与 video_tab 保持同一 device_level（可诊断轮换）：部分剧集在 3 下会把 360P–720P 全发成
         // bytevc2（MP4 提取器读不出视频轨），只剩超出电视解码上限的 1080P bytevc1，降档无路可走。
@@ -736,12 +749,14 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                     response.body?.string().orEmpty()
                 }
                 if(body.isBlank()) {
+                    probeLog?.invoke("route $path 空体 attempt=${attempt+1}")
                     if(attempt+1<attempts) Thread.sleep(BLANK_BACKOFF_MS)
                     continue
                 }
                 allBlank=false
                 val data=JSONObject(body)
                 val code=data.optInt("Code",data.optInt("code",0))
+                if(code!=0) probeLog?.invoke("route $path code=$code body=${body.take(160)}")
                 if(code==0) {
                     videoModelOf(data)?.let { model -> return Sweep(model.put(ROUTE_KEY,path),path,false,null) }
                     failure=IOException("播放信息为空")
@@ -765,6 +780,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         else -> null
     }
     companion object {
+        /** 断供排查用的一次性探针：为 null 时不产生任何开销，也不影响生产日志。
+         *  设置后逐跳打印播放取址的响应摘要（哪条路由空、哪条给了错误码）。 */
+        internal var probeLog: ((String) -> Unit)? = null
         // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
         // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
         private const val COMIC_WEB_GENRE="205"
