@@ -17,46 +17,90 @@ object DanmakuEmoji {
         "看" to "👀", "what" to "😲", "星星眼" to "🤩", "打脸" to "🤚", "思考" to "🤔",
         "疑问" to "❓", "憨笑" to "😁", "奸笑" to "😏", "酷拽" to "😎", "黑脸" to "🌚",
         "呲牙" to "😁", "偷笑" to "🤭", "得意" to "😌", "小鼓掌" to "👏", "鼓掌" to "👏",
-        "比心" to "🫰", "爱心" to "❤️", "生气" to "😠", "发怒" to "😡", "咒骂" to "🤬",
+        "比心" to "💕", "爱心" to "❤️", "生气" to "😠", "发怒" to "😡", "咒骂" to "🤬",
         "流泪" to "😢", "泣不成声" to "😭", "泪奔" to "😭", "大哭" to "😭", "晕" to "😵",
         "困" to "😪", "衰" to "😩", "擦汗" to "😓", "抠鼻" to "😤", "抓狂" to "😫",
         "震惊" to "😱", "惊讶" to "😮", "ok" to "👌", "耶" to "✌️", "酷" to "😎",
         "微笑" to "🙂", "害羞" to "😊", "抱抱" to "🤗", "白眼" to "🙄", "笑" to "😄",
         "鲜花" to "🌹", "玫瑰" to "🌹", "加油" to "💪", "胜利" to "✌️", "厉害" to "👍",
-        "无语" to "😑", "叹气" to "😮‍💨", "吃瓜" to "🍉", "柠檬" to "🍋", "尴尬" to "😅",
+        "无语" to "😑", "叹气" to "😔", "吃瓜" to "🍉", "柠檬" to "🍋", "尴尬" to "😅",
         "绝望" to "😩", "暗中观察" to "🕵️", "心碎" to "💔", "礼物" to "🎁", "可爱" to "🥰",
         "拜托" to "🙏", "厉害了我的哥" to "😲",
         // Codes observed in live bullet-comment traffic that the initial guess set missed.
         "哭" to "😭", "爽" to "😆", "怒" to "😠", "送花" to "🌹", "盯" to "👀",
+        // 红果弹幕高频 emote（用户 2026-11-17：[求爆更][舔屏] 这类要适配）。官方画的是自家图片，
+        // 这里用同义的 Unicode emoji 近似，保证不再出现裸的「[求爆更]」文本。
+        "求爆更" to "🚀", "爆更" to "🔥", "舔屏" to "😋", "打call" to "📣",
+        "刷了个屏" to "🎊", "前方高能" to "⚡", "高能" to "💥", "名场面" to "🎬",
+        "神操作" to "🤯", "泪目" to "🥲", "追更" to "🔖", "白嫖" to "💰",
+        "好看" to "💯", "红包" to "🧧", "爪" to "🐾", "妙啊" to "🤩",
+        "吃瓜群众" to "🍉", "yyds" to "🐐", "awsl" to "🥰", "aws1" to "🥰",
+        "太美了" to "😍", "太帅了" to "🤩", "笑死" to "🤣", "害怕" to "😨",
+        "上头" to "😖", "熬夜" to "🌙", "催更" to "⏰", "三连" to "👍",
+        "尬笑" to "😅", "无语子" to "😑", "聪明" to "🧠", "感动" to "🥲",
+        // 热榜剧真实弹幕探针 2026-11-18（1169 条）发现的缺码
+        "没看够" to "🥺", "什么" to "❓", "送心" to "💕", "委屈" to "🥺", "快哭了" to "😢",
+    )
+
+    /**
+     * 电视 ROM 的 emoji 字体跟不上手机：Android 11 只到 Emoji 13.0，13.1/14.0 的新表情
+     * （🫰🥹🫶 之类）一律画成豆腐块。这里把评论原文里的这类字符替换成同义旧字形，
+     * 与 [TABLE] 解出的 emoji 一起兜底（用户 2026-11-18：弹幕还是有没有显示的表情）。
+     */
+    private val RAW_COMPAT: Array<Pair<String, String>> = arrayOf(
+        "\uD83E\uDEF0" to "\uD83E\uDD0C", // 🫰 比心手 → 🤌
+        "\uD83E\uDD79" to "\uD83E\uDD72", // 🥹 含泪 → 🥲
+        "\uD83D\uDE2E\u200D\uD83D\uDCA8" to "\uD83D\uDE2E", // 😮‍💨 叹气 ZWJ → 😮
+        "\uD83E\uDEF6" to "❤️", // 🫶 双手比心 → ❤️
+        "\uD83E\uDEE0" to "🙂", // 🫠 融化脸 → 🙂
+        "\uD83E\uDEE3" to "\uD83D\uDC41️", // 🫣 偷看 → 👁️
+        "\uD83E\uDEE5" to "🤔", // 🫥 虚线脸 → 🤔
+        "\uD83E\uDEE7" to "\uD83D\uDC80", // 🫧 泡泡 → 💀
+        "\uD83E\uDEE8" to "\uD83D\uDE31", // 🫨 抖脸(15.0) → 😱
     )
 
     /** Expands every recognized "[code]" to its emoji, leaving the rest of [text] and unknown codes as-is. */
-    fun display(text: String): String {
+    fun display(text: String): String = expand(text).first
+
+    /**
+     * 展开结果附带本条弹幕里未被 [TABLE] 识别的「[码]」：调用方可以记日志，
+     * 用来发现表格里还缺哪些 emote（用户 2026-11-18 反馈「还是有表情没显示」）。
+     */
+    fun expand(text: String): Pair<String, List<String>> {
         val hasCode = text.indexOf('[') >= 0
         val hasSticker = text.indexOf(STICKER) >= 0
-        // Budget the common case: literal text needs no work at all.
-        if (!hasCode && !hasSticker) return text
-        val clean = if (hasSticker) text.replace(STICKER.toString(), "") else text
-        if (!hasCode) return clean
-        val out = StringBuilder(clean.length)
-        var i = 0
-        while (i < clean.length) {
-            val open = clean.indexOf('[', i)
-            if (open < 0) {
-                out.append(clean, i, clean.length)
-                break
+        val unknown = if (hasCode) mutableListOf<String>() else null
+        val expanded = if (!hasCode && !hasSticker) text else {
+            val clean = if (hasSticker) text.replace(STICKER.toString(), "") else text
+            if (!hasCode) clean
+            else {
+                val out = StringBuilder(clean.length)
+                var i = 0
+                while (i < clean.length) {
+                    val open = clean.indexOf('[', i)
+                    if (open < 0) {
+                        out.append(clean, i, clean.length)
+                        break
+                    }
+                    val close = clean.indexOf(']', open + 1)
+                    if (close < 0) {
+                        out.append(clean, i, clean.length)
+                        break
+                    }
+                    out.append(clean, i, open)
+                    val code = clean.substring(open + 1, close)
+                    val emoji = TABLE[code.lowercase()]
+                    if (emoji != null) out.append(emoji) else {
+                        out.append(clean, open, close + 1)
+                        unknown?.add(code)
+                    }
+                    i = close + 1
+                }
+                out.toString()
             }
-            val close = clean.indexOf(']', open + 1)
-            if (close < 0) {
-                out.append(clean, i, clean.length)
-                break
-            }
-            out.append(clean, i, open)
-            val emoji = TABLE[clean.substring(open + 1, close).lowercase()]
-            if (emoji != null) out.append(emoji) else out.append(clean, open, close + 1)
-            i = close + 1
         }
-        return out.toString()
+        val finalText = RAW_COMPAT.fold(expanded) { acc, (from,to) -> if (acc.contains(from)) acc.replace(from,to) else acc }
+        return finalText to (unknown?.toList() ?: emptyList())
     }
 
     private const val STICKER = '\uFFFC'

@@ -31,6 +31,14 @@ class AppUpdatesTest {
         old.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1-android8.apk")
         assertEquals("hongguotv-kotlin-0.9.0-build.1-android8.apk", AppUpdate.parse(old.toString()).fileName)
         assertEquals("hongguotv-kotlin-0.9.0-build.1-android5.apk", update().fileName)
+        // 0.33.0 起单包：声明 minSdk 21 + 沿用 -android8.apk 命名，这个组合必须能解析
+        val single = json()
+        single.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1-android8.apk")
+        val parsed = AppUpdate.parse(single.toString())
+        assertEquals(21, parsed.minSdk)
+        assertEquals("hongguotv-kotlin-0.9.0-build.1-android8.apk", parsed.fileName)
+        assertTrue(parsed.newerThan(9, 21))   // Android 5.0 也能收到更新
+        assertFalse(parsed.newerThan(9, 20))  // Android 4.4 仍然不推
         val o = json(); o.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1-android7.apk")
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
     }

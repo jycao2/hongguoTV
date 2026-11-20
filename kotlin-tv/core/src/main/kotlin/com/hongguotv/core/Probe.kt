@@ -1,7 +1,52 @@
 package com.hongguotv.core
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+
+/** --feed --did/--iid 用的固定身份。 */
+private fun DiscoveryIdentityStyle(did:String,iid:String):Map<String,String> =
+    VendorConstants.device.toMutableMap().apply { put("device_id",did); put("iid",iid) }
+
 fun main(args: Array<String>) {
+    // --dump-spade：绕过 bytevc2 过滤，dump 播放模型里所有分档的 spade_a / codec / url。
+    if(args.contains("--dump-spade")) { mainDump(args); return }
+    // --diagnose：直接打官方取址接口，原样打印 HTTP 码/响应头/响应体，用于定位返空到底空在哪一层。
+    if(args.contains("--diagnose")) { mainDiagnose(args); return }
     if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
+    // --feed：猜你喜欢首屏对照实验——同一身份连打两次 + 换全新注册身份，验证服务端
+    // 是否真的按身份个性化排序（若两次全同，说明冷启动画像给的是固定热榜）。
+    if(args.contains("--feed")) {
+        val http=okhttp3.OkHttpClient.Builder()
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        fun dump(label:String, device:()->Map<String,String>, login:()->String? = {null}) {
+            val repo=DiscoveryRepository(http, deviceProvider=device, loginCookie=login)
+            println("== $label device_id=${device()["device_id"]} 登录=${if(login().isNullOrBlank()) "否" else "是"}")
+            val page=try { repo.nextPage() } catch(e:Exception) { println("   失败: ${e.message}"); return }
+            println("   route=${repo.lastRoute} note=${repo.lastNote} 条数=${page.items.size}")
+            page.items.take(8).forEachIndexed { i,s -> println("   $i ${s.id} ${s.title}") }
+        }
+        val cookie=System.getenv("HONGGUOTV_COOKIE")
+        fun argValue(name:String):String? { val i=args.indexOf(name); return if(i>=0) args.getOrNull(i+1) else null }
+        val didArg=argValue("--did")
+        val iidArg=argValue("--iid")
+        if(didArg!=null && iidArg!=null) {
+            // 指定身份：复现真实客户端的（注册身份 + 登录态）组合
+            val device=DiscoveryIdentityStyle(didArg,iidArg)
+            dump("指定身份 匿名", { device })
+            if(!cookie.isNullOrBlank()) dump("指定身份+登录Cookie", { device }, { cookie })
+        } else {
+            val a=PlaybackDeviceSession().profile(http)
+            dump("身份A+注册Cookie 第1次", { a.values }, { a.cookie })
+            dump("身份A+注册Cookie 第2次", { a.values }, { a.cookie })
+            val b=PlaybackDeviceSession().profile(http)
+            dump("身份B+注册Cookie", { b.values }, { b.cookie })
+            if(!cookie.isNullOrBlank()) dump("身份A+注册+登录Cookie", { a.values }, { a.cookie+"; "+cookie })
+        }
+        http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown()
+        return
+    }
     val repository=ContentRepository()
     if(args.contains("--ranking")) {
         try {
@@ -71,4 +116,195 @@ fun main(args: Array<String>) {
         if(args.contains("--save")) java.io.File("/tmp/hongguo-kotlin-first.mp4").writeBytes(first)
     }
     repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+}
+
+/**
+ * 官方取址接口诊断：每轮换一台匿名设备，连打三次 v5 主路，原样打印 HTTP 码 / 响应头 / 响应体。
+ * 输出全用英文，Windows 控制台中文会乱码。
+ */
+private fun mainDiagnose(args: Array<String>) {
+    val repository=ContentRepository()
+    val http=repository.http
+    val signer=Signer()
+    val id=args.withIndex().firstOrNull { (index,value) ->
+        value.matches(Regex("[0-9]{1,30}")) && args.getOrNull(index-1)!="--episode"
+    }?.value ?: throw IllegalArgumentException("usage: --diagnose <episodeId> [--rounds N] [--host a|b]")
+    val rounds=args.getOrNull(args.indexOf("--rounds")+1)?.toIntOrNull() ?: 3
+    val host=args.getOrNull(args.indexOf("--host")+1) ?: "a"
+    val session=PlaybackDeviceSession.shared
+    // --legacy：旧端点线上仍在做参数校验（返回 101000/100001 而不是空体），用旧参数格式试能不能重新取到地址。
+    if(args.contains("--legacy")) {
+        val profile=session.profile(http)
+        println("device_id=${profile.values["device_id"]}")
+        val legacyBody="""{"video_id":"$id","content_type":1,"biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":3}}"""
+        val bareBody="""{"video_id":"$id"}"""
+        val cases=listOf(
+            Triple("video_model|legacy","/novel/player/video_model/v1/",legacyBody),
+            Triple("video_model|bare","/novel/player/video_model/v1/",bareBody),
+            Triple("multi_v1|vp1024","/novel/player/multi_video_model/v1/","""{"video_id":"$id","biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":1024}}"""),
+            Triple("multi_v1|ids1024","/novel/player/multi_video_model/v1/","""{"video_ids":["$id"],"biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":1024}}"""),
+            Triple("multi_v1|mixed1024","/novel/player/multi_video_model/v1/","""{"biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}"""),
+            Triple("player|legacy","/novel/player/multi_video_model/player/v1",legacyBody),
+        )
+        for((label,pathOverride,body) in cases) {
+            val started=System.currentTimeMillis()
+            println("LEGACY $label ${diagnoseV5(id,profile,http,signer,host,pathOverride=pathOverride,customBody=body)} ms=${System.currentTimeMillis()-started}")
+            Thread.sleep(400)
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    // --ver：换客户端版本号再打，验证「服务端是否按版本门槛静默拒绝」（官方今天下午是否抬了最低版本）。
+    if(args.contains("--ver")) {
+        val profile=session.profile(http)
+        println("device_id=${profile.values["device_id"]}")
+        val candidates=listOf(
+            "74332" to "7.4.3.32",
+            "74532" to "7.4.5.32",
+            "74632" to "7.4.6.32",
+            "74732" to "7.4.7.32",
+            "75002" to "7.5.0.2",
+            "76002" to "7.6.0.2",
+        )
+        for((code,name) in candidates) {
+            val started=System.currentTimeMillis()
+            val line=diagnoseV5(id,profile,http,signer,host,versionCode=code,versionName=name).lineSequence().first()
+            println("VER $name/$code $line ms=${System.currentTimeMillis()-started}")
+            Thread.sleep(400)
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    // --cookie：对比「不带注册 Cookie」与「带注册 Cookie」两种请求，验证是否变成必须登录/必须带票据。
+    if(args.contains("--cookie")) {
+        val profile=session.profile(http)
+        println("device_id=${profile.values["device_id"]} cookie=[${profile.cookie.ifBlank { "<EMPTY>" }}]")
+        for(attempt in 1..2) {
+            println("NODEV-$attempt ${diagnoseV5(id,profile,http,signer,host).lineSequence().first()}")
+            println("COOKIE-$attempt ${diagnoseV5(id,profile,http,signer,host,withCookie=true).lineSequence().first()}")
+            Thread.sleep(500)
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    // --once：每次都用一个全新 OkHttpClient + 全新注册设备打一次，用来区分「配额限流」和「落在不同后端实例」。
+    if(args.contains("--once")) {
+        val n=args.getOrNull(args.indexOf("--once")+1)?.toIntOrNull() ?: 10
+        val proxyArg=args.getOrNull(args.indexOf("--proxy")+1)
+        for(i in 1..n) {
+            val plain=ContentRepository()
+            val repo=if(proxyArg==null) plain else {
+                val host=proxyArg.substringBefore(":"); val port=proxyArg.substringAfter(":").toInt()
+                ContentRepository(plain.http.newBuilder()
+                    .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP,java.net.InetSocketAddress(host,port)))
+                    .build())
+            }
+            val fresh=PlaybackDeviceSession()
+            val profile=fresh.profile(repo.http)
+            val started=System.currentTimeMillis()
+            val line=diagnoseV5(id,profile,repo.http,signer,host).lineSequence().first()
+            println("ONCE $i dev=${profile.values["device_id"]} $line ms=${System.currentTimeMillis()-started}")
+            repo.http.connectionPool.evictAll(); repo.http.dispatcher.executorService.shutdown()
+            Thread.sleep(400)
+        }
+        return
+    }
+    if(args.contains("--burst")) {
+        val n=args.getOrNull(args.indexOf("--burst")+1)?.toIntOrNull() ?: 20
+        val profile=session.profile(http)
+        println("device_id=${profile.values["device_id"]}")
+        for(i in 1..n) {
+            val started=System.currentTimeMillis()
+            val line=diagnoseV5(id,profile,http,signer,host).lineSequence().first()
+            println("BURST $i $line ms=${System.currentTimeMillis()-started}")
+        }
+        for(gap in listOf(10,20,30,60)) {
+            Thread.sleep(gap*1000L)
+            val started=System.currentTimeMillis()
+            val line=diagnoseV5(id,profile,http,signer,host).lineSequence().first()
+            println("AFTER ${gap}s $line ms=${System.currentTimeMillis()-started}")
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    if(args.contains("--matrix")) {
+        val profile=session.profile(http)
+        println("device_id=${profile.values["device_id"]} iid=${profile.values["iid"]} cdid=${profile.values["cdid"]}")
+        val cases=listOf(
+            "a|player/v1" to ("a" to "/novel/player/multi_video_model/player/v1"),
+            "b|player/v1" to ("b" to "/novel/player/multi_video_model/player/v1"),
+            "a|multi_v1" to ("a" to "/novel/player/multi_video_model/v1/"),
+            "a|video_model_v1" to ("a" to "/novel/player/video_model/v1/"),
+            "a|preload_v1" to ("a" to "/novel/player/multi_video_model/preload/v1/"),
+        )
+        for((label,pair) in cases) {
+            val started=System.currentTimeMillis()
+            println("CASE $label ${diagnoseV5(id,profile,http,signer,pair.first,pair.second)} ms=${System.currentTimeMillis()-started}")
+            Thread.sleep(500)
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    for(round in 1..rounds) {
+        val profile=session.profile(http)
+        println("ROUND $round device_id=${profile.values["device_id"]} iid=${profile.values["iid"]} cdid=${profile.values["cdid"]}")
+        for(attempt in 1..3) {
+            val started=System.currentTimeMillis()
+            println("  ATTEMPT $attempt ${diagnoseV5(id,profile,http,signer,host)} ms=${System.currentTimeMillis()-started}")
+            if(attempt<3) Thread.sleep(800)
+        }
+        if(round<rounds) session.renew(http)
+    }
+    repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+}
+
+private fun diagnoseV5(
+    id: String,
+    identity: PlaybackDeviceSession.Profile,
+    http: okhttp3.OkHttpClient,
+    signer: Signer,
+    host: String,
+    pathOverride: String? = null,
+    withCookie: Boolean = false,
+    versionCode: String = "74332",
+    versionName: String = "7.4.3.32",
+    customBody: String? = null,
+): String {
+    val base=if(host=="b") "https://api5-normal-sinfonlineb.fqnovel.com" else "https://api5-normal-sinfonlinea.fqnovel.com"
+    val path=pathOverride ?: "/novel/player/multi_video_model/player/v1"
+    val payload=customBody ?: """{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}"""
+    val body=java.io.ByteArrayOutputStream().also { out ->
+        java.util.zip.GZIPOutputStream(out).use { gz -> gz.write(payload.toByteArray(Charsets.UTF_8)) }
+    }.toByteArray()
+    val values=linkedMapOf(
+        "aid" to "8662", "app_name" to "novelread",
+        "version_code" to versionCode, "version_name" to versionName,
+        "channel" to "vivo_8662_64", "device_platform" to "android",
+        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
+        "iid" to identity.values.getValue("iid"),
+        "cdid" to identity.values.getValue("cdid"),
+        "device_id" to identity.values.getValue("device_id"),
+    )
+    val signed=signer.signPlaybackV5(base+path,values,body)
+    // --cookie：带上注册时拿到的身份 Cookie。用来验证「官方今天下午是否改成必须登录/必须带注册票据」。
+    val extraCookie=if(withCookie) identity.cookie else ""
+    val request=okhttp3.Request.Builder().url(signed.url)
+        .header("User-Agent",MobilePlayback.UA)
+        .header("Accept","application/json")
+        .header("Content-Encoding","gzip")
+        .apply { if(extraCookie.isNotBlank()) header("Cookie",extraCookie) }
+        .apply { signed.headers.forEach { (key,value) -> header(key,value) } }
+        .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        .build()
+    val transport=http.newBuilder().cookieJar(okhttp3.CookieJar.NO_COOKIES).build()
+    return runCatching {
+        RequestScope.execute(transport.newCall(request)) { response ->
+            val bytes=response.body?.bytes() ?: ByteArray(0)
+            val interesting=response.headers.names()
+                .filter { it.startsWith("x-",true) || it.equals("server",true) || it.equals("content-length",true) }
+                .joinToString(",") { "$it=${response.header(it)}" }
+            val text=if(bytes.isEmpty()) "<EMPTY>" else String(bytes,Charsets.UTF_8).take(600)
+            "HTTP=${response.code} len=${bytes.size} enc=${response.header("Content-Encoding")}\n      HDR[$interesting]\n      BODY[$text]"
+        }
+    }.getOrElse { "EXCEPTION=${it.javaClass.simpleName}: ${it.message}" }
 }

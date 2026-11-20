@@ -186,11 +186,11 @@ class TvTools(private val activity: Activity) {
     fun destroy() { close(); worker.shutdownNow() }
     fun info(title: String,message: String,anchor: View?) = open(TvDialog.info(activity,title,message),anchor)
     fun confirm(title: String,message: String,anchor: View?,action: ()->Unit) {
-        open(TvDialog.confirm(activity,title,message,action),anchor)
+        open(TvDialog.confirm(activity,title,message,action=action),anchor)
     }
-    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,onExtra: ()->Unit={},focusIndex: Int=-1,anchorToButton: Boolean=false) {
+    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,onExtra: ()->Unit={},focusIndex: Int=-1,anchorToButton: Boolean=false,selectedIndex: Int=-1) {
         // anchorToButton：弹窗悬浮到 anchor 按钮左侧（题材这类筛选器）；默认仍屏幕居中
-        val next=TvDialog.choose(activity,title,labels,onChoice,extra,onExtra,focusIndex,anchorView=if(anchorToButton) anchor else null)
+        val next=TvDialog.choose(activity,title,labels,onChoice,extra,onExtra,focusIndex,anchorView=if(anchorToButton) anchor else null,selectedIndex=selectedIndex)
         open(next,anchor)
     }
     fun episodePicker(count: Int,current: Int,anchor: View?,select: (Int)->Unit) {

@@ -50,6 +50,16 @@ import com.hongguotv.core.PlaybackSpeed
 import com.hongguotv.core.RemoteCommand
 import com.hongguotv.core.ThirdSourceConfig
 import java.util.concurrent.Executors
+import com.hongguotv.core.ThirdCms
+import com.hongguotv.core.ThirdCmsClient
+import com.hongguotv.core.ThirdSource
+import com.hongguotv.core.ThirdCategory
+import com.hongguotv.core.ThirdVideo
+import com.hongguotv.core.ThirdEpisode
+import com.hongguotv.core.ThirdDetail
+import com.hongguotv.core.ThirdProgress
+import com.hongguotv.core.ThirdTvboxSite
+import com.hongguotv.core.ThirdSearchHit
 
 /** 三方片源页：自成体系的「店中店」——浏览/详情/播放全部独立，与红果内容体系零交集。
  *  生命周期由 MainActivity 委托：show/onBack/onKey/pause/stop/release。 */

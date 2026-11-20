@@ -117,6 +117,9 @@ class AccountManager(private val context: Context, private val library: Library)
 
     val signedIn get() = credentials != null && profile != null
 
+    /** 只读凭据：推荐流等外部模块要带登录 Cookie 提升个性化，不提供写入口。 */
+    val account: AccountCredentials? get() = credentials
+
     /** 云端历史是否已成功拉取过；手机遥控等外部只读方用它判断要不要顺手触发一次 refreshHistory。 */
     val cloudHistoryLoaded get() = historyLoaded
     val accountLabel: String get() {
@@ -785,6 +788,50 @@ class AccountManager(private val context: Context, private val library: Library)
         val cred = credentials ?: return "未登录，跳过"
         val rows = client.history(cred)
         return "返回 ${rows.size} 条云端观看记录"
+    }
+
+    // ——— 行为上报（官方推荐画像）：与手机版同口径的最小风险方案 ———
+    // 位置 + 时长 + 是否完播就是「猜你喜欢」要的信号，不额外新增接口、不报曝光/点击/负反馈。
+
+    private val reportPrefs = context.getSharedPreferences("recommend-report-v1", Context.MODE_PRIVATE)
+    private val reportLock = Any()
+    private val reportLast = HashMap<String, Long>()
+
+    /** 参与官方推荐画像（上报观看进度/完播）。关掉后云端历史与收藏读取不受影响。 */
+    var reportEnabled: Boolean
+        get() = reportPrefs.getBoolean("enabled", true)
+        set(value) { reportPrefs.edit().putBoolean("enabled", value).apply() }
+
+    /**
+     * 上报一条观看进度：同一部剧 60 秒最多一条，命中 101144 风控熔断 24 小时。
+     * 失败一律静默（本地记录仍在），不影响播放。
+     */
+    fun reportProgress(series: Series, episodeId: String, episodeIndex: Int, position: Long, duration: Long, episodeCount: Int) {
+        if (!reportEnabled) return
+        val account = credentials ?: return
+        val now = System.currentTimeMillis()
+        if (reportPrefs.getLong("blocked_until", 0L) > now) return
+        synchronized(reportLock) {
+            if (now - (reportLast[series.id] ?: 0L) < REPORT_MIN_GAP_MS) return
+            reportLast[series.id] = now
+        }
+        val row = CloudProgress(series, episodeId, episodeIndex, position.coerceAtLeast(0), duration.coerceAtLeast(0), now, episodeCount)
+        worker.execute {
+            runCatching { client.upload(account, row, episodeCount.coerceAtLeast(episodeIndex + 1)) }
+                .onFailure { failure ->
+                    if (failure.message.orEmpty().contains("101144")) {
+                        reportPrefs.edit().putLong("blocked_until", System.currentTimeMillis() + REPORT_BLOCK_MS).apply()
+                        Log.w("HongguoTV", "推荐上报命中风控，熔断 24h（本机不再上报）", failure)
+                    } else {
+                        Log.w("HongguoTV", "推荐上报失败", failure)
+                    }
+                }
+        }
+    }
+
+    private companion object {
+        const val REPORT_MIN_GAP_MS = 60_000L
+        const val REPORT_BLOCK_MS = 24 * 60 * 60 * 1000L
     }
 
     fun destroy() {

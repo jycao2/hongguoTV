@@ -25,6 +25,8 @@ object TransferRules {
         "mov" to TransferKind.VIDEO, "webm" to TransferKind.VIDEO, "avi" to TransferKind.VIDEO,
         "jpg" to TransferKind.IMAGE, "jpeg" to TransferKind.IMAGE, "png" to TransferKind.IMAGE,
         "webp" to TransferKind.IMAGE,
+        // gif 2026-11-19 加：屏保自定义素材支持动图（快传原来不放行 gif）
+        "gif" to TransferKind.IMAGE,
         "srt" to TransferKind.OTHER, "ass" to TransferKind.OTHER, "torrent" to TransferKind.OTHER,
         "zip" to TransferKind.OTHER, "json" to TransferKind.OTHER,
     )

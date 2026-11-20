@@ -11,6 +11,15 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.33.0 新增与修复
+
+- **恢复全部剧集播放**：11-20 官方接口变更导致所有剧集无法播放，本版切换到现行取址链路并升级 v5 请求签名，播放恢复；被限流时自动冷却并提示恢复倒计时，不再反复请求放大风控。
+- **首页新增自由刷剧**：接入个性化推荐流。
+- **待机屏保**：空闲后自动盖屏，内置 4 种画面风格，也可用手机传自己的图片视频做屏保，支持轮播间隔、角标时钟与立即预览。
+- **传输与备份**：手机扫码迁移收藏与观看记录。
+- **第三方片源失效自动切换**：失效时自动换到下一可用片源，播放不中断。
+- **换集、换剧画面定格过渡**：抓取当前帧盖过渡层，等新一集渲染出首帧才撤掉，不再黑屏。
+
 ## 0.32.0 新增与修复
 
 - **恢复全部剧集播放**：11-16 官方播放接口改判旧签名整族失效，所有第三方客户端同时不能播。本版接入新版请求签名（Android `v04.10.03`），取址路径与三个签名头一并切换，实测非前 3 集的第 70 集取到 1080P，自动连播正常。**旧版本客户端请尽快升级**。
@@ -442,9 +451,8 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.32.0-android8.apk（更新通道，minSdk 26）
-# Android 5-7 变体：./gradlew -PHONGGUOTV_MIN_SDK=21 :app:assembleRelease
-# 输出：outputs/hongguotv-kotlin-0.32.0-android5.apk（minSdk 21）
+# 输出：outputs/hongguotv-kotlin-0.33.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
+# 文件名沿用 -android8.apk 只为兼容既有下载链接与客户端解析，它同时支持 Android 5-7。
 ```
 
 ## 工程结构

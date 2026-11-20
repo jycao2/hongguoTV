@@ -8,16 +8,19 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import java.io.IOException
 
 class ContentRepositoryTest {
+    // 冷却状态是进程级共享的：一个用例的空响应会毒到下一个，必须逐例清空。
+    @Before fun clearPlaybackCooldown() = ContentRepository.resetPlaybackCooldown()
     private fun streamRepository(vararg variants: Triple<Int,String,String>) = repository { request ->
         if(request.url.host=="example.com") {
             val rows=JSONObject()
             variants.forEachIndexed { index,(height,codec,url) -> rows.put("video_$index",JSONObject().put("vheight",height).put("codec_type",codec).put("main_url",url)) }
             JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-        } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+        } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
     }
 
     @Test fun incompatibleByteVc2DoesNotBecomeAudioOnlyPlayback() {
@@ -46,12 +49,11 @@ class ContentRepositoryTest {
                     .put("video_1",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","qAABAGXlCAY==").put("backup_url_1","qAABAFoQKf1K=="))
                     .put("video_5",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
-        // mock 的 tab 接口缺 code:0 被 tabVideoModel 拒绝，模型实际来自第一条旧 POST 路由；
-        // 最终失败轮是重试计划的最后一项 (level=3, 主机)，诊断里带 lvl=3。
-        assertEquals("route=/novel/player/multi_video_model/v1/ lvl=3 video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty",error.diagnostic)
+        // 2026-11-20 起取址只剩 v5 一条活路（旧 POST 路由全空），诊断里的路由标记也随之变成 v5|player。
+        assertEquals("route=v5|player lvl=3 video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty",error.diagnostic)
     }
 
     @Test fun tabRouteTagRidesAlongInIncompatibleDiagnostic() {
@@ -59,7 +61,10 @@ class ContentRepositoryTest {
             if(request.url.host=="example.com") {
                 val rows=JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else if(request.url.encodedPath==tabPath)
+            } else if(request.url.encodedPath==v5Path)
+                // v5 用「错误码」这种非空失败，才允许走 video_tab 兜底（空响应会直接触发冷却）。
+                """{"code":100103,"message":"invalid param"}"""
+            else if(request.url.encodedPath==tabPath)
                 """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
             else ""
         }
@@ -76,7 +81,7 @@ class ContentRepositoryTest {
                 if(streamFetches==1) rows.put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","https://example.com/unsupported"))
                 else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         // 第一次取到降级模型，剔缓存换身份重取后拿到正常片源，而不是直接报不兼容。
         assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
@@ -94,7 +99,7 @@ class ContentRepositoryTest {
                 if(streamFetches<3) rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
                 else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
         assertEquals(3,streamFetches)
@@ -108,29 +113,53 @@ class ContentRepositoryTest {
     private fun videoInfo() =
         """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
-    // 2026-11-16 起取址第一步固定先探手机端 v5 模型接口；用例里的 mock 对它返回空/无 code，随即回退到旧路由。
-    private val v5Path="/novel/player/multi_video_model/player/v1"
+    // 2026-11-20 下午起 `multi_video_model/player/v1` 对任何身份/版本/参数都回 200+0，
+    // 取址改回同族旧端点 `video_model/v1/`（旧参数格式 video_id + video_platform:3），签名不变。
+    private val v5Path="/novel/player/video_model/v1/"
 
-    @Test fun videoTabRouteSuppliesPlaybackModel() {
+    @Test fun v5RouteSuppliesPlaybackModelWithASingleRequest() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
-            paths += request.url.encodedPath
+            if(request.url.host=="example.com") videoInfo()
+            else {
+                paths += request.url.encodedPath
+                """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+        }
+        assertEquals("1080P",repo.stream("123").quality)
+        // v5 一次就够：不再扫 video_tab，更不再扫已死的旧 POST 路由。
+        assertEquals(listOf(v5Path),paths)
+    }
+
+    @Test fun tabFallbackIsRememberedSoNextLookupSkipsDeadRoute() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
             when {
                 request.url.host=="example.com" -> videoInfo()
-                request.url.encodedPath==tabPath ->
-                    """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
+                request.url.encodedPath==v5Path -> {
+                    paths += v5Path
+                    // 主路非空失败（有错误码、没有模型）：不触发冷却，允许 video_tab 兜一次。
+                    """{"code":100001}"""
+                }
+                request.url.encodedPath==tabPath -> {
+                    paths += tabPath
+                    val id=request.url.queryParameter("video_id") ?: "123"
+                    """{"code":0,"data":{"$id":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+                }
                 else -> ""
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        assertEquals(v5Path,paths.first())
-        assertEquals(tabPath,paths.drop(1).first())
+        assertEquals(listOf(v5Path,tabPath),paths)
+        // 上一轮已经确认主路取不到模型：下一次取址直接走 video_tab，不再白打一轮主路。
+        assertEquals("1080P",repo.stream("456").quality)
+        assertEquals(listOf(v5Path,tabPath,tabPath),paths)
     }
 
-    @Test fun newRouteVideoModelCanBeStringEncodedJson() {
+    @Test fun videoModelCanBeStringEncodedJson() {
         val repo=repository { request ->
             if(request.url.host=="example.com") videoInfo()
-            else if(request.url.encodedPath=="/novel/player/video_model/v1/") """{"data":{"video_model":"{\"fallback_api\":\"https://example.com/stream\"}"}}"""
+            else if(request.url.encodedPath==v5Path) """{"code":0,"data":{"123":{"video_model":"{\"fallback_api\":\"https://example.com/stream\"}"}}}"""
             else ""
         }
         assertEquals("1080P",repo.stream("123").quality)
@@ -160,18 +189,19 @@ class ContentRepositoryTest {
         assertEquals(1,modelRequests.size)
     }
 
-    @Test fun blankRouteFallsBackToNextRoute() {
+    @Test fun blankResponseStopsAtOnceAndEntersCooldown() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths += request.url.encodedPath
-            if(request.url.host=="example.com") videoInfo()
-            else if(request.url.encodedPath=="/novel/player/multi_video_model/v1/") ""
-            else """{"data":{"video_model":{"fallback_api":"https://example.com/stream"}}}"""
+            if(request.url.host=="example.com") videoInfo() else ""
         }
-        assertEquals("1080P",repo.stream("123").quality)
-        assertEquals(tabPath,paths.first{ it!=v5Path })
-        assertTrue(paths.contains("/novel/player/multi_video_model/v1/"))
-        assertTrue(paths.contains("/novel/player/video_model/v1/"))
+        val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
+        assertTrue(first.remainingMs>0)
+        // 空响应 = 风控信号：原地重发、换匿名设备、扫旧路由全都不要再做。
+        assertEquals(listOf(v5Path),paths)
+        // 冷却期内换一集：一个请求都不发，立刻失败。
+        assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
+        assertEquals(listOf(v5Path),paths)
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(

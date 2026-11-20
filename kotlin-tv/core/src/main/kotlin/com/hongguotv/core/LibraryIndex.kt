@@ -203,7 +203,15 @@ object LibraryDisk {
             DanmakuPrefs.speed((values["danmakuSpeed"] as? Number)?.toInt() ?: DanmakuPrefs.SPEED_DEFAULT),
             DanmakuPrefs.rows((values["danmakuRows"] as? Number)?.toInt() ?: DanmakuPrefs.ROWS_DEFAULT),
             values["showClock"] as? Boolean ?: true,
-            values["sourceHidden"] as? Boolean ?: true, navHidden)
+            values["sourceHidden"] as? Boolean ?: true, navHidden,
+            values["feedAutoSwipe"] as? Boolean ?: false,
+            ScreenSaverPrefs.normalize((values["screensaverMinutes"] as? Number)?.toInt() ?: 0),
+            ScreenSaverPrefs.normalizeStyle(values["screensaverStyle"] as? String ?: "classic"),
+            values["screensaverMuted"] as? Boolean ?: false,
+            values["screensaverMedia"] as? String ?: "",
+            ScreenSaverPrefs.normalizeFit(values["screensaverFit"] as? String ?: "fit"),
+            ScreenSaverPrefs.normalizeInterval((values["screensaverInterval"] as? Number)?.toInt() ?: 10),
+            ScreenSaverPrefs.normalizeClockPos(values["screensaverClockPos"] as? String ?: "tr"))
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }
         return LibraryIndex(BackupData(series("favorites"), history, ids("watched"),

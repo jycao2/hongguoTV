@@ -197,6 +197,38 @@ class Library(context: Context) {
     var autoSeason: Boolean
         get() = state().settings.autoSeason
         set(value) { if (value != autoSeason) { state().settings = state().settings.copy(autoSeason = value); put("autoSeason", value) } }
+    /** 自由刷剧自动下滑（用户 2026-11-18）：开着=一集播完自动换下一部剧；关着=默认把当前剧连播完。 */
+    var feedAutoSwipe: Boolean
+        get() = state().settings.feedAutoSwipe
+        set(value) { if (value != feedAutoSwipe) { state().settings = state().settings.copy(feedAutoSwipe = value); put("feedAutoSwipe", value) } }
+    /** 待机屏保等待分钟数（用户 2026-11-19）：0=关闭；非播放页空闲超过设定时长后盖全屏时钟，任意按键退出。 */
+    var screensaverMinutes: Int
+        get() = state().settings.screensaverMinutes
+        set(value) { val next = ScreenSaverPrefs.normalize(value); if (next != screensaverMinutes) { state().settings = state().settings.copy(screensaverMinutes = next); put("screensaverMinutes", next) } }
+    /** 屏保风格（用户 2026-11-19）：classic/neon/stars/breath/custom，见 ScreenSaverPrefs.STYLES。 */
+    var screensaverStyle: String
+        get() = state().settings.screensaverStyle
+        set(value) { val next = ScreenSaverPrefs.normalizeStyle(value); if (next != screensaverStyle) { state().settings = state().settings.copy(screensaverStyle = next); put("screensaverStyle", next) } }
+    /** 自定义媒体屏保（视频/动图）是否静音：默认有声（用户 2026-11-19 要求带声音、可关）。 */
+    var screensaverMuted: Boolean
+        get() = state().settings.screensaverMuted
+        set(value) { if (value != screensaverMuted) { state().settings = state().settings.copy(screensaverMuted = value); put("screensaverMuted", value) } }
+    /** 指定参与轮播的屏保画面（素材文件名，逗号分隔，用户 2026-11-19）：空=轮播全部素材；文件被删时回落轮播。 */
+    var screensaverMedia: String
+        get() = state().settings.screensaverMedia
+        set(value) { if (value != screensaverMedia) { state().settings = state().settings.copy(screensaverMedia = value); put("screensaverMedia", value) } }
+    /** 自定义屏保画面填充方式：fit 适应 / fill 填充（用户 2026-11-19）。 */
+    var screensaverFit: String
+        get() = state().settings.screensaverFit
+        set(value) { val next = ScreenSaverPrefs.normalizeFit(value); if (next != screensaverFit) { state().settings = state().settings.copy(screensaverFit = next); put("screensaverFit", next) } }
+    /** 自定义屏保轮播间隔秒数：10/30/60（用户 2026-11-19）。 */
+    var screensaverInterval: Int
+        get() = state().settings.screensaverInterval
+        set(value) { val next = ScreenSaverPrefs.normalizeInterval(value); if (next != screensaverInterval) { state().settings = state().settings.copy(screensaverInterval = next); put("screensaverInterval", next) } }
+    /** 自定义屏保角标时钟位置：tr/bl/br/off（用户 2026-11-19）。 */
+    var screensaverClockPos: String
+        get() = state().settings.screensaverClockPos
+        set(value) { val next = ScreenSaverPrefs.normalizeClockPos(value); if (next != screensaverClockPos) { state().settings = state().settings.copy(screensaverClockPos = next); put("screensaverClockPos", next) } }
     var danmaku: Boolean
         get() = state().settings.danmaku
         set(value) { if (value != danmaku) { state().settings = state().settings.copy(danmaku = value); put("danmaku", value) } }
@@ -298,7 +330,15 @@ class Library(context: Context) {
             "navHidden.rank" to { "rank" in merged.settings.navHidden },
             "navHidden.nas" to { "nas" in merged.settings.navHidden },
             "navHidden.favorite" to { "favorite" in merged.settings.navHidden },
-            "navHidden.history" to { "history" in merged.settings.navHidden }))
+            "navHidden.history" to { "history" in merged.settings.navHidden },
+            "feedAutoSwipe" to { merged.settings.feedAutoSwipe },
+            "screensaverMinutes" to { merged.settings.screensaverMinutes },
+            "screensaverStyle" to { merged.settings.screensaverStyle },
+            "screensaverMuted" to { merged.settings.screensaverMuted },
+            "screensaverMedia" to { merged.settings.screensaverMedia },
+            "screensaverFit" to { merged.settings.screensaverFit },
+            "screensaverInterval" to { merged.settings.screensaverInterval },
+            "screensaverClockPos" to { merged.settings.screensaverClockPos }))
         scheduleLocalBackup()
         flush()
     }

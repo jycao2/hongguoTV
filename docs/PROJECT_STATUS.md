@@ -6,7 +6,7 @@
 
 - 客户端：`kotlin-tv/` —— **Kotlin + Android 原生 View + Media3** 的独立电视 APK，安装后联网直连内容站点。无自建服务端，无需 Node / Docker / 服务器地址。最低 Android 5.0（API 21），ARM32 / ARM64 / x86 / x86_64 通用。
 - 当前版本：`0.30.10`（versionCode = 10400 + CI 构建编号）。版本改动见 [更新日志](CHANGELOG.md)，构建与发布细则见 [kotlin-tv/README](../kotlin-tv/README.md) 与 [自动更新机制](../kotlin-tv/AUTO_UPDATES.md)。
-- 发版：手动触发 `.github/workflows/release.yml`，出双包——`-android8.apk`（minSdk 26，自动更新通道）与 `-android5.apk`（minSdk 21，Release 页手动安装）；Release 同步至 hongguoTV-updates 仓库。
+- 发版：手动触发 `.github/workflows/release.yml`，出**单个包** `-android8.apk`（minSdk 21，Android 5.0+ 通用，既进自动更新通道也供手动安装）；Release 同步至 hongguoTV-updates 仓库。
 - 配套仓库：[hongguoTV](https://github.com/jycao2/hongguoTV)（本仓库，电视端）· [hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（手机遥控入口管理）· [hongguoTV-updates](https://github.com/jycao2/hongguoTV-updates)（版本更新、下载与 issue）。
 
 ## 主要能力（截至 0.30.10）

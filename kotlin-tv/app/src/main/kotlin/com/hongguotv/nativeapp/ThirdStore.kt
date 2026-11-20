@@ -8,6 +8,9 @@ import com.hongguotv.core.BackupThirdSource
 import com.hongguotv.core.PlaybackSpeed
 import org.json.JSONArray
 import org.json.JSONObject
+import com.hongguotv.core.ThirdCms
+import com.hongguotv.core.ThirdSource
+import com.hongguotv.core.ThirdProgress
 
 /** 三方片源观看记录：按「源接口 + 影片」去重，最近观看在前。标题与封面本地留存，源或影片失效时卡片仍可显示。 */
 data class ThirdHistoryEntry(

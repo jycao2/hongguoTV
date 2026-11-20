@@ -386,6 +386,154 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
         }
         error("无法生成播放请求签名（v5 分支未命中）")
     }
+    /**
+     * 评论接口签名（移植 PhoenixReadApi 的 `SignComment`）。
+     * 评论服务不认播放那套五头/三头，也不认旧六头（[sign]，一律 `110001 未知异常`），自己一套：
+     * - `X-Gorgon`：8 字节密钥 + 26 字节报文，**只吃查询串、不含 body**；
+     * - `X-Argus`：指纹固定 `6.8.1.32`、license `3019`、不写设备号；
+     * - `X-Ladon`：哈希输入是查询串里的 aid，但报文标识固定 `3019`；
+     * - 额外头 `lc: 101` / `Comment-Source` / `Server-Channel` 决定评论来源分集还是剧评。
+     */
+    fun signComment(
+        base: String,
+        values: Map<String, String>,
+        body: ByteArray?,
+        commentSource: Int,
+        serverChannel: Int?,
+        userAgent: String = VendorConstants.APP_UA,
+    ): Request {
+        val now = clock(); val ts = now / 1000
+        val query = encode(values + ("_rticket" to now.toString()))
+        val url = "$base?$query"
+        val nonce = ByteArray(11) { (random() * 256).toInt().toByte() }
+        val aid = values["aid"] ?: "8662"
+        val headers = linkedMapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "application/json",
+            "x-xs-from-web" to "0",
+            "sdk-version" to "2",
+            "lc" to "101",
+            "Comment-Source" to commentSource.toString(),
+            "x-ss-req-ticket" to now.toString(),
+            "x-khronos" to ts.toString(),
+            "x-ss-stub" to "",
+            "x-gorgon" to commentGorgon(query, ts, nonce),
+            "x-argus" to commentArgus(query, ts, nonce),
+            "x-ladon" to commentLadon(aid, ts, nonce.copyOfRange(2, 6)),
+        )
+        if (serverChannel != null) headers["Server-Channel"] = serverChannel.toString()
+        if (body != null) headers["Content-Type"] = "application/json; charset=utf-8"
+        return Request(url, headers, body)
+    }
+
+    private fun commentGorgon(query: String, ts: Long, nonce: ByteArray): String {
+        val b = ((nonce[0].u() % 7) + 1) shl 5
+        val b2 = 0xE0 or (nonce[1].u() and 0xF)
+        val payload = ByteArray(20)
+        digest("MD5", query.toByteArray()).copyInto(payload, 0, 0, 16)
+        payload[12] = 0; payload[13] = 1; payload[14] = 7; payload[15] = 4
+        be32(ts.toInt()).copyInto(payload, 16)
+        val key = byteArrayOf(74, 0, 22, b2.toByte(), 71, 108, 0, b.toByte())
+        val box = ByteArray(256) { it.toByte() }
+        var k = 0
+        for (i in box.indices) {
+            k = (k + box[i].u() + key[i and 7].u()) and 255
+            val swap = box[i]; box[i] = box[k]; box[k] = swap
+        }
+        k = 0
+        for (i in payload.indices) {
+            val index = i + 1
+            k = (k + box[index].u()) and 255
+            val swap = box[index]; box[index] = box[k]; box[k] = swap
+            payload[i] = (payload[i].u() xor box[(box[index].u() + box[k].u()) and 255].u()).toByte()
+        }
+        for (i in payload.indices) {
+            val rotated = ((payload[i].u() shl 4) or (payload[i].u() ushr 4)) and 255
+            payload[i] = (reverseByte(rotated xor payload[(i + 1) % payload.size].u()) xor 235).toByte()
+        }
+        return (byteArrayOf(132.toByte(), 4, b.toByte(), b2.toByte(), 0, 0) + payload).hex()
+    }
+
+    private fun reverseByte(value: Int): Int {
+        var v = value and 255
+        v = ((v and 0x55) shl 1) or ((v and 0xAA) ushr 1)
+        v = ((v and 0x33) shl 2) or ((v and 0xCC) ushr 2)
+        return ((v shl 4) or (v ushr 4)) and 255
+    }
+
+    private fun commentArgus(query: String, ts: Long, nonce: ByteArray): String {
+        val out = ByteArrayOutputStream()
+        fun pv(field: Long, value: Long) { out.write(varint(field shl 3)); out.write(varint(value)) }
+        fun pb(field: Long, value: ByteArray) { out.write(varint((field shl 3) or 2)); out.write(varint(value.size.toLong())); out.write(value) }
+        fun pb(field: Long, value: String) = pb(field, value.toByteArray())
+        pv(1, 1077940818L); pv(2, 2)
+        pv(3, ByteBuffer.wrap(nonce, 6, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xffffffffL)
+        pb(4, "3019"); pb(6, "1611921764"); pb(7, "6.8.1.32"); pb(8, "v04.07.01-ml-android")
+        pv(9, 135135744); pb(10, ByteArray(8)); pv(12, ts * 2)
+        pb(13, sm3(ByteArray(16)).copyOf(6))
+        pb(14, sm3(query.toByteArray()).copyOf(6))
+        val counters = ByteArrayOutputStream().apply {
+            write(8); write(2 + (nonce[10].u() % 49) * 2)
+            for (field in longArrayOf(2, 3, 4)) { write(varint(field * 8)); write(varint(1388734)) }
+        }.toByteArray()
+        pb(15, counters)
+        pb(20, "none"); pv(21, 738)
+        val data = pad(out.toByteArray())
+        // 与播放 Argus 同一把派生密钥（CommentArgusKey 就是 PLAYER_ARGUS_KEY），只是报文字段与指纹不同
+        val rounds = LongArray(72)
+        for (i in 0..3) rounds[i] = PLAYER_ARGUS_DERIVED.i64(i * 8, true)
+        for (k in 4 until 72) {
+            var mixed = java.lang.Long.rotateRight(rounds[k - 1], 3) xor rounds[k - 3]
+            mixed = mixed xor java.lang.Long.rotateRight(mixed, 1)
+            val bit = (0x3dc94c3a046d678bL ushr ((k - 4) % 62)) and 1L
+            rounds[k] = rounds[k - 4].inv() xor mixed xor (bit xor 3L)
+        }
+        var at = 0
+        while (at < data.size) {
+            var left = data.i64(at, true); var right = data.i64(at + 8, true)
+            for (round in rounds) {
+                val nextRight = left xor (java.lang.Long.rotateLeft(right, 1) and java.lang.Long.rotateLeft(right, 8)) xor java.lang.Long.rotateLeft(right, 2) xor round
+                left = right; right = nextRight
+            }
+            le64(left).copyInto(data, at); le64(right).copyInto(data, at + 8)
+            at += 16
+        }
+        val mask = hex("d04ffdffd04ffdff")
+        for (n in data.indices) data[n] = (data[n].u() xor mask[n % 8].u()).toByte()
+        val combined = (mask + data).reversedArray()
+        val container = pad(hex("a6e783ee7001100918") + combined + hex("567b"))
+        val encrypted = Cipher.getInstance("AES/CBC/NoPadding").run {
+            init(Cipher.ENCRYPT_MODE, SecretKeySpec(digest("MD5", PLAYER_ARGUS_KEY.copyOfRange(0, 16)), "AES"), IvParameterSpec(digest("MD5", PLAYER_ARGUS_KEY.copyOfRange(16, 32))))
+            doFinal(container)
+        }
+        return (byteArrayOf(0x3c, 0xcc.toByte()) + encrypted).base64()
+    }
+
+    private fun commentLadon(aid: String, ts: Long, prefix: ByteArray): String {
+        val ascii = digest("MD5", prefix + aid.toByteArray()).hex().toByteArray(Charsets.US_ASCII)
+        var num = ascii.i64(0, true); var value = ascii.i64(8, true)
+        val queue = ArrayDeque(listOf(ascii.i64(16, true), ascii.i64(24, true)))
+        val table = LongArray(34)
+        for (i in table.indices) {
+            table[i] = num
+            val next = (java.lang.Long.rotateRight(value, 8) + num) xor i.toLong()
+            queue.addLast(next)
+            num = next xor java.lang.Long.rotateLeft(num, 3)
+            value = queue.removeFirst()
+        }
+        val data = pad("$ts-1611921764-3019".toByteArray())
+        var at = 0
+        while (at < data.size) {
+            num = data.i64(at, true); value = data.i64(at + 8, true)
+            for (k in table) {
+                value = k xor (num + java.lang.Long.rotateRight(value, 8))
+                num = value xor java.lang.Long.rotateLeft(num, 3)
+            }
+            le64(num).copyInto(data, at); le64(value).copyInto(data, at + 8)
+            at += 16
+        }
+        return (prefix + data).base64()
+    }
     private fun pad(data: ByteArray): ByteArray {
         val n = 16 - data.size % 16
         return data + ByteArray(n) { n.toByte() }

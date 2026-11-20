@@ -12,17 +12,20 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 /**
- * 手机端现行播放模型接口：`POST /novel/player/multi_video_model/player/v1`。
+ * 官方播放模型接口：现用 `/novel/player/video_model/v1/`（旧参数格式）。
  *
- * 2026-11-16 15:00 起，电视端原先使用的 `/novel/player/multi_video_model/v1/`、
- * `/video_model/v1/`、`/reading/bookapi/video_tab/...` 与官网游客链路之外的所有旧签名组合
- * 一律 HTTP 200 + 0 字节；官方改判 Android `v04.10.03`（v5）签名，并且把路径多插了一段 `player`。
- * 这条链路只带 X-Khronos / X-Helios / X-Medusa 三头、body 必须 gzip，成功后对任意集数都返回
- * `video_model`（不再有官网游客前 3 集限制）。
+ * 2026-11-16 官方曾把取址改判到 `/novel/player/multi_video_model/player/v1`（v5 签名 + `mixed_video_id_map`）；
+ * **2026-11-20 下午该端点对所有身份/版本/Cookie/参数组合一律 HTTP 200 + 0 字节**（源站主动返空），
+ * 同族旧端点 `/novel/player/video_model/v1/` 反而恢复正常，但只认旧参数（`video_id` + `video_platform:3`），
+ * 用 v5 那套 `mixed_video_id_map` 打它会回 `100001 video_id invalid`。二者签名相同，只需换路径与 body。
+ * 旧端点把模型直挂 `data.video_model`（字符串），没有 `1004` 分组这一层。
  */
 internal object MobilePlayback {
     private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
-    private const val PATH = "/novel/player/multi_video_model/player/v1"
+    /** 2026-11-20 下午起 `.../multi_video_model/player/v1` 对任何身份/版本/参数组合都回 200+0，
+     *  但同族旧端点 `/novel/player/video_model/v1/` 仍在正常下发（要旧参数格式 `video_id` + `video_platform:3`）。
+     *  二者签名完全一样，只换路径与 body。 */
+    private const val PATH = "/novel/player/video_model/v1/"
     const val UA = "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
     /** 查询串必须与 v5 签名内嵌的 7.4.3.32 / PGT-AN10 指纹一致，多一个少一个都会落到空响应。 */
     private fun query(identity: PlaybackDeviceSession.Profile) = linkedMapOf(
@@ -36,7 +39,8 @@ internal object MobilePlayback {
     )
 
     /** 返回 `video_model` 对象；调用方复用既有的 `modelOf`/`streamFromModel` 解析与解码逻辑。
-     *  任何异常都返回 null（由上层回退旧路由），只有线程被取消时原样抛出。 */
+     *  200 + 0 字节是站方的行为风控信号，原样抛 [EmptyPlaybackResponseException] 让上层触发全局冷却；
+     *  其余问题一律返回 null（由上层决定是否走一次 video_tab 兜底），线程被取消时原样抛出。 */
     fun model(
         id: String,
         identity: PlaybackDeviceSession.Profile,
@@ -45,7 +49,7 @@ internal object MobilePlayback {
         now: Long,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}"""
+        val payload = """{"video_id":"$id","content_type":1,"biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":3}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
         val request = Request.Builder().url(signed.url)
@@ -72,8 +76,10 @@ internal object MobilePlayback {
             return null
         }
         if (text.isBlank()) {
-            ContentRepository.probeLog?.invoke("v5 空体 ticket 命中但无内容")
-            return null
+            // 2026-11-20 抓包：HTTP 200 + content-length:0，网关 51~62ms 直接丢弃或后端 114~176ms 返空。
+            // 这不是「签名错了」，是服务端行为风控；上层据此进入冷却，不再补发任何请求。
+            ContentRepository.probeLog?.invoke("v5 空响应（HTTP 200 / 0 字节）")
+            throw EmptyPlaybackResponseException()
         }
         val root = runCatching { JSONObject(text) }.getOrNull() ?: run {
             ContentRepository.probeLog?.invoke("v5 非 JSON body=${text.take(120)}")
@@ -81,19 +87,37 @@ internal object MobilePlayback {
         }
         val code = root.optInt("code", root.optInt("Code", -1))
         if (code != 0) {
-            ContentRepository.probeLog?.invoke("v5 code=$code body=${text.take(160)}")
+            ContentRepository.probeLog?.invoke("v5 code=$code body=${text.take(200)}")
             return null
         }
-        val data = root.optJSONObject("data") ?: return null
+        val data = root.optJSONObject("data") ?: run {
+            ContentRepository.probeLog?.invoke("v5 无 data len=${text.length} body=${text.take(240)}")
+            return null
+        }
+        // 旧端点把模型直接挂在 `data.video_model`（可能是字符串），没有 1004 分组这一层。
+        directModel(data)?.let { return it }
         val entries = data.optJSONObject("1004") ?: data
         val row = entries.optJSONObject(id) ?: entries.keys().asSequence()
-            .mapNotNull { entries.optJSONObject(it) }.firstOrNull() ?: return null
+            .mapNotNull { entries.optJSONObject(it) }.firstOrNull() ?: run {
+            ContentRepository.probeLog?.invoke("v5 无剧集行 id=$id entries=${entries.keys().asSequence().toList().take(8)}")
+            return null
+        }
         val model = when (val value = row.opt("video_model")) {
             is JSONObject -> value
             is String -> runCatching { JSONObject(value) }.getOrNull()
             else -> null
-        } ?: return null
+        } ?: run {
+            ContentRepository.probeLog?.invoke("v5 无 video_model rowKeys=${row.keys().asSequence().toList().take(10)}")
+            return null
+        }
         return model
+    }
+
+    /** 播放请求体（gzip 前）：旧端点要 `video_id`，`video_platform` 固定 3。 */
+    private fun directModel(data: JSONObject): JSONObject? = when (val value = data.opt("video_model")) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
     }
 
     private fun gzip(source: ByteArray): ByteArray =

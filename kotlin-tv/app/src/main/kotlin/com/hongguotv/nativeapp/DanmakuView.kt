@@ -167,7 +167,11 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
         if (pxPerMs <= 0f) return
         if (blocked(comment.text)) return
         // Expand emoji codes once here: measure and draw must see the same text.
-        val text = DanmakuEmoji.display(comment.text)
+        val (text, unknownCodes) = DanmakuEmoji.expand(comment.text)
+        if (unknownCodes.isNotEmpty()) {
+            // 收集表格里还缺的 emote：滚一次 logcat 就能知道该补哪些码
+            android.util.Log.w("HongguoTV", "danmaku unknown emote: ${unknownCodes.joinToString(",")}")
+        }
         val textWidth = paint.measureText(text)
         val widthF = width.toFloat()
         for (track in 0 until tracks) {

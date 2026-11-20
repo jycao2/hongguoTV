@@ -6,15 +6,14 @@ TAG = os.environ["UPDATE_TAG"]
 VERSION_NAME = os.environ["HONGGUOTV_VERSION_NAME"]
 VERSION_CODE = int(os.environ["HONGGUOTV_VERSION_CODE"])
 APK_SRC = "kotlin-tv/app/build/outputs/apk/release/app-release.apk"
-# APK 文件名必须保持 -android8.apk：0.28.0 及更早的存量客户端只认这个后缀，
-# 改成 -android5.apk 会让所有旧客户端报「更新信息格式不正确」而无法自动更新
-# （0.30.9 起新客户端两种后缀都认）。等存量旧客户端消化完再考虑改回 android5。
+# 单包分发：APK 实际 minSdk 21（Android 5.0+），清单同样声明 21，Android 5-7 与 8+ 共用一个包。
+# 文件名继续沿用 -android8.apk：≥0.30.9 的客户端两种后缀都认，但沿用旧名可以少一个变量，
+# 也让历史上存过这个链接的人不落空（改成 -android5.apk 同样能过解析）。
 APK_NAME = f"hongguotv-kotlin-{VERSION_NAME}-android8.apk"
-# 清单 minSdk 与更新通道 APK 的实际 minSdk 必须一致（MANIFEST_MIN_SDK=26 配合默认构建）：
-# 0.28.0 起的客户端安装前校验 `candidate.minSdkVersion != update.minSdk` 即拦截，
-# 且旧客户端解析要求 minSdk in 26..100，声明 21 连清单都过不了。
-# Android 5-7 兼容包（实际 minSdk 21）只挂 Release 页供手动安装，不进更新通道。
-MANIFEST_MIN_SDK = int(os.environ.get("HONGGUOTV_MANIFEST_MIN_SDK", "26"))
+# 清单 minSdk 必须与 APK 实际值一致：0.30.10 的客户端装前校验 `candidate.minSdkVersion != update.minSdk` 即拦截。
+# 声明 21 让清单对所有设备放行（`minSdk <= 设备 sdk` 恒成立），从而一个包覆盖 Android 5.0+。
+# ≤0.28.0 的旧客户端要求声明 26 且只认 -android8.apk，已放弃（2026-11-16 决定）。
+MANIFEST_MIN_SDK = int(os.environ.get("HONGGUOTV_MANIFEST_MIN_SDK", "21"))
 OUTPUTS = "outputs"
 os.makedirs(OUTPUTS, exist_ok=True)
 apk_path = os.path.join(OUTPUTS, APK_NAME)

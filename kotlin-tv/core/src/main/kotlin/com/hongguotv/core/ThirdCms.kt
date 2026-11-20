@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-package com.hongguotv.nativeapp
+package com.hongguotv.core
 
-import com.hongguotv.core.seasonNumber
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -25,8 +26,19 @@ data class ThirdSource(
     val quickSearch: Boolean = true,
     val filterable: Boolean = true,
     val categories: List<String> = emptyList(),
-    val timeoutSeconds: Int = 0
-)
+    val timeoutSeconds: Int = 0,
+    /** 源类型：[KIND_CMS] 标准 CMS/JSON 接口（api = 接口地址）；
+     *  [KIND_SPIDER] TVBox QuickJS 蜘蛛脚本（api = 脚本地址，由 app 端 QuickJS 引擎执行）。
+     *  默认 cms 保证老配置（没有该字段）解析行为不变。 */
+    val kind: String = KIND_CMS,
+) {
+    val isSpider: Boolean get() = kind == KIND_SPIDER
+
+    companion object {
+        const val KIND_CMS = "cms"
+        const val KIND_SPIDER = "spider"
+    }
+}
 data class ThirdCategory(val id: String, val name: String)
 data class ThirdVideo(val id: String, val name: String, val cover: String, val remarks: String)
 data class ThirdEpisode(val label: String, val url: String)
@@ -313,66 +325,35 @@ object ThirdCms {
         val page: Int, val pageCount: Int, val total: Int
     )
 
-    /** CMS v1 XML 全量解析：分类、条目（含播放地址）、分页属性一次读出；坏 XML 抛异常由调用方兜底。 */
+    /** CMS v1 XML 全量解析：分类、条目（含播放地址）、分页属性一次读出；坏 XML 抛异常由调用方兜底。
+     *  用 jsoup 的 XML 解析器（core 是纯 JVM 模块，没有 Android 的 XmlPullParser）。 */
     private fun parseXmlRss(body: String): XmlRss {
-        val parser = org.xmlpull.v1.XmlPullParserFactory.newInstance().newPullParser()
-        // XML 声明前不允许空白/BOM（kxml 会把 <?xml 当处理指令拒掉），源响应常带，先剥掉
-        parser.setInput(java.io.StringReader(body.trimStart().removePrefix("\uFEFF")))
+        val doc = Jsoup.parse(body.trimStart().removePrefix("\uFEFF"), "", Parser.xmlParser())
         val categories = mutableListOf<ThirdCategory>()
-        val videos = mutableListOf<XmlVideo>()
-        var page = 1; var pageCount = 0; var total = -1
-        var video: XmlVideo? = null
-        var textTag: String? = null; var categoryId: String? = null; var flag: String? = null
-        val text = StringBuilder()
-        var sawList = false
-        while(parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
-            when(parser.eventType) {
-                org.xmlpull.v1.XmlPullParser.START_TAG -> when(parser.name.lowercase()) {
-                    "list" -> { sawList = true
-                        page = parser.attrInt("page", 1); pageCount = parser.attrInt("pagecount", 0)
-                        total = parser.attrInt("recordcount", -1) }
-                    "video" -> video = XmlVideo()
-                    "ty" -> { categoryId = parser.attrOrNull("id"); textTag = "ty"; text.setLength(0) }
-                    "dd", "dt" -> { flag = parser.attrOrNull("flag"); textTag = "dd"; text.setLength(0) }
-                    "id" -> if(video != null) { textTag = "id"; text.setLength(0) }
-                    "name" -> if(video != null) { textTag = "name"; text.setLength(0) }
-                    "pic" -> if(video != null) { textTag = "pic"; text.setLength(0) }
-                    "note" -> if(video != null) { textTag = "note"; text.setLength(0) }
-                    "type" -> if(video != null) { textTag = "type"; text.setLength(0) }
-                    "year" -> if(video != null) { textTag = "year"; text.setLength(0) }
-                    "area" -> if(video != null) { textTag = "area"; text.setLength(0) }
-                    "des" -> if(video != null) { textTag = "des"; text.setLength(0) }
-                }
-                org.xmlpull.v1.XmlPullParser.TEXT -> if(textTag != null) text.append(parser.text)
-                org.xmlpull.v1.XmlPullParser.END_TAG -> when(parser.name.lowercase()) {
-                    "ty" -> { val name = text.toString().trim(); val id = categoryId.orEmpty().trim()
-                        if(id.isNotEmpty() && name.isNotEmpty()) categories += ThirdCategory(id, name)
-                        textTag = null; categoryId = null }
-                    "dd", "dt" -> { video?.playEntries += flag?.trim()?.ifEmpty { null } to text.toString().trim()
-                        textTag = null; flag = null }
-                    "video" -> { video?.let { videos += it }; video = null }
-                    "id" -> { video?.id = text.toString().trim(); textTag = null }
-                    "name" -> { video?.name = text.toString().trim(); textTag = null }
-                    "pic" -> { video?.pic = text.toString().trim(); textTag = null }
-                    "note" -> { video?.note = text.toString().trim(); textTag = null }
-                    "type" -> { video?.typeName = text.toString().trim(); textTag = null }
-                    "year" -> { video?.year = text.toString().trim(); textTag = null }
-                    "area" -> { video?.area = text.toString().trim(); textTag = null }
-                    "des" -> { video?.synopsis = text.toString(); textTag = null }
-                }
-            }
-            parser.next()
+        doc.getElementsByTag("ty").forEach { el ->
+            val id = el.attr("id").trim()
+            val name = el.text().trim()
+            if(id.isNotEmpty() && name.isNotEmpty()) categories += ThirdCategory(id, name)
         }
-        if(total < 0) total = videos.size
+        val videos = mutableListOf<XmlVideo>()
+        doc.getElementsByTag("video").forEach { el ->
+            fun field(tag: String) = el.getElementsByTag(tag).firstOrNull()?.text()?.trim().orEmpty()
+            val video = XmlVideo().apply {
+                id = field("id"); name = field("name"); pic = field("pic"); note = field("note")
+                typeName = field("type"); year = field("year"); area = field("area")
+                synopsis = el.getElementsByTag("des").firstOrNull()?.text().orEmpty()
+            }
+            el.select("dd, dt").forEach { node ->
+                video.playEntries += node.attr("flag").trim().ifEmpty { null } to node.text().trim()
+            }
+            videos += video
+        }
+        val list = doc.getElementsByTag("list").firstOrNull()
+        val page = list?.attr("page")?.trim()?.toIntOrNull() ?: 1
+        val pageCount = list?.attr("pagecount")?.trim()?.toIntOrNull() ?: 0
+        val total = (list?.attr("recordcount")?.trim()?.toIntOrNull() ?: -1).let { if(it < 0) videos.size else it }
         return XmlRss(categories, videos, page, pageCount, total)
     }
-
-    private fun org.xmlpull.v1.XmlPullParser.attrOrNull(name: String): String? {
-        for(index in 0 until attributeCount) if(getAttributeName(index).equals(name, ignoreCase = true)) return getAttributeValue(index)
-        return null
-    }
-    private fun org.xmlpull.v1.XmlPullParser.attrInt(name: String, fallback: Int): Int =
-        attrOrNull(name)?.trim()?.toIntOrNull() ?: fallback
 
     /** XML 分类（class > ty）。 */
     fun parseXmlCategories(body: String): List<ThirdCategory> = parseXmlRss(body).categories

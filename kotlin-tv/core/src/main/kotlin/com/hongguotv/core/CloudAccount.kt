@@ -17,6 +17,8 @@ data class AccountCredentials(
     val deviceId: String = "",
     val installId: String = "",
     val device: Map<String, String> = emptyMap(),
+    /** 设备注册（DeviceRegister）下发的设备 Cookie（install_id/ttreq/store-region 等），写接口要与签名身份配套携带。 */
+    val deviceCookie: Map<String, String> = emptyMap(),
 ) {
     fun toJson() =
         JSONObject()
@@ -24,6 +26,7 @@ data class AccountCredentials(
             .put("deviceId", deviceId)
             .put("installId", installId)
             .put("device", JSONObject(device))
+            .put("deviceCookie", JSONObject(deviceCookie))
             .toString()
 
     override fun toString() = "AccountCredentials([redacted])"
@@ -32,11 +35,13 @@ data class AccountCredentials(
         fun fromJson(value: String): AccountCredentials {
             val json = JSONObject(value)
             val device = json.optJSONObject("device") ?: JSONObject()
+            val deviceCookie = json.optJSONObject("deviceCookie") ?: JSONObject()
             return AccountCredentials(
                 json.getString("cookie"),
                 json.str("deviceId"),
                 json.str("installId"),
                 device.keys().asSequence().associateWith { device.getString(it) },
+                deviceCookie.keys().asSequence().associateWith { deviceCookie.getString(it) },
             )
         }
     }
@@ -46,7 +51,7 @@ internal object AccountCredentialsParser {
     fun parseHeader(value: String) = AccountCredentials(value)
 }
 
-data class CloudProfile(val id: String, val nickname: String)
+data class CloudProfile(val id: String, val nickname: String, val avatarUrl: String = "")
 
 data class CloudProgress(
     val series: Series,
@@ -88,6 +93,23 @@ data class CloudReservation(
 )
 
 class CloudAccountClient(private val http: OkHttpClient) {
+    /**
+     * 101144 = HIT_SHARK_RULE 风控限流（上游 HGTV 实测：偶发，同一条请求重发两三次里总有一次过，
+     * 官方包自己也带 pending 重试队列）。写接口统一套这个退避重试：1.2s / 4s / 12s，共 4 次尝试。
+     */
+    private fun <T> retryOnShark(block: () -> T): T {
+        val backoffs = longArrayOf(1_200L, 4_000L, 12_000L)
+        repeat(backoffs.size + 1) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                if (attempt == backoffs.size || !e.message.orEmpty().contains("101144")) throw e
+                Thread.sleep(backoffs[attempt])
+            }
+        }
+        throw IllegalStateException("unreachable")
+    }
+
     fun registerDevice(): DeviceRegister.Registered? {
         val body = DeviceRegister.payload(VendorConstants.device)
         val request = Request.Builder().url(DeviceRegister.url())
@@ -133,6 +155,12 @@ class CloudAccountClient(private val http: OkHttpClient) {
                 .sign("https://api5-normal-sinfonlinea.fqnovel.com$path", device + params, wireBody)
         val request = Request.Builder().url(signed.url).header("Cookie", credentials.cookie)
         signed.headers.forEach { (k, v) -> request.header(k, v) }
+        // 设备 Cookie 与登录 Cookie 拼一起带：写接口（追剧/进度）要落到一台「注册过的设备」上，
+        // 登录时绑定的内置共享 device_id 已被平台风控标记（101144），换注册身份才放行（2026-11-17 实测）
+        if (credentials.deviceCookie.isNotEmpty()) {
+            val extra = credentials.deviceCookie.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+            request.header("Cookie", listOf(credentials.cookie, extra).joinToString("; "))
+        }
         if (wireBody != null)
             request.post(wireBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
         if (gzip) request.header("Content-Encoding", "gzip")
@@ -154,7 +182,9 @@ class CloudAccountClient(private val http: OkHttpClient) {
                 ?: throw IOException("账号资料为空")
         val id = data.str("biz_user_id")
         if (id.isBlank()) throw IOException("登录态未通过账号验证，请重新登录")
-        return CloudProfile(id, data.str("user_name").ifBlank { "红果用户" })
+        // 不同版本的资料接口字段名不一样，逐个兜底（用户 2026-11-17：头像用登录账号的）
+        val avatar = data.str("avatar_url").ifBlank { data.str("avatar") }.ifBlank { data.str("head_url") }
+        return CloudProfile(id, data.str("user_name").ifBlank { "红果用户" }, avatar)
     }
 
     fun history(credentials: AccountCredentials): List<CloudProgress> {
@@ -228,11 +258,13 @@ class CloudAccountClient(private val http: OkHttpClient) {
                     .put("is_active_behavior", "true")
                     .put("inactive_type", "0"),
             )
-        json(
-            credentials,
-            "/reading/bookapi/bookshelf/video/update/v1/",
-            body = body.toString().toByteArray(),
-        )
+        retryOnShark {
+            json(
+                credentials,
+                "/reading/bookapi/bookshelf/video/update/v1/",
+                body = body.toString().toByteArray(),
+            )
+        }
     }
 
     /**
@@ -312,7 +344,9 @@ class CloudAccountClient(private val http: OkHttpClient) {
                 .put("write_mode", 1)
                 .toString()
                 .toByteArray()
-        json(credentials, "/reading/bookapi/read_progress/upload/v1/", body = body)
+        retryOnShark {
+            json(credentials, "/reading/bookapi/read_progress/upload/v1/", body = body)
+        }
     }
 
     companion object {

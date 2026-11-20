@@ -290,7 +290,9 @@ object TvDialog {
      *  当前项 selectedSurface 底（调用方在文案里带「· 当前」）；不设取消按钮，按返回键关闭。
      *  选项必须是可点击的按钮行而不是 ListView：遥控的确认键是对焦点 View 调 performClick()，
      *  ListView 的 performClick 不会触发 OnItemClickListener，方向键也挪不动列表项。
-     *  focusIndex 兼作当前项标注与开窗焦点；没有「当前值」概念的弹窗（如搜索历史）不传即可。 */
+     *  focusIndex 兼作当前项标注与开窗焦点；没有「当前值」概念的弹窗（如搜索历史）不传即可。
+     *  selectedIndex 单独标注当前项而不抢开窗焦点——适合「当前项在列表末尾、但开窗要停在第 1 项」的长列表
+     *  （如屏保素材：当前那一张常在第 5 行以后，焦点跟着它跑会把顶部的「＋ 传新素材」挤出可视区）。*/
     fun choose(
         activity: Activity,
         title: String,
@@ -299,7 +301,8 @@ object TvDialog {
         extra: String? = null,
         onExtra: () -> Unit = {},
         focusIndex: Int = -1,
-        anchorView: View? = null
+        anchorView: View? = null,
+        selectedIndex: Int = -1
     ): AlertDialog {
         val dialog = AlertDialog.Builder(activity).create()
         // 标题钉在卡片顶部，不进滚动区：特大/极大档选项行变高放不下时只滚选项，标题始终可见
@@ -317,6 +320,8 @@ object TvDialog {
             labels.maxOfOrNull { tp.measureText(it) } ?: 0f,
             titleTp.measureText(title)
         ).toInt() + dp(activity, 16) * 2
+        // 当前项标注：优先用 selectedIndex（只标底色、不改开窗焦点），没传就沿用 focusIndex
+        val marked = if (selectedIndex >= 0) selectedIndex else focusIndex
         val items = labels.mapIndexed { index, label ->
             TextView(activity).apply {
                 text = label; textSize = 15f; setTextColor(TvStyle.text); includeFontPadding = false
@@ -328,7 +333,7 @@ object TvDialog {
                 // 与清晰度选择器同一套状态：焦点 raised+accent 边框，当前项 selectedSurface，平时 surface 无边框
                 fun paint(focused: Boolean) {
                     background = TvStyle.shape(activity,
-                        when { focused -> TvStyle.raised; index == focusIndex -> TvStyle.selectedSurface; else -> TvStyle.surface },
+                        when { focused -> TvStyle.raised; index == marked -> TvStyle.selectedSurface; else -> TvStyle.surface },
                         if(focused) TvStyle.accent else android.graphics.Color.TRANSPARENT)
                 }
                 paint(false)
@@ -403,7 +408,17 @@ object TvDialog {
     }
 
     /** 确认弹窗：标题 + 正文 + 取消/确认双按钮。 */
-    fun confirm(activity: Activity, title: String, message: String, action: () -> Unit): AlertDialog {
+    /** 二次确认框。
+     *  [confirmText] 让调用方把动作写清楚（「清空全部」「删除」），不要一片「确认」；
+     *  [danger] 给不可逆操作：确认按钮红底白字、默认焦点仍停在「取消」，防手滑。 */
+    fun confirm(
+        activity: Activity,
+        title: String,
+        message: String,
+        confirmText: String = "确认",
+        danger: Boolean = false,
+        action: () -> Unit
+    ): AlertDialog {
         val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         content.addView(title(activity, title))
         content.addView(body(activity, message))
@@ -413,7 +428,21 @@ object TvDialog {
             setPadding(0, dp(activity, 14), 0, 0)
         }
         val cancel = capsuleButton(activity, "取消") {}
-        val ok = capsuleButton(activity, "确认") { action() }.apply { tag = TAG_CONFIRM }
+        val ok = capsuleButton(activity, confirmText) { action() }.apply { tag = TAG_CONFIRM }
+        if(danger) {
+            val red = Color.rgb(232, 86, 86)
+            val radius = dp(activity, 24).toFloat()
+            ok.setTextColor(Color.WHITE)
+            fun paint(focused: Boolean) {
+                ok.background = GradientDrawable().apply {
+                    setColor(if(focused) Color.rgb(245, 110, 110) else red)
+                    cornerRadius = radius
+                    setStroke(dp(activity, if(focused) 2 else 1), if(focused) Color.WHITE else red)
+                }
+            }
+            paint(false)
+            ok.setOnFocusChangeListener { _, f -> paint(f) }
+        }
         buttons.addView(cancel, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(activity, 12) })
         buttons.addView(ok, LinearLayout.LayoutParams(-2, -2))
         content.addView(buttons)
@@ -562,9 +591,27 @@ object TvDialog {
     private fun track(dialog: Dialog) {
         if(live.any { it === dialog }) return
         live.add(dialog)
-        dialog.window?.decorView?.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        val decor = dialog.window?.decorView
+        // 鼠标右键 = 关掉这个弹窗：Android 不把次级键映射成 BACK，接了鼠标的用户否则在弹窗里
+        // 完全没有「返回」手段（遥控器按返回键能关，鼠标点不到任何地方关）。
+        // 挂在 decor 上而不是每个按钮上：子 view 先消费了左键点击，只有点空白处、或者右键
+        // （子 view 不处理次级键）才会落到这里。
+        decor?.setOnTouchListener { _, ev ->
+            if(ev.actionMasked == android.view.MotionEvent.ACTION_DOWN &&
+                (ev.buttonState and android.view.MotionEvent.BUTTON_SECONDARY) != 0) { dialog.dismiss(); true }
+            else false
+        }
+        decor?.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) = Unit
             override fun onViewDetachedFromWindow(view: View) { live.remove(dialog) }
         })
+    }
+
+    /** 关掉所有还活着的弹窗。
+     *  屏保预览前必须先清场：弹窗是独立窗口，层级天然高于 Activity 根视图上的屏保层，
+     *  不关的话用户看到的就是「屏保启动了，弹窗还浮在上面挡着」（2026-11-19 实测踩到）。 */
+    fun dismissAll() {
+        live.toList().forEach { runCatching { if(it.isShowing) it.dismiss() } }
+        live.clear()
     }
 }
