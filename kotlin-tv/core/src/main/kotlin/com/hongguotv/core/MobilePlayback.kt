@@ -12,27 +12,24 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 /**
- * 官方播放模型接口：现用 `/novel/player/video_model/v1/`（旧参数格式）。
+ * 官方播放模型接口：对齐官方 7.4.5.32 客户端形态 `/novel/player/multi_video_model/v1`。
  *
- * 2026-11-16 官方曾把取址改判到 `/novel/player/multi_video_model/player/v1`（v5 签名 + `mixed_video_id_map`）；
- * **2026-11-20 下午该端点对所有身份/版本/Cookie/参数组合一律 HTTP 200 + 0 字节**（源站主动返空），
- * 同族旧端点 `/novel/player/video_model/v1/` 反而恢复正常，但只认旧参数（`video_id` + `video_platform:3`），
- * 用 v5 那套 `mixed_video_id_map` 打它会回 `100001 video_id invalid`。二者签名相同，只需换路径与 body。
- * 旧端点把模型直挂 `data.video_model`（字符串），没有 `1004` 分组这一层。
+ * 2026-11-20 全天官方滚动收紧：`player/v1`（dr_scene 形态）与旧端点 `video_model/v1/` 先后返 200+0。
+ * 上游 tsukiyo-zero/hongguoTV@573d75a 反编译 7.4.5.32 确认：新版回到 `$POST /novel/player/multi_video_model/v1`
+ * （不带 dr_scene），`version_code=74532` + `mixed_video_id_map` + v5 签名可拿到模型（其 14:09 实测通过）。
+ * 旧参数 `data.video_model` 直挂格式仍由 [directModel] 兼容，`1004` 分组格式走通用解析。
  */
 internal object MobilePlayback {
     private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
-    /** 2026-11-20 下午起 `.../multi_video_model/player/v1` 对任何身份/版本/参数组合都回 200+0，
-     *  但同族旧端点 `/novel/player/video_model/v1/` 仍在正常下发（要旧参数格式 `video_id` + `video_platform:3`）。
-     *  二者签名完全一样，只换路径与 body。 */
-    private const val PATH = "/novel/player/video_model/v1/"
+    /** 7.4.5.32 起官方客户端回到 v1 路径；`:dr_scene` 变体（player/default）对匿名请求返回空体。 */
+    private const val PATH = "/novel/player/multi_video_model/v1"
     const val UA = "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
-    /** 查询串必须与 v5 签名内嵌的 7.4.3.32 / PGT-AN10 指纹一致，多一个少一个都会落到空响应。 */
+    /** 查询串必须与 v5 签名内嵌的 7.4.5.32 / PGT-AN10 指纹一致，多一个少一个都会落到空响应。 */
     private fun query(identity: PlaybackDeviceSession.Profile) = linkedMapOf(
         "aid" to "8662", "app_name" to "novelread",
-        "version_code" to "74332", "version_name" to "7.4.3.32",
+        "version_code" to "74532", "version_name" to "7.4.5.32",
         "channel" to "vivo_8662_64", "device_platform" to "android",
-        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
+        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74532",
         "iid" to identity.values.getValue("iid"),
         "cdid" to identity.values.getValue("cdid"),
         "device_id" to identity.values.getValue("device_id"),
@@ -49,14 +46,16 @@ internal object MobilePlayback {
         now: Long,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
-        val payload = """{"video_id":"$id","content_type":1,"biz_param":{"need_all_video_definition":true,"need_mp4_align":false,"video_platform":3}}"""
+        // 7.4.5.32 形态：完整 biz_param + mixed_video_id_map，v1 路径不带 dr_scene。
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
         val request = Request.Builder().url(signed.url)
             .header("User-Agent", UA)
             .header("Accept", "application/json")
             .header("Content-Encoding", "gzip")
-            .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
+            // 2026-11-20 官方只认真签名：v5 占位三头换成 PlayerSigner 的 argus/ladon（按最终 query 重生成）。
+            .apply { ContentRepository.realSignedHeaders(signed.url, signed.headers, body).forEach { (key, value) -> header(key, value) } }
             .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         val text = try {
@@ -113,7 +112,7 @@ internal object MobilePlayback {
         return model
     }
 
-    /** 播放请求体（gzip 前）：旧端点要 `video_id`，`video_platform` 固定 3。 */
+    /** 旧端点 `video_model/v1/` 的响应把模型直挂 `data.video_model`；v1 新形态没有这一层，走 1004 分组。 */
     private fun directModel(data: JSONObject): JSONObject? = when (val value = data.opt("video_model")) {
         is JSONObject -> value
         is String -> runCatching { JSONObject(value) }.getOrNull()

@@ -292,6 +292,8 @@ class MainActivity: Activity() {
     private val recovery=RecoveryBudget()
     private var retryPending=false
     private var autoRecovery=false
+    /** 官方取址限流剩余毫秒（>0 表示上次失败是 PlaybackThrottledException）：等待期专用重试路径，不烧普通重试预算。 */
+    private var throttledRemainingMs=0L
     /** 本次播放连续跳过的不兼容集数：成功后归零，最多自动跳 5 集。 */
     private var incompatibleSkips=0
     /** 排着队的「不兼容自动跳下一集」定时任务：用户抢先点了上一集/选集时必须撤掉。 */
@@ -323,6 +325,13 @@ class MainActivity: Activity() {
         retryPending=false
         if(foreground && screen=="player" && playError && autoRecovery) {
             if(!networkAvailable()) scheduleRecovery()
+            // 限流等待：等的是官方冷却到期（core 冷却期内一个请求都不发），不消耗普通重试预算；
+            // 否则 1s/2.5s/5s 三次预算几秒烧光，300 秒冷却期只能停在手动面板等人。
+            else if(throttledRemainingMs>0) {
+                throttledRemainingMs=0
+                android.util.Log.i("HongguoTV","Playback recovery after throttle cooldown at ${retryPosition}ms")
+                playEpisode(episodeIndex,retryPosition,retryAutoplay,recovering=true)
+            }
             else if(recovery.consume()) {
                 android.util.Log.i("HongguoTV","Automatic playback recovery ${recovery.attempts}/3 at ${retryPosition}ms")
                 playEpisode(episodeIndex,retryPosition,retryAutoplay,recovering=true)
@@ -4505,6 +4514,13 @@ class MainActivity: Activity() {
     private fun cancelRecovery() { main.removeCallbacks(retryRunnable); retryPending=false; autoRecovery=false }
     private fun scheduleRecovery() {
         if(!foreground || !playError || !autoRecovery || retryPending) return
+        // 限流等待不走普通重试预算：预算耗尽也不弹手动面板，按冷却剩余时间等到点再试。
+        if(throttledRemainingMs>0 && !recovery.remaining) {
+            val delay=throttledRemainingMs+2000L
+            playbackText.text="官方接口限流中，${(delay/1000f).toInt().coerceAtLeast(1)} 秒后自动重试 · ${formatTime(retryPosition)}"
+            retryPending=true; main.postDelayed(retryRunnable,delay)
+            return
+        }
         // 预算耗尽：自动重试彻底走不通，把手动面板摆出来让用户决定。
         if(!recovery.remaining) {
             autoRecovery=false
@@ -4517,8 +4533,11 @@ class MainActivity: Activity() {
             playbackText.text="网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}"
             return
         }
-        val delay=recovery.delayMillis ?: return
-        playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
+        // 限流：等官方冷却到期再试一次（+2 秒缓冲防时钟毛刺），等待期不烧普通重试预算。
+        val delay=if(throttledRemainingMs>0) throttledRemainingMs+2000L else recovery.delayMillis ?: return
+        playbackText.text=if(throttledRemainingMs>0) {
+            "官方接口限流中，${(delay/1000f).toInt().coerceAtLeast(1)} 秒后自动重试 · ${formatTime(retryPosition)}"
+        } else "${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
     }
     /** 播放取流用的档位：本会话降过档就用降档值，否则用用户设置值。 */
@@ -4551,6 +4570,8 @@ class MainActivity: Activity() {
         }
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
+        // 官方限流（空响应冷却）：记住剩余等待时间，重试改走专用等待路径（见 scheduleRecovery/retryRunnable）。
+        throttledRemainingMs=(problem as? PlaybackThrottledException)?.remainingMs ?: 0L
         val incompatible=problem is UnplayableVideoException
         // 自由刷剧里「片源不兼容」会 2.5 秒后自动跳下一部。这段时间过渡层不要撤：
         // 撤了就是黑底错误页一闪一闪（真机实测就是这样），改成留画面 + 换文案。
@@ -4572,7 +4593,8 @@ class MainActivity: Activity() {
             else -> "播放失败，可重试或切换清晰度。"
         }
         // 解码失败同档重试没有意义，同档重试预算又已用尽时也不该再空转：两种情况都自动退一档。
-        val lower=if(incompatible || sleepStopped) null else autoDowngradeTarget(decoding,retryable)
+        // 限流不是片源问题，换清晰度再打一次取址照样被拒，不能进降档。
+        val lower=if(incompatible || sleepStopped || throttledRemainingMs>0) null else autoDowngradeTarget(decoding,retryable)
         when {
             lower!=null -> {
                 // 自动降档：600ms 后直接换清晰度重放，期间用转圈提示，不打扰用户。
@@ -4584,7 +4606,7 @@ class MainActivity: Activity() {
             retryable && !sleepStopped -> {
                 // 可重试：静默自动重试，界面只显示转圈 + 倒计时，不弹按钮。
                 // 用户按确认键可随时取消并切到手动面板（见 dispatchKeyEvent）。
-                playbackText.text="准备恢复播放…"
+                playbackText.text=if(throttledRemainingMs>0) "官方接口限流中…" else "准备恢复播放…"
                 recoverySpinner?.visibility=View.VISIBLE
                 autoRecovery=true; scheduleRecovery()
             }

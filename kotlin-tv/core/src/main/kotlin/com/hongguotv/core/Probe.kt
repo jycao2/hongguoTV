@@ -48,6 +48,16 @@ fun main(args: Array<String>) {
         return
     }
     val repository=ContentRepository()
+    // --plan <id>：系列剧（plan/v1 show_type=547）实测——多季剧应返回整季列表。
+    if(args.contains("--plan")) {
+        val funArgValue:(String)->String? = { name -> val i=args.indexOf(name); if(i>=0) args.getOrNull(i+1) else null }
+        val id=funArgValue("--plan") ?: "7706512650816982040"
+        val list=repository.planSeries(id)
+        println("== plan/v1 系列剧 book_id=$id 共 ${list.size} 条")
+        list.forEachIndexed { i,s -> println("   $i ${s.id}  ${s.title}  ${s.badge}  ${s.cover.take(60)}") }
+        if(list.isEmpty()) println("   （空：接口没给 547 行或被风控/签名拒绝，可加 --verbose 看原始响应）")
+        return
+    }
     if(args.contains("--ranking")) {
         try {
             val first=repository.comicRanking()
@@ -150,6 +160,34 @@ private fun mainDiagnose(args: Array<String>) {
             val started=System.currentTimeMillis()
             println("LEGACY $label ${diagnoseV5(id,profile,http,signer,host,pathOverride=pathOverride,customBody=body)} ms=${System.currentTimeMillis()-started}")
             Thread.sleep(400)
+        }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
+    // --upstream：上游 tsukiyo-zero/hongguoTV@573d75a 的组合（v1 路径 + 无 dr_scene + mixed_video_id_map + 74532）。
+    if(args.contains("--upstream")) {
+        // --fresh：每次全新注册身份（区分「这个 device_id 已被拉黑」和「形态本身不对」）。
+        val fresh=args.contains("--fresh")
+        val rounds=if(fresh) (args.getOrNull(args.indexOf("--fresh")+1)?.toIntOrNull() ?: 2) else 1
+        val body="""{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
+        for(round in 1..rounds) {
+            val proxyArg=args.withIndex().firstOrNull { (i,v) -> v=="--proxy" }?.let { args.getOrNull(it.index+1) }
+            val base=ContentRepository()
+            val repo=if(proxyArg==null) base else {
+                val pHost=proxyArg.substringBefore(":"); val pPort=proxyArg.substringAfter(":").toInt()
+                ContentRepository(base.http.newBuilder()
+                    .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP,java.net.InetSocketAddress(pHost,pPort)))
+                    .build())
+            }
+            val session=if(fresh) PlaybackDeviceSession() else session
+            val transport=repo.http
+            val profile=session.profile(transport)
+            val started=System.currentTimeMillis()
+            val withCookie=!fresh // 全新身份不带 Cookie 的结论已有：这里重点补「注册身份 + Cookie」的对照
+            println("UPSTREAM r$round dev=${profile.values["device_id"]} cookie=$withCookie ${diagnoseV5(id,profile,transport,signer,host,pathOverride="/novel/player/multi_video_model/v1",versionCode="74532",versionName="7.4.5.32",updateVersionCode="74532",customBody=body,withCookie=withCookie)} ms=${System.currentTimeMillis()-started}")
+            if(repo!=base) { repo.http.connectionPool.evictAll(); repo.http.dispatcher.executorService.shutdown() }
+            base.http.connectionPool.evictAll(); base.http.dispatcher.executorService.shutdown()
+            Thread.sleep(600)
         }
         repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
         return
@@ -268,6 +306,7 @@ private fun diagnoseV5(
     withCookie: Boolean = false,
     versionCode: String = "74332",
     versionName: String = "7.4.3.32",
+    updateVersionCode: String = "74332",
     customBody: String? = null,
 ): String {
     val base=if(host=="b") "https://api5-normal-sinfonlineb.fqnovel.com" else "https://api5-normal-sinfonlinea.fqnovel.com"
@@ -280,7 +319,7 @@ private fun diagnoseV5(
         "aid" to "8662", "app_name" to "novelread",
         "version_code" to versionCode, "version_name" to versionName,
         "channel" to "vivo_8662_64", "device_platform" to "android",
-        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
+        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to updateVersionCode,
         "iid" to identity.values.getValue("iid"),
         "cdid" to identity.values.getValue("cdid"),
         "device_id" to identity.values.getValue("device_id"),
@@ -292,6 +331,8 @@ private fun diagnoseV5(
         .header("User-Agent",MobilePlayback.UA)
         .header("Accept","application/json")
         .header("Content-Encoding","gzip")
+        // 上游 0.1.33（N3urda 移植）：请求必须带 x-ss-stub = 大写 MD5(gzip body)，字节系反作弊头。
+        .header("x-ss-stub",java.security.MessageDigest.getInstance("MD5").digest(body).joinToString("") { "%02X".format(it) })
         .apply { if(extraCookie.isNotBlank()) header("Cookie",extraCookie) }
         .apply { signed.headers.forEach { (key,value) -> header(key,value) } }
         .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))

@@ -52,8 +52,9 @@ class ContentRepositoryTest {
             } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
-        // 2026-11-20 起取址只剩 v5 一条活路（旧 POST 路由全空），诊断里的路由标记也随之变成 v5|player。
-        assertEquals("route=v5|player lvl=3 video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty",error.diagnostic)
+        // 2026-11-20 起取址首选 video_tab（真签名），fallback_api 模型的诊断路由标记来自 video_tab。
+        assertTrue(error.diagnostic.startsWith("route=video_tab|"))
+        assertTrue(error.diagnostic.contains("video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty"))
     }
 
     @Test fun tabRouteTagRidesAlongInIncompatibleDiagnostic() {
@@ -113,11 +114,10 @@ class ContentRepositoryTest {
     private fun videoInfo() =
         """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
-    // 2026-11-20 下午起 `multi_video_model/player/v1` 对任何身份/版本/参数都回 200+0，
-    // 取址改回同族旧端点 `video_model/v1/`（旧参数格式 video_id + video_platform:3），签名不变。
-    private val v5Path="/novel/player/video_model/v1/"
+    // 2026-11-20 对齐官方 7.4.5.32（上游 573d75a）：v1 路径（无尾斜杠、无 dr_scene）+ mixed_video_id_map。
+    private val v5Path="/novel/player/multi_video_model/v1"
 
-    @Test fun v5RouteSuppliesPlaybackModelWithASingleRequest() {
+    @Test fun tabRouteSuppliesPlaybackModelWithASingleRequest() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             if(request.url.host=="example.com") videoInfo()
@@ -127,40 +127,36 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // v5 一次就够：不再扫 video_tab，更不再扫已死的旧 POST 路由。
-        assertEquals(listOf(v5Path),paths)
+        // 2026-11-20 起首选 video_tab（真签名）：一次就够，POST v1 不再先打。
+        assertEquals(listOf(tabPath),paths)
     }
 
-    @Test fun tabFallbackIsRememberedSoNextLookupSkipsDeadRoute() {
+    @Test fun tabFailureFallsBackToPostRoute() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             when {
                 request.url.host=="example.com" -> videoInfo()
-                request.url.encodedPath==v5Path -> {
-                    paths += v5Path
-                    // 主路非空失败（有错误码、没有模型）：不触发冷却，允许 video_tab 兜一次。
-                    """{"code":100001}"""
-                }
                 request.url.encodedPath==tabPath -> {
                     paths += tabPath
-                    val id=request.url.queryParameter("video_id") ?: "123"
-                    """{"code":0,"data":{"$id":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+                    // tab 非空失败（有错误码、没有模型）：不触发冷却，允许 POST v1 兜底。
+                    """{"code":100001}"""
+                }
+                request.url.encodedPath==v5Path -> {
+                    paths += v5Path
+                    """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
                 }
                 else -> ""
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        assertEquals(listOf(v5Path,tabPath),paths)
-        // 上一轮已经确认主路取不到模型：下一次取址直接走 video_tab，不再白打一轮主路。
-        assertEquals("1080P",repo.stream("456").quality)
-        assertEquals(listOf(v5Path,tabPath,tabPath),paths)
+        // tab 双主机预算用尽（100001 非空失败 continue）才落到 POST v1 兜底。
+        assertEquals(listOf(tabPath,tabPath,v5Path),paths)
     }
 
     @Test fun videoModelCanBeStringEncodedJson() {
         val repo=repository { request ->
             if(request.url.host=="example.com") videoInfo()
-            else if(request.url.encodedPath==v5Path) """{"code":0,"data":{"123":{"video_model":"{\"fallback_api\":\"https://example.com/stream\"}"}}}"""
-            else ""
+            else """{"code":0,"data":{"123":{"video_model":"{\"fallback_api\":\"https://example.com/stream\"}"}}}"""
         }
         assertEquals("1080P",repo.stream("123").quality)
     }
@@ -198,10 +194,11 @@ class ContentRepositoryTest {
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
         // 空响应 = 风控信号：原地重发、换匿名设备、扫旧路由全都不要再做。
-        assertEquals(listOf(v5Path),paths)
+        // 2026-11-20 起首选 video_tab：第一个（也应是唯一一个）空请求来自它。
+        assertEquals(listOf(tabPath),paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
-        assertEquals(listOf(v5Path),paths)
+        assertEquals(listOf(tabPath),paths)
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(

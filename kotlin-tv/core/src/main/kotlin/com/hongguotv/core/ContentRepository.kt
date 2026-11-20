@@ -343,6 +343,49 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         return found
     }
+    /**
+     * 系列剧（同 IP 多季合集）：`bookapi/plan/v1` 里 `show_type=547` 的行。
+     * 协议参照上游 PhoenixReadApi（C#）GetDramaSeasonsAsync 的 plan feed 路径：
+     * 按当前剧 id 直接换整季列表，不需要 album_id，也不依赖播放域签名。
+     * 与搜索/联想同一套注册身份放行规则；失败返回空列表（调用方自己兜底）。
+     */
+    fun planSeries(id: String): List<Series> {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        val key="plan|$id"
+        synchronized(seasonFills) { seasonFills[key]?.takeIf { clock()-it.at<600_000 }?.let { return it.items } }
+        val found=runCatching {
+            VendorConstants.regenerate()
+            val values=searchValues()
+            values.putAll(linkedMapOf(
+                "book_id" to id,
+                "from" to "single_col_same_ip_series",
+                "scene" to "10",
+                "session_uuid" to java.util.UUID.randomUUID().toString().replace("-",""),
+                "filter_ids" to id,
+                "user_is_login" to "0",
+            ))
+            val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/plan/v1/",values)
+            val data=JSONObject(text(signed.url,signed))
+            if(data.optInt("code",-1)!=0) return@runCatching emptyList()
+            val rows=(data.optJSONArray("data") ?: data.optJSONObject("data")?.optJSONArray("data"))?.objects().orEmpty()
+            val cell=rows.firstOrNull { it.optInt("show_type")==547 } ?: return@runCatching emptyList()
+            val items=(cell.optJSONArray("video_data") ?: cell.optJSONArray("cell_data"))?.objects().orEmpty()
+            items.mapNotNull { row ->
+                val video=row.optJSONObject("video_data") ?: row
+                val sid=video.str("series_id").ifEmpty { video.str("series_id_str").ifEmpty { row.str("book_id") } }
+                if(!sid.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
+                val count=video.optInt("episode_cnt")
+                Series(sid,seriesTitle(video.str("series_title").ifEmpty { video.str("title").ifEmpty { row.str("cell_name") } }),
+                    cleanUrl(video.str("cover").ifEmpty { video.str("series_cover") }),"",
+                    if(count>0) "全 $count 集" else "")
+            }.distinctBy { it.id }.sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }
+        }.getOrElse { emptyList() }
+        synchronized(seasonFills) {
+            seasonFills[key]=SeasonFill(clock(),found)
+            while(seasonFills.size>60) seasonFills.remove(seasonFills.keys.first())
+        }
+        return found
+    }
     /** App 搜索/联想接口和播放接口一样按注册设备放行：未注册的随机身份只会拿到 HTTP 200 空体。 */
     private fun searchValues(): MutableMap<String,String> {
         val values=VendorConstants.device.toMutableMap()
@@ -632,46 +675,56 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         return models
     }
     private fun batchPayload(ids: List<String>): ByteArray {
+        // 对齐官方 7.4.5.32 客户端形态（上游 573d75a 反编译）：完整 biz_param + mixed_video_id_map，
+        // v1 路径不带 dr_scene（`:dr_scene` 变体才用，对匿名请求返 200+0）。
         val biz=JSONObject()
+            .put("detail_page_version",0)
+            .put("device_level",1)
+            .put("disable_digg_stat",false)
+            .put("disable_video_relate_book",false)
             .put("need_all_video_definition",true)
             .put("need_mp4_align",false)
+            .put("use_os_player",false)
+            .put("use_server_dns",false)
             .put("video_platform",1024)
         return JSONObject()
             .put("biz_param",biz)
             .put("mixed_video_id_map",JSONObject().put("1004",JSONArray(ids)))
-            // `dr_scene` 不能省：少它时批量端点回 200+0，加上才按 player 场景下发（2026-11-20 实测）。
-            .put("dr_scene","player")
             .toString()
             .toByteArray()
     }
-    /** 2026-11-05 起播放接口改用新五头签名；查询串客户端版本对齐签名内嵌的 7.3.5.32。 */
+    /** 2026-11-20 对齐上游 0.1.33：GET/POST 播放 profile 都用 7.3.9.32 / 73932，真签名按最终 query 重生成。 */
     private fun playbackValues(identity: PlaybackDeviceSession.Profile) = identity.values + mapOf(
-        "version_code" to "73532",
-        "manifest_version_code" to "73532",
-        "update_version_code" to "73532",
-        "pv_player" to "73532",
-        "version_name" to "7.3.5.32",
+        "version_code" to "73932",
+        "manifest_version_code" to "73932",
+        "update_version_code" to "73932",
+        "pv_player" to "73932",
+        "version_name" to "7.3.9.32",
     )
     private fun signedBuilder(signed: Signer.Request, identity: PlaybackDeviceSession.Profile): Request.Builder =
         Request.Builder().url(signed.url).apply {
             signed.headers.forEach { (key,value) -> header(key,value) }
             if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie)
         }
-    /** 批量取址：必须走 v5 三头签名 + gzip body（旧五头签名对这条路由已直接返空）。
-     *  查询串版本号要和签名内嵌指纹一致，统一用 7.4.3.32 / 74332。 */
+    private fun signedRealBuilder(signed: Signer.Request, body: ByteArray?, identity: PlaybackDeviceSession.Profile): Request.Builder =
+        Request.Builder().url(signed.url).apply {
+            realSignedHeaders(signed.url,signed.headers,body).forEach { (key,value) -> header(key,value) }
+            if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie)
+        }
+    /** 批量取址：v1 路径 + gzip body；签名用真 argus/ladon（v5 占位头已被官方静默丢弃）。 */
     private fun playerRequest(path: String,payload: ByteArray,identity: PlaybackDeviceSession.Profile): Request {
         val body=gzipBytes(payload)
         val values=linkedMapOf(
             "aid" to "8662","app_name" to "novelread",
-            "version_code" to "74332","version_name" to "7.4.3.32",
+            "version_code" to "74532","version_name" to "7.4.5.32",
             "channel" to "vivo_8662_64","device_platform" to "android",
-            "device_type" to "PGT-AN10","os_version" to "12","update_version_code" to "74332",
+            "device_type" to "PGT-AN10","os_version" to "12","update_version_code" to "74532",
             "iid" to identity.values.getValue("iid"),
             "cdid" to identity.values.getValue("cdid"),
             "device_id" to identity.values.getValue("device_id"),
         )
         val signed=signer.signPlaybackV5("https://api5-normal-sinfonlinea.fqnovel.com$path",values,body)
-        return signedBuilder(signed,identity)
+        return signedRealBuilder(signed,body,identity)
             .header("User-Agent",MobilePlayback.UA)
             .header("Accept","application/json")
             .header("Content-Encoding","gzip")
@@ -697,8 +750,12 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // preferAlt：重试诊断用，优先探测备用主机（两个主机可能落在不同后端集群）。
         val ordered=if(preferAlt) hosts.reversed() else hosts
         for(base in ordered) {
-            val signed=signer.signPlayback(base,playbackValues(identity)+extra,null,PLAYBACK_UA)
-            val request=signedBuilder(signed,identity).get().build()
+            // GET video_tab 是上游 0.1.33 的首选取址：v5 占位头换成 PlayerSigner 真 argus/ladon。
+            val signed=signer.signPlaybackV5(base,playbackValues(identity)+extra,null)
+            val request=signedRealBuilder(signed,null,identity)
+                .header("User-Agent",PLAYBACK_UA)
+                .header("Accept","application/json")
+                .get().build()
             val body=try {
                 RequestScope.execute(http.newCall(request)) { response ->
                     if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
@@ -756,21 +813,18 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     }
     private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
         val identity=playbackSession.profile(http)
-        // 上次是 video_tab 救回来的：先试它，命中就少发一轮主路请求。
-        if(preferredRouteIsTab()) {
-            val tab=try {
-                tabVideoModel(id,identity,level,preferAlt)
-            } catch(blank: EmptyPlaybackResponseException) {
-                throw tripPlaybackCooldown()
-            }
-            if(tab!=null) {
-                clearPlaybackCooldown()
-                rememberRoute(tab)
-                probeLog?.invoke("tab 记忆命中 id=$id route=${tab.optString(ROUTE_KEY)}")
-                return tab
-            }
-            // 兜底路由这次没给模型（非空失败）：记忆作废，回到主路重试。
-            goodRoute=null
+        // 2026-11-20 对齐上游 0.1.33：GET video_tab（真签名）是首选，POST v1 只是兜底——
+        // 官方对 v5 占位头的 POST 一律静默丢弃，先打它只会白白触发冷却。
+        val tab=try {
+            tabVideoModel(id,identity,level,preferAlt)
+        } catch(blank: EmptyPlaybackResponseException) {
+            throw tripPlaybackCooldown()
+        }
+        if(tab!=null) {
+            clearPlaybackCooldown()
+            rememberRoute(tab)
+            probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
+            return tab
         }
         val model=try {
             MobilePlayback.model(id,identity,http,signer,clock())
@@ -784,18 +838,6 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             probeLog?.invoke("v5 命中 id=$id")
             return routed
         }
-        // v5 非空失败（HTTP/解析/错误码）：允许 video_tab 兜一次，仍失败就直接报错，不换身份重扫。
-        val tab=try {
-            tabVideoModel(id,identity,level,preferAlt)
-        } catch(blank: EmptyPlaybackResponseException) {
-            throw tripPlaybackCooldown()
-        }
-        if(tab!=null) {
-            clearPlaybackCooldown()
-            rememberRoute(tab)
-            probeLog?.invoke("v5 未给模型，tab 兜底成功 id=$id route=${tab.optString(ROUTE_KEY)}")
-            return tab
-        }
         throw IOException("播放接口暂不可用")
     }
     /** 新路由的播放模型在 `data.video_model`，旧路由在 `data[<vid>].video_model`；两种都可能被序列化成字符串。 */
@@ -805,6 +847,17 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         else -> null
     }
     companion object {
+        /** 2026-11-20 官方只认真签名：v5 占位三头（x-helios/x-medusa 等）与真头同现必被静默丢弃（200+0）。
+         *  对齐上游 0.1.33（PlayerSigner = fqapp argus/ladon 移植）：只保留 UA/Cookie 一类普通头，
+         *  x-* 签名头按最终 query 用 PlayerSigner 重新生成；x-khronos 必须与 URL 的 _rticket 同源。 */
+        internal fun realSignedHeaders(url: String,headers: Map<String,String>,body: ByteArray?): Map<String,String> {
+            val placeholder=setOf("x-gorgon","x-helios","x-medusa","x-argus","x-ladon","x-khronos","x-ss-stub","x-ss-req-ticket","x-medias","x-tt-dt")
+            val kept=headers.filterKeys { it.lowercase() !in placeholder }
+            val query=url.substringAfter('?',"")
+            val ticket=query.split('&').firstOrNull { it.startsWith("_rticket=") }?.substringAfter('=')?.toLongOrNull()
+            val real=if(ticket!=null) PlayerSigner.headers(query,body,ts=ticket/1000,ticket=ticket) else PlayerSigner.headers(query,body)
+            return kept+real
+        }
         /** 断供排查用的一次性探针：为 null 时不产生任何开销，也不影响生产日志。
          *  设置后逐跳打印播放取址的响应摘要（哪条路由空、哪条给了错误码）。 */
         internal var probeLog: ((String) -> Unit)? = null
@@ -855,7 +908,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         private const val LEVEL_KEY="__level"
         // 2026-11-20 下午实测：`multi_video_model/v1/` 用精简 biz_param + video_platform:1024 仍正常下发，
         // 而 `.../player/v1` 及兄弟路径一律 200+0。批量只打这一条，避免空体把主路带进冷却。
-        private val BATCH_ROUTES=listOf("/novel/player/multi_video_model/v1/")
+        // 2026-11-20 对齐官方 7.4.5.32：v1 路径（无尾斜杠、无 dr_scene）+ mixed_video_id_map + 74532 版本参数。
+        private val BATCH_ROUTES=listOf("/novel/player/multi_video_model/v1")
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")

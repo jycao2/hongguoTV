@@ -11,6 +11,11 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.33.1 修复
+
+- **再次恢复播放**：官方接口改为只认真签名（占位签名头会被静默丢弃导致 200 空响应），本版改用与官方客户端一致的真签名（Argus/Ladon），并把取址路由优先级调整为更稳定的通道优先。
+- **播放失败自动恢复**：遇到限流或网络异常时显示倒计时并自动重试，不再卡在「已重试 3 次」的手动面板。
+
 ## 0.33.0 新增与修复
 
 - **恢复全部剧集播放**：11-20 官方接口变更导致所有剧集无法播放，本版切换到现行取址链路并升级 v5 请求签名，播放恢复；被限流时自动冷却并提示恢复倒计时，不再反复请求放大风控。
@@ -451,7 +456,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.33.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
+# 输出：outputs/hongguotv-kotlin-0.33.1-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
 # 文件名沿用 -android8.apk 只为兼容既有下载链接与客户端解析，它同时支持 Android 5-7。
 ```
 
