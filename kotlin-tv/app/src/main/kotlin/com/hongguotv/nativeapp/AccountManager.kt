@@ -150,6 +150,31 @@ class AccountManager(private val context: Context, private val library: Library)
                 }
                 changed()
                 if (credentials != null) validateAndRefresh()
+                if (credentials != null) rebindDeviceIfNeeded()
+            }
+        }
+    }
+
+    /**
+     * 老账号一次性补绑：deviceBound=false 的存量登录，其设备是裸注册的匿名设备
+     * （登录 Cookie 与设备身份脱钩，个性化接口按匿名处理）。带登录 Cookie 重注册
+     * 一次让设备挂到账号下；失败静默，下次启动再试。
+     */
+    private fun rebindDeviceIfNeeded() {
+        val cred = credentials ?: return
+        if (cred.deviceBound || cred.cookie.isBlank()) return
+        worker.execute {
+            val device = runCatching { client.registerDevice(cred.cookie) }.getOrNull() ?: return@execute
+            if (closed) return@execute
+            main.post {
+                val cur = credentials ?: return@post
+                if (cur.cookie != cred.cookie) return@post // 期间已重新登录/登出
+                if (cur.deviceBound) return@post // 期间已通过登录路径绑过
+                val next = cur.copy(deviceId = device.deviceId, installId = device.installId,
+                    deviceCookie = device.cookies, deviceBound = true)
+                credentials = next
+                runCatching { store.save(next) }
+                changed()
             }
         }
     }
@@ -626,7 +651,12 @@ class AccountManager(private val context: Context, private val library: Library)
         phoneField(activity, "输入验证码", "验证码已发送至 $masked", error, numeric = true) { code ->
             task(
                 {
-                    val next = login.verify(code)
+                    val verified = login.verify(code)
+                    // 与扫码登录同口径：在登录会话下注册设备并与账号绑定
+                    val device = client.registerDevice(verified.cookie)
+                        ?: throw java.io.IOException("账号设备初始化失败")
+                    val next = verified.copy(deviceId = device.deviceId, installId = device.installId,
+                        deviceCookie = device.cookies, deviceBound = true)
                     val account = client.profile(next)
                     store.save(next)
                     next to account
@@ -698,8 +728,11 @@ class AccountManager(private val context: Context, private val library: Library)
     }
 
     private fun validateAccount(web: AccountCredentials): Pair<AccountCredentials, CloudProfile> {
-        val device = client.registerDevice() ?: throw java.io.IOException("账号设备初始化失败")
-        val next = web.copy(deviceId = device.deviceId, installId = device.installId)
+        // 设备必须在登录会话下注册（带 Cookie 打 DeviceRegister）：设备才与账号绑定，
+        // plan/v1 相关推荐等个性化接口才认这个身份（裸注册设备 + Cookie 会被当匿名，2026-11-21 实测）。
+        val device = client.registerDevice(web.cookie) ?: throw java.io.IOException("账号设备初始化失败")
+        val next = web.copy(deviceId = device.deviceId, installId = device.installId,
+            deviceCookie = device.cookies, deviceBound = true)
         val account = client.profile(next)
         return next to account
     }

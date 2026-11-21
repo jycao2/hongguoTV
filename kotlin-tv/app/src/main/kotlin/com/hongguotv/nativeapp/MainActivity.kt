@@ -735,14 +735,9 @@ class MainActivity: Activity() {
         RemoteAccess.init(this)
         XiaoAiAccess.init(this)
         accountManager=AccountManager(this,library)
-        // 登录态供给相关推荐：plan/v1 相关视频（show_type=160）只有登录身份才下发，
-        // 匿名只能拿到 401 通用「更多好剧」。会话 Cookie + 设备 Cookie 合并，与云端写接口同口径。
-        repository.loginCookieProvider={
-            accountManager.account?.let { acc ->
-                listOf(acc.cookie,acc.deviceCookie.entries.joinToString("; "){(k,v)->"$k=$v"})
-                    .filter { it.isNotBlank() }.joinToString("; ")
-            }
-        }
+        // 登录态供给相关推荐：plan/v1 相关视频（show_type=160）只有登录身份才下发。
+        // 必须给完整凭证（Cookie + 账号设备身份），只给 Cookie 会因 did/iid 不配套被服务端当匿名。
+        repository.loginCookieProvider={ accountManager.account }
         accountManager.onAccountChanged={
             accountButton?.text=accountManager.accountLabel
             // 账号事件只在云端数据实际变化时才重建列表页：读取过程的每条状态文本

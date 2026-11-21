@@ -19,6 +19,8 @@ data class AccountCredentials(
     val device: Map<String, String> = emptyMap(),
     /** 设备注册（DeviceRegister）下发的设备 Cookie（install_id/ttreq/store-region 等），写接口要与签名身份配套携带。 */
     val deviceCookie: Map<String, String> = emptyMap(),
+    /** 设备是否在登录会话下注册（与账号绑定）。旧账号为 false，启动时后台重绑一次。 */
+    val deviceBound: Boolean = false,
 ) {
     fun toJson() =
         JSONObject()
@@ -27,6 +29,7 @@ data class AccountCredentials(
             .put("installId", installId)
             .put("device", JSONObject(device))
             .put("deviceCookie", JSONObject(deviceCookie))
+            .put("deviceBound", deviceBound)
             .toString()
 
     override fun toString() = "AccountCredentials([redacted])"
@@ -42,6 +45,7 @@ data class AccountCredentials(
                 json.str("installId"),
                 device.keys().asSequence().associateWith { device.getString(it) },
                 deviceCookie.keys().asSequence().associateWith { deviceCookie.getString(it) },
+                json.optBoolean("deviceBound", false),
             )
         }
     }
@@ -110,12 +114,18 @@ class CloudAccountClient(private val http: OkHttpClient) {
         throw IllegalStateException("unreachable")
     }
 
-    fun registerDevice(): DeviceRegister.Registered? {
+    /**
+     * 注册一台设备（DeviceRegister）。带 [loginCookie] 时在登录会话下注册——设备与账号绑定，
+     * 这是服务端把该设备认作登录身份的前提（2026-11-21：裸注册设备 + 登录 Cookie 打 plan/v1
+     * 相关推荐，服务端仍按匿名只回 401「更多好剧」，实测 did/iid 配套也不行）。
+     */
+    fun registerDevice(loginCookie: String? = null): DeviceRegister.Registered? {
         val body = DeviceRegister.payload(VendorConstants.device)
         val request = Request.Builder().url(DeviceRegister.url())
         DeviceRegister.headers(body, VendorConstants.device).forEach { (k, v) ->
             request.header(k, v)
         }
+        loginCookie?.takeIf { it.isNotBlank() }?.let { request.header("Cookie", it) }
         request.post(body.toRequestBody("application/octet-stream".toMediaType()))
         return http.newCall(request.build()).execute().use {
             DeviceRegister.parse(cloudResponse(it), it.headers("Set-Cookie"))
