@@ -51,12 +51,18 @@ data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages:
 data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null)
 /** One website genre selector entry; the slug selects the category path, ids echo back for validation. */
 data class Genre(val slug: String, val name: String, val ids: List<String>)
-data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
+/** [codec] 非空表示这是 ExoPlayer 无法解码、需要 NDK 解码器原生播放的编码（目前仅 bytevc2）。 */
+data class StreamInfo(val url: String, val key: ByteArray?, val quality: String, val codec: String = "", val qNum: Int = 0)
+/** 一集的完整清晰度阶梯：普通档从高到低在前，bytevc2 垫底档在最后。
+ *  服务端一次下发全部档位（实测固定 5 条 video_1..video_5，key_seed/spade_a 集级共用），
+ *  客户端把 5 条直链一次解密缓存到 url_expire（约 1h）——切清晰度/自动降档纯内存换直链，零请求。 */
+data class StreamLadder(val id: String, val tiers: List<StreamInfo>, val expireAt: Long)
 /** 一次窗口取址的结果：[requested] 请求集数、[cached] 取址后可播放的集数、[batch] 本次批量新增、[route] 命中的路由。 */
 data class WarmReport(val requested: Int, val cached: Int, val batch: Int, val route: String?)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
-/** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。 */
-class UnplayableVideoException(message: String, val diagnostic: String = ""): IOException(message)
+/** 平台对该集只产出了 ByteVC2 等电视无法解码的编码，重试与换清晰度都不会成功。
+ *  [bvc2Stream] 是已解析好的最低档 bytevc2 直链 + key，供上层切到 NDK 原生解码播放页。 */
+class UnplayableVideoException(message: String, val diagnostic: String = "", val bvc2Stream: StreamInfo? = null): IOException(message)
 /** 播放信息接口返回了 HTTP 200 空体；已按有界退避重读仍未成功。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 /** 官方取址接口处于行为风控冷却期：此刻任何取址都会被直接拒绝，继续请求只会拉长封禁。 */
@@ -577,28 +583,96 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             throw failure
         }
     }
+    /** 一次性取流：不做多轮重试/退避；整集只剩 bytevc2 时直接返回最低档直链，不抛 Unplayable。
+     *  用途：已确认是 vc2 片源的集在切清晰度/重播时走这条快路径——
+     *  完整 stream() 会反复打模型接口 + 退避数秒，且中途可能混入会 403 的普通直链，
+     *  造成「降级重试」闪屏后回落 360p（2026-11-21 真机实测）。 */
+    fun streamFast(id: String, maxQuality: Int = 1080): StreamInfo = streamFromLadder(id,maxQuality)
+
+    private val ladderCache=HashMap<String,StreamLadder>()
+
+    /** 取一集完整清晰度阶梯（见 [StreamLadder]）。
+     *  普通档从高到低在前，bytevc2 档按从低到高垫底（最低档 = 最后兜底）；
+     *  某一档解密失败/直链为空就跳过该档；全部档位都拿不到时抛 [UnplayableVideoException]。
+     *  结果缓存到 url_expire，期间切清晰度/重播/自动降档全部零请求。 */
+    @Synchronized fun ladder(id: String): List<StreamInfo> {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        val now=System.currentTimeMillis()/1000
+        ladderCache[id]?.takeIf { it.expireAt>now && it.tiers.isNotEmpty() }?.let { return it.tiers }
+        guardPlaybackCooldown()
+        val model=videoModel(id)
+        val raw=model.opt("fallback_api")
+        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
+        if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
+        val data=JSONObject(text(fallback)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
+        val videoList=data.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
+        val normal=ArrayList<Triple<Int,String,JSONObject>>()
+        val vc2=ArrayList<Triple<Int,String,JSONObject>>()
+        for(entry in videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }) {
+            val num=qualityNumber(entry.second.str("quality_desc").ifEmpty { entry.second.str("height").ifEmpty { entry.second.str("vheight").ifEmpty { entry.second.str("quality").ifEmpty { entry.first } } } })
+            (if(entry.second.str("codec_type").lowercase() in setOf("bytevc2","bvc2")) vc2 else normal)+=Triple(num,entry.first,entry.second)
+        }
+        normal.sortByDescending { it.first }; vc2.sortBy { it.first }
+        val tiers=ArrayList<StreamInfo>(normal.size+vc2.size)
+        normal.forEach { runCatching { tiers+=makeStream(it,data,1080) } }
+        vc2.forEach { runCatching { tiers+=makeStream(it,data,1080).copy(codec="bytevc2") } }
+        if(tiers.isEmpty()) throw UnplayableVideoException("本集片源暂不兼容，请播放下一集",
+            "route=ladder id=$id video_list="+compactVideoList(videoList),null)
+        val expire=data.optLong("url_expire").takeIf { it>now } ?: (now+3600)
+        ladderCache[id]=StreamLadder(id,tiers.toList(),expire)
+        return ladderCache.getValue(id).tiers
+    }
+
+    /** 只读已缓存的阶梯（绝不触发网络）；播放失败自动降档用它，失败路径不能再打接口。 */
+    @Synchronized fun cachedLadder(id: String): List<StreamInfo>? =
+        ladderCache[id]?.takeIf { it.expireAt>System.currentTimeMillis()/1000 }?.tiers?.takeIf { it.isNotEmpty() }
+
+    /** 从阶梯挑一条（不 prepare）：普通档里 ≤cap 的最高档；全无普通档则 bytevc2 最低档。 */
+    fun streamFromLadder(id: String, maxQuality: Int = 1080): StreamInfo {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        val tiers=ladder(id)
+        val normal=tiers.filter { it.codec!="bytevc2" }
+        return normal.lastOrNull { it.qNum in 1..maxQuality }
+            ?: normal.lastOrNull { it.qNum>0 }
+            ?: normal.lastOrNull()
+            ?: tiers.lastOrNull { it.codec=="bytevc2" }
+            ?: tiers.first()
+    }
+
     private fun streamFromModel(model: JSONObject, maxQuality: Int): StreamInfo {
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
         val info=JSONObject(text(fallback)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         val videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
+        val all=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }
+            .map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
         // ByteVC2 resources can expose playable audio but no video track in Android's MP4 extractor.
         // Keep missing legacy codec labels usable, but never select a known incompatible variant.
-        val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
-            it.second.str("main_url").isNotEmpty() && it.second.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
-        }.map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
-        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw UnplayableVideoException(
+        val rows=all.filter {
+            it.third.str("main_url").isNotEmpty() && it.third.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
+        }
+        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull()
+        if(selected!=null) return makeStream(selected,info,maxQuality)
+        // 整集只剩 bytevc2：把最低档（软解代价最小）的直链 + key 交给上层，
+        // 由 Bvc2PlayerActivity 用 NDK 解码器原生播放；解码器不可用时上层仍回退原提示。
+        val vc2=all.lastOrNull { it.third.str("codec_type").lowercase() in setOf("bytevc2","bvc2") && it.third.str("main_url").isNotEmpty() }
+        val bvc2Stream=vc2?.let { runCatching { makeStream(it,info,maxQuality).copy(codec="bytevc2") }.getOrNull() }
+        throw UnplayableVideoException(
             "本集片源暂不兼容，请播放下一集",
             // 诊断：不整段截断（截断会漏掉后面的清晰度条目），逐条给紧凑摘要，
             // 并带上该模型来源路由，定位降级模型由哪条接口下发。
-            "route="+model.optString(ROUTE_KEY).ifEmpty { "unknown" }+" lvl="+model.optString(LEVEL_KEY).ifEmpty { "?" }+" video_list="+compactVideoList(videoList))
-        val item=selected.third; var url=cleanUrl(item.str("main_url")); val seed=info.str("key_seed")
+            "route="+model.optString(ROUTE_KEY).ifEmpty { "unknown" }+" lvl="+model.optString(LEVEL_KEY).ifEmpty { "?" }+" video_list="+compactVideoList(videoList),
+            bvc2Stream)
+    }
+    /** 从一条 video_list 记录解析出可下载的直链与 CENC key（兼容档与 bytevc2 共用）。 */
+    private fun makeStream(row: Triple<Int,String,JSONObject>, info: JSONObject, maxQuality: Int): StreamInfo {
+        val item=row.third; var url=cleanUrl(item.str("main_url")); val seed=info.str("key_seed")
         if(seed.isNotEmpty()) url=MediaCrypto.decryptUrl(url,decode64(seed))
         if(!url.startsWith("https://") && !url.startsWith("http://")) throw IOException("播放地址无效")
         val key=item.str("spade_a").takeIf { it.isNotEmpty() }?.let(MediaCrypto::deriveKey)
-        val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
-        return StreamInfo(url,key,quality)
+        val quality=if(row.first>0) "${row.first}P"+(if(row.first>maxQuality) "（兼容资源）" else "") else "自动"
+        return StreamInfo(url,key,quality,qNum=row.first)
     }
     /** 诊断用：每条清晰度给 `key:codec:高度:main_url形态/backup形态` 的紧凑摘要，条目间用分号，不再整段截断。 */
     private fun compactVideoList(videoList: JSONObject): String = videoList.keys().asSequence().mapNotNull { k ->
@@ -624,7 +698,20 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(cooldownRemainingMs()>0) return WarmReport(ids.size,cached,0,null)
         val missing=ids.filter { modelCache.get(it,now)==null }.take(BATCH_LIMIT)
         if(missing.isEmpty()) return WarmReport(ids.size,cached,0,null)
+        // 批量连续空响应退避（2026-11-21）：空批量本身就是风控收紧信号（实测单集取址正常时批量也在空），
+        // 继续每窗空撞等于给风控窗口续命。连续 3 轮零填充就静默跳过批量 10 分钟，成功一次即复位。
+        if(now<batchBackoffUntil.get()) return WarmReport(ids.size,cached,0,null)
         val batch=runCatching { batchModels(missing) }.getOrElse { Batch(0,null) }
+        if(batch.filled>0) {
+            batchEmptyStreak.set(0)
+        } else {
+            val streak=batchEmptyStreak.incrementAndGet()
+            if(streak>=BATCH_EMPTY_LIMIT) {
+                batchBackoffUntil.set(now+BATCH_BACKOFF_MS)
+                batchEmptyStreak.set(0)
+                probeLog?.invoke("批量预热连续 $streak 轮空响应，退避 ${BATCH_BACKOFF_MS/60000} 分钟")
+            }
+        }
         return WarmReport(ids.size,cached+batch.filled,batch.filled,batch.route)
     }
     private data class Batch(val filled: Int, val route: String?)
@@ -674,7 +761,11 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         return models
     }
-    private fun batchPayload(ids: List<String>): ByteArray {
+    private fun batchPayload(ids: List<String>): ByteArray = batchPayload(ids,"1004")
+    /** [mapKey] 可注入：官方 APK 逆向（skydeadpeng 契约文档 2026-11-11）证实 key 是内容类型短整数
+     *  （1=短剧/7=ShortPlay/1003=Album/1004=漫剧），我们批量一直发 "1004" 而普通短剧应为 "1"——
+     *  11-07 批量能成功可能是服务端当时容错，风控收紧后大概率按 key 校验。 */
+    private fun batchPayload(ids: List<String>, mapKey: String): ByteArray {
         // 对齐官方 7.4.5.32 客户端形态（上游 573d75a 反编译）：完整 biz_param + mixed_video_id_map，
         // v1 路径不带 dr_scene（`:dr_scene` 变体才用，对匿名请求返 200+0）。
         val biz=JSONObject()
@@ -689,9 +780,47 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             .put("video_platform",1024)
         return JSONObject()
             .put("biz_param",biz)
-            .put("mixed_video_id_map",JSONObject().put("1004",JSONArray(ids)))
+            .put("mixed_video_id_map",JSONObject().put(mapKey,JSONArray(ids)))
             .toString()
             .toByteArray()
+    }
+    /** 批量路由矩阵探针的单次结果。 */
+    data class BatchProbeResult(val httpCode: Int, val bodyLen: Int, val code: Int, val message: String, val filled: Int) {
+        override fun toString()="http=$httpCode bodyLen=$bodyLen code=$code msg=${message.take(60)} filled=$filled"
+    }
+    /** 批量路由矩阵探针（2026-11-21 全网调研+官方 APK 逆向产物，仅供 CLI --batch-probe，生产链路不调用）。
+     *  发一次 POST /novel/player/multi_video_model/v1：[mapKey] 注入内容类型、[signed]=false 时按
+     *  10-28 配方（注册身份 + 无签名，query 只带设备字段与 _rticket）。单发、不重试、空体原样报告；
+     *  冷却期内拒绝执行（防探针把风控窗口续命），--force 由调用方用 [force] 越过。 */
+    internal fun batchProbe(ids: List<String>, mapKey: String, signed: Boolean, force: Boolean=false): BatchProbeResult {
+        val remainingMs=cooldownRemainingMs()
+        if(remainingMs>0 && !force) throw PlaybackThrottledException(remainingMs)
+        val identity=playbackSession.profile(http)
+        val body=gzipBytes(batchPayload(ids,mapKey))
+        val path="/novel/player/multi_video_model/v1"
+        val request=if(signed) playerRequest(path,body,identity) else run {
+            val query=(identity.values+mapOf("_rticket" to System.currentTimeMillis().toString()))
+                .entries.joinToString("&") { (k,v)-> java.net.URLEncoder.encode(k,"UTF-8")+"="+java.net.URLEncoder.encode(v,"UTF-8") }
+            Request.Builder().url("https://api5-normal-sinfonlinea.fqnovel.com$path?$query").apply {
+                if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie)
+                header("User-Agent",MobilePlayback.UA)
+                header("Accept","application/json")
+                header("Content-Encoding","gzip")
+                post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            }.build()
+        }
+        val text=RequestScope.execute(http.newCall(request)) { response ->
+            val code=response.code; val content=response.body?.string().orEmpty(); code to content
+        }
+        val (httpCode,content)=text
+        if(content.isBlank()) return BatchProbeResult(httpCode,0,-1,"空响应",-1)
+        val root=runCatching { JSONObject(content) }.getOrNull()
+            ?: return BatchProbeResult(httpCode,content.length,-1,"非JSON: ${content.take(80)}",-1)
+        val code=root.optInt("Code",root.optInt("code",-1))
+        val msg=root.optString("Message",root.optString("msg",""))
+        val data=root.optJSONObject("data")
+        val filled=if(data==null) 0 else modelsOf(data).size
+        return BatchProbeResult(httpCode,content.length,code,msg,filled)
     }
     /** 2026-11-20 对齐上游 0.1.33：GET/POST 播放 profile 都用 7.3.9.32 / 73932，真签名按最终 query 重生成。 */
     private fun playbackValues(identity: PlaybackDeviceSession.Profile) = identity.values + mapOf(
@@ -877,6 +1006,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         private const val GOOD_ROUTE_TTL_MS=600_000L
         private val cooldownUntil=java.util.concurrent.atomic.AtomicLong(0L)
         private val cooldownStreak=java.util.concurrent.atomic.AtomicInteger(0)
+        // —— 批量预热空响应退避（2026-11-21）——
+        // 批量路由全空 = 风控收紧信号（或路由已废弃）；连续 3 轮零填充就跳过批量 10 分钟，
+        // 别让「每次换集 1 个注定空的请求」持续给取址密度添柴。批量成功一次即复位。
+        private const val BATCH_EMPTY_LIMIT=3
+        private const val BATCH_BACKOFF_MS=10*60_000L
+        private val batchEmptyStreak=java.util.concurrent.atomic.AtomicInteger(0)
+        private val batchBackoffUntil=java.util.concurrent.atomic.AtomicLong(0L)
         internal fun cooldownRemainingMs(now: Long=System.currentTimeMillis()): Long =
             (cooldownUntil.get()-now).coerceAtLeast(0L)
         internal fun guardPlaybackCooldown() {

@@ -47,11 +47,9 @@ icon-preview.png
 # 注意：git clean -xdf 会连带删除它，需要清理时用 `git clean -xdfe bytevc2_decoder`
 /bytevc2_decoder/
 
-# TV 版本地实验模块：解码器接线文件与 so 产物，不入库（同 bytevc2_decoder 策略）
-/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/Bvc2Decoder.kt
-/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/Bvc2PlayerActivity.kt
-/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/decoder/
-/kotlin-tv/app/src/main/jniLibs/
+# TV 版本地实验模块：解码器接线文件与 so 产物，不入库（同 bytevc2_decoder 策略）。
+# 编译开关：仅 -Pvc2test 构建把 src/vc2 挂进 source set，CI/正式版没有此目录也能编译。
+/kotlin-tv/app/src/vc2/
 
 # 本地调试产物：真实媒体样本、抓包证据、构建日志，不入库
 /kotlin-tv/*.mdl

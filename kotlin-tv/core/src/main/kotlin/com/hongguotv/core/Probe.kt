@@ -9,7 +9,11 @@ private fun DiscoveryIdentityStyle(did:String,iid:String):Map<String,String> =
 
 fun main(args: Array<String>) {
     // --dump-spade：绕过 bytevc2 过滤，dump 播放模型里所有分档的 spade_a / codec / url。
-    if(args.contains("--dump-spade")) { mainDump(args); return }
+    // --ladder <episodeId>：打印清晰度阶梯缓存输出，验证五档一次下发/缓存命中。
+    if(args.contains("--dump-spade") || args.contains("--ladder")) { mainDump(args); return }
+    // --batch-probe：批量取址矩阵探针——key(1/1004) × 签名(有/无) 四组合各发一次，
+    // 定位批量空响应的真实原因（2026-11-21 调研：key 应为内容类型、路由配方可能要无签名）。
+    if(args.contains("--batch-probe")) { mainBatchProbe(args); return }
     // --diagnose：直接打官方取址接口，原样打印 HTTP 码/响应头/响应体，用于定位返空到底空在哪一层。
     if(args.contains("--diagnose")) { mainDiagnose(args); return }
     if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
@@ -56,6 +60,31 @@ fun main(args: Array<String>) {
         println("== plan/v1 系列剧 book_id=$id 共 ${list.size} 条")
         list.forEachIndexed { i,s -> println("   $i ${s.id}  ${s.title}  ${s.badge}  ${s.cover.take(60)}") }
         if(list.isEmpty()) println("   （空：接口没给 547 行或被风控/签名拒绝，可加 --verbose 看原始响应）")
+        return
+    }
+    // --cloud-history <creds.json>：读官方云端观看历史，验证进度上报是否真的落库。
+    // creds.json 是 AccountCredentials.fromJson 兼容的最小 JSON（cookie/deviceId/installId 必填），
+    // 由手机 prefs（hongguotv_phone_login.xml）拼出，临时文件用完即删，不进仓库。
+    if(args.contains("--cloud-history")) {
+        val path=args.getOrNull(args.indexOf("--cloud-history")+1)
+        if(path.isNullOrBlank()) { println("用法: --cloud-history <creds.json>"); return }
+        val creds=AccountCredentials.fromJson(java.io.File(path).readText())
+        val http=okhttp3.OkHttpClient.Builder()
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        try {
+            val list=CloudAccountClient(http).history(creds)
+            println("== 云端观看历史 共 ${list.size} 条")
+            list.forEachIndexed { i,p ->
+                val rate=if(p.duration>0) " ${(p.position*100/p.duration)}%" else ""
+                val at=java.time.Instant.ofEpochMilli(p.updatedAt).atZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss"))
+                println("   $i ${p.series.id} ${p.series.title}  ep${p.episodeIndex+1} ${p.position}/${p.duration}${rate}  @$at")
+            }
+            if(list.isEmpty()) println("   （空：账号云端历史里没有短剧进度）")
+        } catch(e:Exception) { println("   失败: ${e.message}") }
+        http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown()
         return
     }
     if(args.contains("--ranking")) {
@@ -348,4 +377,33 @@ private fun diagnoseV5(
             "HTTP=${response.code} len=${bytes.size} enc=${response.header("Content-Encoding")}\n      HDR[$interesting]\n      BODY[$text]"
         }
     }.getOrElse { "EXCEPTION=${it.javaClass.simpleName}: ${it.message}" }
+}
+
+/** --batch-probe [seriesId] [--force]：批量取址 2×2 矩阵探测。
+ *  key=1(短剧)/1004(漫剧) × 签名(有/无) 各发一次（共 4 个请求，间隔 2s），
+ *  定位批量预热空响应的真实原因。冷却期内默认拒绝执行（--force 越过）。 */
+private fun mainBatchProbe(args: Array<String>) {
+    if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
+    val http=okhttp3.OkHttpClient.Builder()
+        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+    val repository=ContentRepository(http)
+    val seriesArg=args.getOrNull(args.indexOf("--batch-probe")+1)?.takeIf { it.matches(Regex("[0-9]{1,30}")) }
+    val ids=try {
+        val detail=repository.detail(seriesArg ?: repository.home().items.first().id)
+        detail.episodes.take(3).also { println("剧=${detail.series.title} 探测集=${it}") }
+    } catch(e:Exception) { throw IllegalStateException("取剧集列表失败: ${e.message}",e) }
+    val force=args.contains("--force")
+    // --single：只发 1 个集 id——区分「端点死了」还是「服务端只容忍单 id」（11-20 14:09 单 id 同形态实测通过过）。
+    val probeIds=if(args.contains("--single")) ids.take(1) else ids
+    val combos=listOf("1" to true,"1" to false,"1004" to true,"1004" to false)
+    for((key,signed) in combos) {
+        val label="key=$key ${if(signed) "v5签名" else "无签名"} ids=${probeIds.size}"
+        val result=try { repository.batchProbe(probeIds,key,signed,force) }
+        catch(e:com.hongguotv.core.PlaybackThrottledException) { println("$label → 冷却拒绝: ${e.message}"); break }
+        catch(e:Exception) { println("$label → 异常: ${e.javaClass.simpleName} ${e.message}"); continue }
+        println("$label → $result")
+        Thread.sleep(2000)
+    }
 }

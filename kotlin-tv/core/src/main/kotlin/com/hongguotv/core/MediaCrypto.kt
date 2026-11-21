@@ -24,8 +24,8 @@ object MediaCrypto {
         while(end>0 && bytes[end-1].u()==0) end--
         return String(bytes,0,end,Charsets.UTF_8)
     }
-    private data class Box(val start: Int,val end: Int,val body: Int,val type: String)
-    private fun box(data: ByteArray, at: Int, limit: Int = data.size): Box? {
+    internal data class Box(val start: Int,val end: Int,val body: Int,val type: String)
+    internal fun box(data: ByteArray, at: Int, limit: Int = data.size): Box? {
         if(at<0 || at+8>limit) return null
         var size=data.u32(at); var header=8
         if(size==1L) { if(at+16>limit) return null; size=data.i64(at+8); header=16 }
@@ -33,7 +33,7 @@ object MediaCrypto {
         if(size<header || size>limit-at) return null
         return Box(at,at+size.toInt(),at+header,String(data,at+4,4,Charsets.US_ASCII))
     }
-    private fun find(data: ByteArray,type: String,start: Int,limit: Int): Box? {
+    internal fun find(data: ByteArray,type: String,start: Int,limit: Int): Box? {
         for(at in start..limit-8) if(data[at+4].toInt()==type[0].code) { val b=box(data,at,limit); if(b?.type==type) return b }
         return null
     }

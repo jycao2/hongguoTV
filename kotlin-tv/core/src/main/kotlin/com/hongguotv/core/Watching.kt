@@ -6,6 +6,9 @@ import org.json.JSONObject
 object PlaybackQuality {
     val options=listOf(480,720,1080)
     fun normalize(value: Int)=value.takeIf { it in options } ?: 1080
+    /** bvc2 软解档位（用户 2026-11-21）：比普通硬解多一档 360P；默认 360P 对老电视友好。 */
+    val softOptions=listOf(360,480,720,1080)
+    fun normalizeSoft(value: Int)=value.takeIf { it in softOptions } ?: 360
 }
 
 /** 播放失败后的自动降档：以「实际播到的档位」为基准，只往更低的档退。 */

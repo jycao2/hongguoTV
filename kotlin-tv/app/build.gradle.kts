@@ -16,8 +16,21 @@ android {
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.33.1"
+        // 桌面名称：带 -Pvc2test 的验证包改叫「红果TV·融合」，与正式版「红果TV」可区分，防止点错图标
+        resValue("string", "app_name", if (project.hasProperty("vc2test")) "红果TV·融合" else "红果TV")
     }
     buildFeatures { buildConfig = true }
+    // 编译开关（2026-11-21 资产隔离）：-Pvc2test 才把 src/vc2（解码器 JNI 门面 + decoder 包 +
+    // 融合实现 + jniLibs 的 libbvc2dec.so）挂进构建。这些文件永不入库，CI/正式版构建没有它们
+    // 也能编译——运行时 Vc2.api 反射不到实现就回落 Vc2ApiNoop，bvc2 档位走「不兼容 + 自动跳过」。
+    sourceSets {
+        if (project.hasProperty("vc2test")) {
+            getByName("main") {
+                java.srcDirs("src/vc2/kotlin")
+                jniLibs.srcDir("src/vc2/jniLibs")
+            }
+        }
+    }
     signingConfigs {
         create("delivery") {
             storeFile = signingValue("HONGGUOTV_KEYSTORE", "storeFile")?.let { file(it) }
@@ -26,7 +39,15 @@ android {
             keyPassword = signingValue("HONGGUOTV_KEY_PASSWORD", "keyPassword")
         }
     }
-    buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    buildTypes {
+        // 带 -Pvc2test 时生成独立包名的验证包，可与正式版共存、不覆盖用户数据。
+        // release 也可带该后缀，用于在真机上验证 R8 混淆后 JNI 注册仍正常。
+        getByName("debug") { if (project.hasProperty("vc2test")) applicationIdSuffix = ".vc2test" }
+        getByName("release") {
+            if (project.hasProperty("vc2test")) applicationIdSuffix = ".vc2test"
+            signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
     kotlinOptions { jvmTarget = "17" }
     // bcprov 只用到 SM3Digest，PQC/X509 的附属资源文件（约 1.2MB）用不到，打包时排除
