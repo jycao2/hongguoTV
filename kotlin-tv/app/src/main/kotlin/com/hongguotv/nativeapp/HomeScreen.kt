@@ -21,7 +21,7 @@ class SeriesPreview(context: Context): LinearLayout(context) {
         val dp=resources.displayMetrics.density
         setPadding(0,(7*dp).toInt(),0,(12*dp).toInt())
         addView(title)
-        addView(meta,LayoutParams(-1,-2).apply { topMargin=(5*dp).toInt() })
+        addView(meta,LayoutParams(-1,-2).apply { topMargin=(12*dp).toInt() })
         show(null,"")
     }
     fun show(series: Series?,status: String) {
