@@ -363,7 +363,12 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val found=runCatching {
             planCells(id,"single_col_same_ip_series",id).objects()
                 .firstOrNull { it.optInt("show_type")==547 }
-                ?.let { planCellItems(it) }.orEmpty()
+                ?.let { planCellItems(it) }
+                // 官方会列出「已官宣未上线」的季（episode_cnt=0，上游 ParseSeasons 注释同口径）：
+                // 这类季的网页详情页不存在，点进去必 HTTP 404（2026-11-22 公路求生榜第四季实测），
+                // 不能给入口；当前剧自己保底（正常在播，不该被误过滤）。
+                ?.filter { it.badge.isNotEmpty() || it.id==id }
+                .orEmpty()
                 .sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }
         }.getOrElse { emptyList() }
         synchronized(seasonFills) {
@@ -532,7 +537,11 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     /** 详情公共部分：剧集列表 + 卡片 + 社交数；related/sameName 只有完整详情才需要（两者都要联网）。 */
     private fun detailCommon(id: String): Triple<Detail, String, JSONObject> {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val html=text("$site/detail?series_id=$id")
+        // 404 大多是「已官宣未上线」的季（官方 plan feed 会列出、但网页详情页还没建），
+        // 报成网络错误会误导用户去检查网络（2026-11-22 公路求生榜第四季实测）。
+        val html=runCatching { text("$site/detail?series_id=$id") }.getOrElse { e->
+            throw IOException(if(e.message.orEmpty().contains("HTTP 404")) "该季暂未上线，等官方放出后再来" else e.message, e)
+        }
         val loader=extractRouter(html).getJSONObject("loaderData")
         val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
         val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
