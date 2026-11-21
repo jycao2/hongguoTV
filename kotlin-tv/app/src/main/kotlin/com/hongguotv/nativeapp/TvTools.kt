@@ -34,6 +34,7 @@ import com.hongguotv.core.TransferKind
 import com.hongguotv.core.TransferRules
 import com.hongguotv.core.ThirdSourceTransferServer
 import com.hongguotv.core.BackupThirdSource
+import com.hongguotv.core.CrashLogServer
 import com.hongguotv.core.LibraryTransferServer
 import com.hongguotv.core.BackdropTransferServer
 import com.hongguotv.core.BackupData
@@ -310,6 +311,30 @@ class TvTools(private val activity: Activity) {
                         TvDialog.urlLabel(activity, session.url)))
                 }
             } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启源配置传输，请检查网络后重试。" } }
+        }
+    }
+    /** 崩溃日志扫码导出：合并本机全部崩溃文件为一份 txt，手机扫码下载（只出不进，不回收任何数据）。 */
+    fun crashLogTransfer(logs: String,anchor: View?) {
+        val address=lanAddress()
+        if(address==null) { info("崩溃日志导出","请让电视和手机连接同一局域网后重试。",anchor); return }
+        val content=column(); content.addView(TvDialog.title(activity,"崩溃日志导出"))
+        val status=label("正在生成二维码…"); content.addView(status)
+        val dialog=AlertDialog.Builder(activity).setView(TvDialog.card(activity,content)).create()
+        TvDialog.styleWindow(activity,dialog,widthDp=440)
+        open(dialog,anchor)
+        worker.execute {
+            try {
+                val stamp=java.text.SimpleDateFormat("yyyyMMdd-HHmm",java.util.Locale.CHINA).format(java.util.Date())
+                val session=CrashLogServer(address,logs,"hongguotv-crash-$stamp.txt",
+                    { main.post { if(this@TvTools.dialog===dialog) { content.removeAllViews(); content.addView(label("二维码已过期，请关闭后重新打开。")) } } })
+                main.post {
+                    if(this@TvTools.dialog!==dialog) { session.close(); return@post }
+                    phone=session; content.removeAllViews()
+                    content.addView(TvDialog.qrRow(activity, qr(session.url),
+                        label("手机扫码打开后点「下载日志文件」。\n下载完成后把文件发给开发者即可。",16f),
+                        TvDialog.urlLabel(activity, session.url)))
+                }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启日志导出，请检查网络后重试。" } }
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {

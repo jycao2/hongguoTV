@@ -3122,6 +3122,48 @@ class MainActivity: Activity() {
             val bytes=cacheBytes()
             main.post { if(!isDestroyed) clearCache.text=cacheLabel(bytes) }
         }
+        // 崩溃日志（用户 2026-11-21）：默认关闭；文件在 cacheDir/crash，「清理缓存」会自动带走，这里另给单独清理与扫码导出
+        subHeading(device,"诊断")
+        fun crashBytes()=CrashLogger.sizeBytes(this)
+        fun crashLabel(bytes: Long?)="清理崩溃日志  ·  ${when {
+            bytes==null -> "计算中…"
+            bytes==0L -> "无日志"
+            bytes in 1..1023 -> "$bytes B"; bytes in 1024..1048575 -> "${bytes/1024} KB"; else -> "%.1f MB".format(bytes/1048576f)
+        }}（${CrashLogger.files(this).size} 个文件）"
+        lateinit var crashToggle: TextView
+        crashToggle=setting(device,"崩溃日志记录  ·  ${if(CrashLogger.enabled(this)) "已开启" else "已关闭"}") {
+            val next=!CrashLogger.enabled(this)
+            CrashLogger.setEnabled(this,next)
+            crashToggle.text="崩溃日志记录  ·  ${if(next) "已开启" else "已关闭"}"
+            Toast.makeText(this,if(next) "已开启：发生崩溃时会记录日志" else "已关闭：不再记录新日志（旧日志保留）",Toast.LENGTH_SHORT).show()
+        }
+        lateinit var crashExport: TextView
+        crashExport=setting(device,"导出崩溃日志  ·  手机扫码") {
+            if(!CrashLogger.enabled(this) && CrashLogger.sizeBytes(this)==0L) {
+                tvTools.info("导出崩溃日志","当前没有崩溃日志，也没有开启记录。开启后再次遇到崩溃即可回来导出。",crashExport)
+            } else {
+                io.execute {
+                    val logs=CrashLogger.combined(this@MainActivity)
+                    main.post {
+                        if(isDestroyed) return@post
+                        if(logs==null) tvTools.info("导出崩溃日志","当前没有崩溃日志。",crashExport)
+                        else tvTools.crashLogTransfer(logs,crashExport)
+                    }
+                }
+            }
+        }
+        lateinit var crashClear: TextView
+        crashClear=setting(device,crashLabel(null)) {
+            if(CrashLogger.sizeBytes(this)==0L) { Toast.makeText(this,"当前没有崩溃日志",Toast.LENGTH_SHORT).show() }
+            else TvDialog.confirm(this,"清理崩溃日志","删除本机保存的全部崩溃日志文件，不影响其他数据。") {
+                io.execute {
+                    CrashLogger.clear(this@MainActivity)
+                    val remaining=CrashLogger.sizeBytes(this@MainActivity)
+                    main.post { if(!isDestroyed) { crashClear.text=crashLabel(remaining); Toast.makeText(this@MainActivity,"崩溃日志已清理",Toast.LENGTH_SHORT).show() } }
+                }
+            }.show()
+        }
+        io.execute { val bytes=crashBytes(); main.post { if(!isDestroyed) crashClear.text=crashLabel(bytes) } }
         // 侧栏底部「常用」（用户 2026-11-19）：屏幕放不下就跟侧栏一起滚动，不为了塞下它去砍分类
         lateinit var quickSend: TextView
         quickSend=railAction("手机快传  ·  传 APK / 视频") {
