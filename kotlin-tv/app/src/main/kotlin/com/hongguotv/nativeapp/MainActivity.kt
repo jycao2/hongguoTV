@@ -2593,12 +2593,7 @@ class MainActivity: Activity() {
                 } else {
                     main.removeCallbacks(feedLongRunnable)
                     if(feedLongSeeking) { feedLongSeeking=false; feedLongDir=0; updatePlaybackText(); showHud() }
-                    else if(skipEpisode(dir)) {
-                        // 「已开启本剧连播」只在真的从自动下滑切成连播时说一次；之后每次换集不再重复弹
-                        val opening=!feedSeriesBinge && library.feedAutoSwipe
-                        feedSeriesBinge=true
-                        if(opening && !bingeHintShown) { bingeHintShown=true; showBingeBadge() }
-                    }
+                    else feedSkipEpisode(dir)
                 }
                 return true
             }
@@ -2643,6 +2638,16 @@ class MainActivity: Activity() {
         // 长按确认进详情但保留 feed 上下文：在详情页按返回直接续播当前剧（用户 2026-11-18）
         feedDetailBrowsing=true
         returnToDetail(forceDetail=true)
+    }
+
+    /** feed 短按 ←/→ 换集：转本剧连播并按需提示。实体遥控（handleRecommendKey）与手机遥控（remoteDpad）共用。 */
+    private fun feedSkipEpisode(dir: Int) {
+        if(skipEpisode(dir)) {
+            // 「已开启本剧连播」只在真的从自动下滑切成连播时说一次；之后每次换集不再重复弹
+            val opening=!feedSeriesBinge && library.feedAutoSwipe
+            feedSeriesBinge=true
+            if(opening && !bingeHintShown) { bingeHintShown=true; showBingeBadge() }
+        }
     }
 
     /** 开启本剧连播时给一句提示，避免用户以为「下滑换剧」坏了。 */
@@ -8173,6 +8178,16 @@ class MainActivity: Activity() {
         // 播放屏没有可聚焦的 View（surface + HUD），焦点搜索必然落空，手机上表现成「按了没反应」。
         // 控制条收起时直接对齐实体遥控器的播放屏语义：上呼出设置、下选集、左右快退快进、确认暂停。
         if(screen=="player" && !panel) {
+            // 自由刷剧（用户 2026-11-21）：手机遥控方向键此前硬用点播语义（上设置/下选集/左右快进），
+            // 与实体遥控在 feed 里的键位（↑↓换剧、←→换集、确认暂停）对不上。对齐 handleRecommendKey。
+            if(recommendMode) return when(key) {
+                "center" -> if(playError) true else { togglePlayback(); if(player?.playWhenReady==true) hidePlaybackOverlay() else showHud(); true }
+                "up" -> { switchRecommend(-1); true }
+                "down" -> { switchRecommend(1); true }
+                "left" -> { feedSkipEpisode(-1); true }
+                "right" -> { feedSkipEpisode(1); true }
+                else -> false
+            }
             return when(key) {
                 "center" -> { togglePlayback(); true }
                 "up" -> { showPanel(); true }
