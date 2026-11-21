@@ -360,31 +360,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val key="plan|$id"
         synchronized(seasonFills) { seasonFills[key]?.takeIf { clock()-it.at<600_000 }?.let { return it.items } }
         val found=runCatching {
-            VendorConstants.regenerate()
-            val values=searchValues()
-            values.putAll(linkedMapOf(
-                "book_id" to id,
-                "from" to "single_col_same_ip_series",
-                "scene" to "10",
-                "session_uuid" to java.util.UUID.randomUUID().toString().replace("-",""),
-                "filter_ids" to id,
-                "user_is_login" to "0",
-            ))
-            val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/plan/v1/",values)
-            val data=JSONObject(text(signed.url,signed))
-            if(data.optInt("code",-1)!=0) return@runCatching emptyList()
-            val rows=(data.optJSONArray("data") ?: data.optJSONObject("data")?.optJSONArray("data"))?.objects().orEmpty()
-            val cell=rows.firstOrNull { it.optInt("show_type")==547 } ?: return@runCatching emptyList()
-            val items=(cell.optJSONArray("video_data") ?: cell.optJSONArray("cell_data"))?.objects().orEmpty()
-            items.mapNotNull { row ->
-                val video=row.optJSONObject("video_data") ?: row
-                val sid=video.str("series_id").ifEmpty { video.str("series_id_str").ifEmpty { row.str("book_id") } }
-                if(!sid.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
-                val count=video.optInt("episode_cnt")
-                Series(sid,seriesTitle(video.str("series_title").ifEmpty { video.str("title").ifEmpty { row.str("cell_name") } }),
-                    cleanUrl(video.str("cover").ifEmpty { video.str("series_cover") }),"",
-                    if(count>0) "全 $count 集" else "")
-            }.distinctBy { it.id }.sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }
+            planCells(id,"single_col_same_ip_series",id).objects()
+                .firstOrNull { it.optInt("show_type")==547 }
+                ?.let { planCellItems(it) }.orEmpty()
+                .sortedBy { seasonNumber(it.title).let { n -> if(n==Int.MAX_VALUE) 1 else n } }
         }.getOrElse { emptyList() }
         synchronized(seasonFills) {
             seasonFills[key]=SeasonFill(clock(),found)
@@ -392,6 +371,64 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         return found
     }
+    /**
+     * 详情页相关推荐（官方 plan feed）：`bookapi/plan/v1` 带 from=select_panel_recommend + scene=10，
+     * 只取 `show_type=160`（详情页相关视频）的 cell。协议参照上游 openhongguo SeriesRecommend——
+     * 该界面没有专用 RPC，官方客户端复用通用 plan feed。
+     * 注意（上游实测结论）：匿名身份服务端常只回通用「更多好剧」cell（show_type=401，不随剧变），
+     * 真·相关 cell 要登录账号派生的身份才稳定；因此这里只认 160，拿不到就返回空——
+     * 调用方回落官网详情页内嵌 related_list（匿名场景下它本身就是真·相关推荐）。
+     */
+    fun planRelated(id: String): List<Series> {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        val key="planrel|$id"
+        synchronized(seasonFills) { seasonFills[key]?.takeIf { clock()-it.at<600_000 }?.let { return it.items } }
+        val found=runCatching {
+            planCells(id,"select_panel_recommend",null).objects()
+                .firstOrNull { it.optInt("show_type")==160 }
+                ?.let { planCellItems(it) }.orEmpty()
+        }.getOrElse { emptyList() }.filter { it.id!=id }
+        synchronized(seasonFills) {
+            seasonFills[key]=SeasonFill(clock(),found)
+            while(seasonFills.size>60) seasonFills.remove(seasonFills.keys.first())
+        }
+        return found
+    }
+    /** Probe --related 用：plan/v1 相关推荐场景全部 cell 的概览（show_type / cell 名 / 条目数），不看条目明细。 */
+    fun planRelatedProbe(id: String): List<Triple<Int,String,Int>> = runCatching {
+        planCells(id,"select_panel_recommend",null).objects().map { cell ->
+            Triple(cell.optInt("show_type"),cell.str("cell_name"),
+                (cell.optJSONArray("video_data") ?: cell.optJSONArray("cell_data"))?.length() ?: 0)
+        }
+    }.getOrElse { emptyList() }
+    /** plan/v1 通用取数：from 区分场景（select_panel_recommend=相关推荐 / single_col_same_ip_series=系列剧）。 */
+    private fun planCells(id: String,from: String,filterIds: String?): JSONArray {
+        VendorConstants.regenerate()
+        val values=searchValues()
+        values.putAll(linkedMapOf(
+            "book_id" to id,
+            "from" to from,
+            "scene" to "10",
+            "session_uuid" to java.util.UUID.randomUUID().toString().replace("-",""),
+            "user_is_login" to "0",
+        ))
+        filterIds?.let { values["filter_ids"]=it }
+        val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/plan/v1/",values)
+        val data=JSONObject(text(signed.url,signed))
+        if(data.optInt("code",-1)!=0) return JSONArray()
+        return data.optJSONArray("data") ?: data.optJSONObject("data")?.optJSONArray("data") ?: JSONArray()
+    }
+    /** plan cell 条目 → Series（show_type=160/401/547 的行同构，共用解析）。 */
+    private fun planCellItems(cell: JSONObject): List<Series> =
+        (cell.optJSONArray("video_data") ?: cell.optJSONArray("cell_data"))?.objects().orEmpty().mapNotNull { row ->
+            val video=row.optJSONObject("video_data") ?: row
+            val sid=video.str("series_id").ifEmpty { video.str("series_id_str").ifEmpty { row.str("book_id") } }
+            if(!sid.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
+            val count=video.optInt("episode_cnt")
+            Series(sid,seriesTitle(video.str("series_title").ifEmpty { video.str("title").ifEmpty { row.str("cell_name") } }),
+                cleanUrl(video.str("cover").ifEmpty { video.str("series_cover") }),"",
+                if(count>0) "全 $count 集" else "")
+        }.distinctBy { it.id }
     /** App 搜索/联想接口和播放接口一样按注册设备放行：未注册的随机身份只会拿到 HTTP 200 空体。 */
     private fun searchValues(): MutableMap<String,String> {
         val values=VendorConstants.device.toMutableMap()
@@ -493,7 +530,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     open fun detailLite(id: String): Detail = detailCommon(id).first
     fun detail(id: String): Detail {
         val (base,html,o)=detailCommon(id)
-        val related=related(html,base.series)
+        // 相关推荐双层：官方 plan/v1（from=select_panel_recommend，show_type=160）为主；
+        // 匿名身份常拿不到 160 cell（只回通用 401「更多好剧」），此时回落官网详情页内嵌
+        // related_list（本身就是按剧下发的真·相关推荐，匿名最优解）。登录态接入后 160 才稳定出现。
+        val related=runCatching { planRelated(id) }.getOrElse { emptyList() }.ifEmpty { related(html,base.series) }
         return base.copy(related=related,sameName=sameName(base.series,related))
     }
     // 评分与收藏数只在详情页 SSR 里下发，卡片数据源没有这些字段，因此只读取不追加请求。

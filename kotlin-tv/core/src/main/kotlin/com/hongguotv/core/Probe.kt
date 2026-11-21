@@ -62,6 +62,20 @@ fun main(args: Array<String>) {
         if(list.isEmpty()) println("   （空：接口没给 547 行或被风控/签名拒绝，可加 --verbose 看原始响应）")
         return
     }
+    // --related <id>：详情页相关推荐探针——plan/v1（from=select_panel_recommend）全部 cell 概览
+    // + 实际采用结果。验证匿名身份下服务端回 160（真·相关）还是 401（通用「更多好剧」）。
+    if(args.contains("--related")) {
+        val id=args.getOrNull(args.indexOf("--related")+1)?.takeIf { it.matches(Regex("[0-9]{1,30}")) } ?: "7706512650816982040"
+        println("== plan/v1 相关推荐 book_id=$id · 全部 cell")
+        val cells=repository.planRelatedProbe(id)
+        if(cells.isEmpty()) println("   （无 cell：接口被拒/空响应，可加 --verbose 看原始响应）")
+        cells.forEachIndexed { i,(st,name,cnt) -> println("   cell$i show_type=$st  「$name」  条目=$cnt") }
+        val chosen=repository.planRelated(id)
+        println("== 采用结果（只认 show_type=160）共 ${chosen.size} 条")
+        chosen.forEachIndexed { i,s -> println("   $i ${s.id}  ${s.title}  ${s.badge}") }
+        if(chosen.isEmpty()) println("   （匿名身份没拿到 160 cell → 详情页回落官网内嵌 related_list）")
+        return
+    }
     // --cloud-history <creds.json>：读官方云端观看历史，验证进度上报是否真的落库。
     // creds.json 是 AccountCredentials.fromJson 兼容的最小 JSON（cookie/deviceId/installId 必填），
     // 由手机 prefs（hongguotv_phone_login.xml）拼出，临时文件用完即删，不进仓库。
