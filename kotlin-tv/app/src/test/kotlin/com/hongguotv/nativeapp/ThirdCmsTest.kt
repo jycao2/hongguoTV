@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+// 0.33.0 把 ThirdCms 一族从 app 挪进了 core（com.hongguotv.core），当时漏改本测试的 import。
+import com.hongguotv.core.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
