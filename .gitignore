@@ -53,6 +53,13 @@ icon-preview.png
 /kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/decoder/
 /kotlin-tv/app/src/main/jniLibs/
 
+# 本地调试产物：真实媒体样本、抓包证据、构建日志，不入库
+/kotlin-tv/*.mdl
+/kotlin-tv/dump_*.json
+/kotlin-tv/dump_*.txt
+/kotlin-tv/dump_capture/
+/kotlin-tv/gradle_*.log
+
 # Trae 本地会话记忆、技能与临时文档，一律不入库
 .trae/
 
