@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.Typeface
@@ -911,6 +912,7 @@ class MainActivity: Activity() {
         }
     }
     private fun base(title: String?=null): LinearLayout {
+        cancelLoadingAnim()
         root.removeAllViews(); root.setBackgroundColor(bg)
         backdropView?.takeIf { backdropBitmap!=null }?.let { root.addView(it,FrameLayout.LayoutParams(-1,-1)) }
         val container=column(); val horizontal=dp(widthDp()*.05f); val vertical=(resources.displayMetrics.heightPixels*.05f).toInt()
@@ -1059,6 +1061,44 @@ class MainActivity: Activity() {
         }
     }
     private fun message(parent: LinearLayout,label: String) { parent.addView(text(label,17f,muted).apply { setPadding(0,dp(28),0,dp(18)) }) }
+    private var loadingDotsAnim: Runnable?=null
+    private var loadingPulseAnim: ObjectAnimator?=null
+    /**
+     * 详情页加载过渡块（用户 2026-11-22）：居中的旋转指示器 + 加粗剧名 + 呼吸点状态行，
+     * 整块做呼吸透明度动画；毛玻璃封面背景透出，替换掉原来缩在左上角的一行小字。
+     */
+    private fun loadingBlock(parent: LinearLayout,title: String) {
+        cancelLoadingAnim()
+        val status=text("正在加载剧集",14f,white).apply { alpha=0.75f }
+        val block=column().apply {
+            gravity=Gravity.CENTER
+            addView(ProgressBar(this@MainActivity).apply {
+                isIndeterminate=true
+                indeterminateTintList=android.content.res.ColorStateList.valueOf(accent)
+            },lp(-2,-2).apply { gravity=Gravity.CENTER_HORIZONTAL })
+            addView(text(title,19f,white).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER },
+                lp(-2,-2).apply { topMargin=dp(14) })
+            addView(status,lp(-2,-2).apply { topMargin=dp(9) })
+        }
+        parent.addView(block,lp(-1,0).apply { weight=1f; topMargin=dp(20) })
+        loadingPulseAnim=ObjectAnimator.ofFloat(block,View.ALPHA,0.55f,1f).apply {
+            duration=900; repeatCount=ObjectAnimator.INFINITE; repeatMode=ObjectAnimator.REVERSE; start()
+        }
+        var dots=0
+        val tick=object: Runnable {
+            override fun run() {
+                dots=(dots+1)%4
+                status.text="正在加载剧集"+"·".repeat(dots)
+                main.postDelayed(this,420L)
+            }
+        }
+        loadingDotsAnim=tick; main.postDelayed(tick,420L)
+    }
+    /** 任何页面重建都会经过 base()：在这里统一停掉加载动画，避免回调打到已拆掉的 View。 */
+    private fun cancelLoadingAnim() {
+        loadingDotsAnim?.let { main.removeCallbacks(it) }; loadingDotsAnim=null
+        loadingPulseAnim?.cancel(); loadingPulseAnim=null
+    }
     private fun error(parent: LinearLayout,problem: Throwable,retry: ()->Unit) {
         message(parent,"暂时无法加载，请检查网络后重试。")
         val detail=if(problem is java.net.UnknownHostException) "无法连接内容网站" else if(problem is java.net.SocketTimeoutException) "连接超时" else problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
@@ -3818,7 +3858,7 @@ class MainActivity: Activity() {
         if(!keepPlayer) {
             val built=base(series.title); body=built
             // 自由刷剧：过渡动画揭开后直接进播放，中间的「正在加载剧集…」详情页不显示（用户 2026-11-18），保持纯黑过渡
-            if(recommendMode) { built.visibility=View.GONE; root.setBackgroundColor(Color.BLACK) } else message(built,"正在加载剧集…")
+            if(recommendMode) { built.visibility=View.GONE; root.setBackgroundColor(Color.BLACK) } else loadingBlock(built,series.title)
         }
         val apply:(Detail)->Unit={ result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
