@@ -8305,6 +8305,9 @@ class MainActivity: Activity() {
             goBack()
             return true
         }
+        // 鼠标左键点按走 touch 通道而非 generic motion：按住不动只点击时系统只发 touch 事件，
+        // 之前只在右键分支续命，导致「一直用鼠标点着也会进屏保」（用户 2026-11-21）。
+        lastInteractionAt=android.os.SystemClock.elapsedRealtime()
         return super.dispatchTouchEvent(ev)
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
