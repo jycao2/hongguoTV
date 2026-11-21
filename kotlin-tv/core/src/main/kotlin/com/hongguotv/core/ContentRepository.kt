@@ -110,9 +110,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         ContentType.SHORT -> "real-drama"
         ContentType.AI -> "ai-drama"
     }
-    private fun text(url: String, signed: Signer.Request? = null): String {
+    private fun text(url: String, signed: Signer.Request? = null, extraHeaders: Map<String,String> = emptyMap()): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
+        extraHeaders.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
         return RequestScope.execute(http.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
@@ -381,7 +382,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      */
     fun planRelated(id: String): List<Series> {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val key="planrel|$id"
+        val loggedIn=runCatching { loginCookieProvider?.invoke() }.getOrNull()?.isNotBlank()==true
+        val key="planrel|$id${if(loggedIn) "|L" else ""}"
         synchronized(seasonFills) { seasonFills[key]?.takeIf { clock()-it.at<600_000 }?.let { return it.items } }
         val found=runCatching {
             planCells(id,"select_panel_recommend",null).objects()
@@ -402,19 +404,25 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
     }.getOrElse { emptyList() }
     /** plan/v1 通用取数：from 区分场景（select_panel_recommend=相关推荐 / single_col_same_ip_series=系列剧）。 */
+    /** 登录态供给（MainActivity 注入 AccountManager 的会话 Cookie）：有值时 plan/v1 相关推荐按登录身份请求。 */
+    var loginCookieProvider: (() -> String?)? = null
+
     private fun planCells(id: String,from: String,filterIds: String?): JSONArray {
         VendorConstants.regenerate()
         val values=searchValues()
+        // 登录 Cookie 可用时按登录身份请求：服务端才肯下发 show_type=160 真·相关推荐，
+        // 匿名（user_is_login=0）只会回 401 通用「更多好剧」（上游 openhongguo 注释同口径）。
+        val cookie=runCatching { loginCookieProvider?.invoke() }.getOrNull()?.takeIf { it.isNotBlank() }
         values.putAll(linkedMapOf(
             "book_id" to id,
             "from" to from,
             "scene" to "10",
             "session_uuid" to java.util.UUID.randomUUID().toString().replace("-",""),
-            "user_is_login" to "0",
+            "user_is_login" to if(cookie!=null) "1" else "0",
         ))
         filterIds?.let { values["filter_ids"]=it }
         val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/plan/v1/",values)
-        val data=JSONObject(text(signed.url,signed))
+        val data=JSONObject(text(signed.url,signed,if(cookie!=null) mapOf("Cookie" to cookie) else emptyMap()))
         if(data.optInt("code",-1)!=0) return JSONArray()
         return data.optJSONArray("data") ?: data.optJSONObject("data")?.optJSONArray("data") ?: JSONArray()
     }
