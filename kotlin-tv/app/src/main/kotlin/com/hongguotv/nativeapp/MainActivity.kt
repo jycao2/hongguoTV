@@ -758,6 +758,17 @@ class MainActivity: Activity() {
         library.thirdHistoryRestore={ thirdStore.mergeHistory(it) }
         library.thirdFavoritesProvider={ thirdStore.backupFavorites() }
         library.thirdFavoritesRestore={ thirdStore.mergeFavorites(it) }
+        // 播放器键位/快进偏好（playback-extras-v1）与收藏排序随主备份写出/恢复（2026-11-21 查缺补漏）
+        library.extrasProvider={
+            mapOf("autoSkip" to extras.autoSkipUnplayable,"seekStep" to extras.seekStepSeconds,"fastSpeed" to extras.longPressSpeed,
+                "menuKeyAction" to extras.menuKeyAction,"dpadUpDownAction" to extras.dpadUpDownAction,
+                "mouseRightAction" to extras.mouseRightAction,"favoriteSort" to library.favoriteSort)
+        }
+        library.extrasRestore={ s ->
+            extras.autoSkipUnplayable=s.autoSkip; extras.seekStepSeconds=s.seekStep; extras.longPressSpeed=s.fastSpeed
+            extras.menuKeyAction=s.menuKeyAction; extras.dpadUpDownAction=s.dpadUpDownAction; extras.mouseRightAction=s.mouseRightAction
+            library.favoriteSort=s.favoriteSort
+        }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()

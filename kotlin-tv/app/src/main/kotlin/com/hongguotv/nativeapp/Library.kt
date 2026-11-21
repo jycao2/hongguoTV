@@ -298,11 +298,29 @@ class Library(context: Context) {
         marksCache = next
         prefs.edit().putString("skipMarks", SkipMarks.encode(next)).apply()
     }
-    fun snapshot() = state().snapshot(
-        // 三方源/观看历史/收藏来自独立存储，任何异常都退化为空列表，不能让备份整体失败
-        runCatching { thirdSourcesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
-        runCatching { thirdHistoryProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
-        runCatching { thirdFavoritesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()))
+    fun snapshot(): BackupData {
+        val base = state().snapshot(
+            // 三方源/观看历史/收藏来自独立存储，任何异常都退化为空列表，不能让备份整体失败
+            runCatching { thirdSourcesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
+            runCatching { thirdHistoryProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()),
+            runCatching { thirdFavoritesProvider?.invoke() ?: emptyList() }.getOrDefault(emptyList()))
+        // 播放器键位/快进偏好与收藏排序存在独立 prefs，由 MainActivity 注入这里一并进备份（2026-11-21 查缺补漏）
+        val extra = runCatching { extrasProvider?.invoke() }.getOrNull().orEmpty()
+        if(extra.isEmpty()) return base
+        val s = base.settings
+        return base.copy(settings = s.copy(
+            autoSkip = extra["autoSkip"] as? Boolean ?: s.autoSkip,
+            seekStep = extra["seekStep"] as? Int ?: s.seekStep,
+            fastSpeed = extra["fastSpeed"] as? Float ?: s.fastSpeed,
+            menuKeyAction = extra["menuKeyAction"] as? String ?: s.menuKeyAction,
+            dpadUpDownAction = extra["dpadUpDownAction"] as? String ?: s.dpadUpDownAction,
+            mouseRightAction = extra["mouseRightAction"] as? String ?: s.mouseRightAction,
+            favoriteSort = extra["favoriteSort"] as? String ?: s.favoriteSort))
+    }
+
+    /** 由 MainActivity 注入：播放器键位偏好（playback-extras-v1）与收藏排序随备份写出/恢复。 */
+    var extrasProvider: (() -> Map<String,Any?>)? = null
+    var extrasRestore: ((BackupSettings) -> Unit)? = null
 
     /** 由 MainActivity 注入：三方片源配置、观看历史与收藏随主备份一起写入与恢复。 */
     var thirdSourcesProvider: (() -> List<BackupThirdSource>)? = null
@@ -317,6 +335,8 @@ class Library(context: Context) {
 
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
+        // 键位/排序偏好存独立 prefs，由 MainActivity 的钩子写回（含 favoriteSort 的 library prefs）
+        if(restoreSettings) runCatching { extrasRestore?.invoke(merged.settings) }
         // 云端收藏基线是设备与红果书架之间的对账状态：恢复备份不改变它，原样带过
         index = LibraryIndex(merged, state().updates(), state().cloudUpdates(), state().cloudNewIds())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
