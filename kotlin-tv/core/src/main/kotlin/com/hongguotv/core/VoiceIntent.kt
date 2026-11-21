@@ -127,6 +127,10 @@ object VoiceIntent {
             RemoteCommand.Act("volume.mute", "off"), "取消静音"),
         Rule(listOf("静音", "关掉声音", "关闭声音", "没声音了", "静音一下"),
             RemoteCommand.Act("volume.mute", "on"), "已静音"),
+        // 自由刷剧放在随机推荐之前：词表互不重叠，但语义上「开始刷剧」更具体，先命中先执行。
+        // 「刷剧」只有两个字，按最短三字规则不收，防剧名误触发（如《XX刷剧集》）。
+        Rule(listOf("自由刷剧", "打开自由刷剧", "进入自由刷剧", "刷剧模式", "开始刷剧", "随便刷刷"),
+            RemoteCommand.Act("feed.open"), "已进入自由刷剧"),
         // 内容类型。放在随机推荐之后：`随机推荐一部漫剧` 里也有「漫剧」，
         // 让更长的「随机推荐一部漫剧」先命中。
         Rule(listOf("随机推荐一部漫剧", "随机来个漫剧", "随机一部漫剧", "随便来个漫剧"),
@@ -143,6 +147,9 @@ object VoiceIntent {
             RemoteCommand.Act("type.set", "short"), "短剧"),
         Rule(listOf("切换ai剧", "换成ai剧", "看ai剧", "ai剧"),
             RemoteCommand.Act("type.set", "ai"), "AI 剧"),
+        // 屏保预览：立即盖屏看一眼，8 秒自动退出。单独的「屏保」两字不收（最短三字规则）。
+        Rule(listOf("预览屏保", "屏保预览", "看看屏保", "打开屏保画面"),
+            RemoteCommand.Act("saver.preview"), "屏保预览已打开"),
         // 关于与工具
         Rule(listOf("清理缓存", "清缓存", "释放空间", "缓存清理", "清一下缓存"),
             RemoteCommand.Act("cache.clear"), "正在清理缓存"),

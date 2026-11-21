@@ -412,6 +412,22 @@ class VoiceIntentTest {
         }
     }
 
+    /** 2026-11-21 查缺补漏：自由刷剧与屏保预览上线语音/遥控。 */
+    @Test
+    fun feedAndScreensaver() {
+        assertEquals("feed.open" to "", act("打开自由刷剧"))
+        assertEquals("feed.open" to "", act("进入自由刷剧"))
+        assertEquals("feed.open" to "", act("刷剧模式"))
+        assertEquals("feed.open" to "", act("开始刷剧"))
+        assertEquals("feed.open" to "", act("随便刷刷"))
+        assertEquals("saver.preview" to "", act("预览屏保"))
+        assertEquals("saver.preview" to "", act("屏保预览"))
+        assertEquals("saver.preview" to "", act("看看屏保"))
+        // 「刷剧」「屏保」两个字不收：防剧名/口语误触发（最短三字规则）
+        assertNull(act("刷剧"))
+        assertNull(act("屏保"))
+    }
+
     /** 解析器的动作键必须能被协议往返一次：解析出来的命令，序列化后还要能再解析回来。 */
     @Test
     fun actSurvivesProtocolRoundTrip() {

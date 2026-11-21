@@ -207,6 +207,8 @@ val REMOTE_ACTIONS = setOf(
     // 浏览
     "type.set",         // 切内容类型：arg = comic | short | ai
     "random.pick",      // 随机推荐一部并打开详情：arg = comic | short | ai（空=当前类型）
+    "feed.open",        // 进入自由刷剧（推荐流，上下换剧）
+    "saver.preview",    // 立即预览待机屏保（8 秒自动退出）
     // 设备音量（系统媒体音量，不是播放器内部音量）
     "volume.up",
     "volume.down",

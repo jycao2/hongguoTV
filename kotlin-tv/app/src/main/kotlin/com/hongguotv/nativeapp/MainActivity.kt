@@ -7693,6 +7693,10 @@ class MainActivity: Activity() {
                 true
             }
             "random.pick" -> remoteRandomPick(cmd.arg)
+            // 自由刷剧：已在 feed 里就只回执不再重进（enterFreeFeed 自己有防重入，但回执要区分）
+            "feed.open" -> if(screen=="player" && recommendMode) { voiceSay("已经在自由刷剧了"); true } else { enterFreeFeed(); true }
+            // 屏保预览：立即盖屏看一眼，8 秒自动退出；播放页不响应（会盖住正在看的画面）
+            "saver.preview" -> if(screen=="player") false else { previewScreensaver(); true }
             "resume.latest" -> remoteResumeList().firstOrNull()?.let { remoteResumePlay(it.id) } ?: false
             "list.play" -> listTarget(cmd.arg)?.let { (kind,index) -> remoteListPlay(kind,index) } ?: false
             "favorite.toggle" -> {
