@@ -41,6 +41,18 @@ icon-preview.png
 # 手机版为本地实验模块，不入库
 /kotlin-tv/app-phone/
 
+# ByteVC2 解码器配套仓库：自己的独立 git，本地开发用，不入库。
+# 内含 librempeg 第三方源码（765MB）、真实加密样本与取流证据，不适合公开仓库。
+# 需要改解码器时在本目录内单独提交；App 侧只消费它产出的 jniLibs/*.so。
+# 注意：git clean -xdf 会连带删除它，需要清理时用 `git clean -xdfe bytevc2_decoder`
+/bytevc2_decoder/
+
+# TV 版本地实验模块：解码器接线文件与 so 产物，不入库（同 bytevc2_decoder 策略）
+/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/Bvc2Decoder.kt
+/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/Bvc2PlayerActivity.kt
+/kotlin-tv/app/src/main/kotlin/com/hongguotv/nativeapp/decoder/
+/kotlin-tv/app/src/main/jniLibs/
+
 # Trae 本地会话记忆、技能与临时文档，一律不入库
 .trae/
 
