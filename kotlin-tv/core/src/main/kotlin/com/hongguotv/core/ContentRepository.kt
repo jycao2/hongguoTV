@@ -551,7 +551,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 匿名身份常拿不到 160 cell（只回通用 401「更多好剧」），此时回落官网详情页内嵌
         // related_list（本身就是按剧下发的真·相关推荐，匿名最优解）。登录态接入后 160 才稳定出现。
         val related=runCatching { planRelated(id) }.getOrElse { emptyList() }.ifEmpty { related(html,base.series) }
-        return base.copy(related=related,sameName=sameName(base.series,related))
+        // 系列剧双层（上游 openhongguo Seasons 同链路）：官方 plan feed
+        // （from=single_col_same_ip_series，show_type=547，列出全部季含未上线的）为主，
+        // 命中即省掉 sameName 的搜索推断风暴（净减请求）；plan 没给 547 行时回落
+        // 原有同名推断（网页 related_list 同名兄弟 + collectSeasons 搜索）。
+        // album_detail 接口（上游第 2 层）不接：album_id 只在原生详情 API 下发，网页拿不到。
+        val seasons=runCatching { planSeries(id) }.getOrElse { emptyList() }
+            .ifEmpty { sameName(base.series,related) }
+            .filter { it.id!=base.series.id }
+        return base.copy(related=related,sameName=seasons)
     }
     // 评分与收藏数只在详情页 SSR 里下发，卡片数据源没有这些字段，因此只读取不追加请求。
     private fun social(o: JSONObject?): SeriesSocial {
