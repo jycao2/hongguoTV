@@ -844,7 +844,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // v1 路径不带 dr_scene（`:dr_scene` 变体才用，对匿名请求返 200+0）。
         val biz=JSONObject()
             .put("detail_page_version",0)
-            .put("device_level",1)
+            // 真果鉴实测：biz_param.device_level 默认 3（编码不兼容才提到 4）；1 是我们早期填的值，
+            // 与参考客户端不一致，属于风控「参数不对齐」的可疑项。
+            .put("device_level",3)
             .put("disable_digg_stat",false)
             .put("disable_video_relate_book",false)
             .put("need_all_video_definition",true)

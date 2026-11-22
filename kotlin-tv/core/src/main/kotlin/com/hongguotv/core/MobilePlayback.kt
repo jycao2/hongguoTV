@@ -23,7 +23,9 @@ internal object MobilePlayback {
     private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
     /** 7.4.5.32 起官方客户端回到 v1 路径；`:dr_scene` 变体（player/default）对匿名请求返回空体。 */
     private const val PATH = "/novel/player/multi_video_model/v1"
-    const val UA = "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
+    // UA 版本号必须与 query 的 version_code 逐字一致（真果鉴「参数逐字对齐」判据）：
+    // 此前 UA 写 73932 而 query 发 74532，是「同一请求两个版本号」的可疑组合。
+    const val UA = "com.phoenix.read/74532 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
     /** 查询串必须与 v5 签名内嵌的 7.4.5.32 / PGT-AN10 指纹一致，多一个少一个都会落到空响应。 */
     private fun query(identity: PlaybackDeviceSession.Profile) = linkedMapOf(
         "aid" to "8662", "app_name" to "novelread",
@@ -47,7 +49,7 @@ internal object MobilePlayback {
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         // 7.4.5.32 形态：完整 biz_param + mixed_video_id_map，v1 路径不带 dr_scene。
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
         val request = Request.Builder().url(signed.url)

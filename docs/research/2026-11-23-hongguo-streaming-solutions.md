@@ -41,6 +41,20 @@
 3. **Frida 预言机兜底（yinjg1997/hongguo 方案）**：如果纯复刻始终过不了，可在本机跑模拟器 + 真 App 算签名做研究用途验证，逐参数排除法定位是哪个环节被判。
 4. **风险提示**：多项目 README 均注明仅供个人学习、CDN 屏蔽数据中心 IP（家庭宽带可用）；风控判据随服务端策略漂移（真果鉴 10 月还记录了 preload 场景全灭的演变），任何对齐都要考虑时效。
 
+## 五·一、对齐验证结果（2026-11-23 02:40，同日落地）
+
+按建议第 1 条 diff 后发现三处不一致，全部修正并探针复验**成功拿到 1080P 真实流**：
+
+| 差异点 | 修正前（我们） | 修正后（对齐真果鉴四头方案） |
+| --- | --- | --- |
+| 签名头 | 只有 x-khronos/x-ladon/x-argus（缺 gorgon） | 补上 **x-gorgon**（query+body MD5 前 4 字节 + {0,6,11,28} + BE ts，异或固定 20 字节密钥后旋转变换，与 redguo `signHongguoRequest` 逐字节一致） |
+| biz_param.device_level | 1 | **3**（真果鉴默认值，编码不兼容才提到 4） |
+| UA 版本号 | `com.phoenix.read/73932`（与 query 的 74532 矛盾） | **74532**，UA 与 query 逐字一致 |
+
+改动位置：`core/.../Argus.kt`（PlayerSigner.headers 加 x-gorgon）、`core/.../ContentRepository.kt`（batchPayload device_level）、`core/.../MobilePlayback.kt`（payload device_level + UA）。core 单测全过；`--stream-only` 探针返回 quality=1080P、total≈20MB、ftyp 头正常。10746 已装上电视。
+
+注意：无法严格 A/B（同一时段服务端风控窗口也在自然消退），但三处修正均与已验证可用的参考实现逐字一致，保留为现行实现。原「服务端硬性拒绝、与请求内容无关」的定性应据此修正为「请求形态对齐参考客户端后可过」。
+
 ## 六、参考链接
 
 - 真果鉴: https://github.com/Adsryen/zhenguojian
