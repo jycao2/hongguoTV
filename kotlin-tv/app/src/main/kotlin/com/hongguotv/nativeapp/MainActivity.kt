@@ -155,8 +155,9 @@ class MainActivity: Activity() {
     private var bingeHintShown=false
     private var homeMenuFired=false
     private val homeMenuRunnable=Runnable { homeMenuFired=true; enterFreeFeed() }
-    /** 首页静默预热（每会话一次）：推荐队列 + 前两部详情与首集取址一并备好，
-     *  点「自由刷剧」/长按菜单进来基本只剩缓冲时间（用户 2026-11-18：首次进入偏慢）。 */
+    /** 首页静默预热（每会话一次）：推荐队列 + 紧邻下一部的详情与首集取址备好，
+     *  点「自由刷剧」/长按菜单进来基本只剩缓冲时间（用户 2026-11-18：首次进入偏慢）。
+     *  2026-11-23 只备第一部：停在首页也照发 2 个取址请求纯属白添风控密度。 */
     private var feedPrewarmed=false
     private val feedPrewarmRunnable=Runnable {
         if(feedPrewarmed || isDestroyed || !foreground) return@Runnable
@@ -2560,20 +2561,29 @@ class MainActivity: Activity() {
     }
 
     /** 预取当前部起后面几部的详情与首集地址：独立线程池，绝不占用起播队列。
-     *  首页预热传 -1（推荐第 0、1 部），点进自由刷剧传 recommendCursor（第 1、2 部）。 */
+     *  首页预热传 -1（只备推荐第 0 部），点进自由刷剧传 recommendCursor（第 1、2 部）。 */
     private fun prefetchRecommend(index: Int) {
         if(recommendPrefetching==index) return
         recommendPrefetching=index
         // 两部预取收进同一个任务串行取址：此前每部各开一个线程并发打取址接口，
         // 加上起播那一发，进自由刷剧瞬间 3 个取址齐飞，服务端风控敏感期极易当场触发冷却
         // （2026-11-23 用户实测「一进自由刷剧就限流」）。串行后峰值并发降到 2。
+        // 目标集必须在主线程先取好（library 非线程安全），后台只做网络。
+        val targets=mutableListOf<Pair<Int,Pair<String,String?>>>()
+        for(offset in 1..2) {
+            val next=recommendItems.getOrNull(index+offset) ?: continue
+            // 首页预热只备「紧邻下一部」的地址：用户停在首页不点刷剧时，每次开 App
+            // 白发 2 个取址请求纯添风控密度（2026-11-23）；进 feed 后起播成功还会再调一次，届时两部都备。
+            if(index<0 && offset==2) continue
+            targets+=offset to (next.id to library.progress(next.id)?.episodeId)
+        }
         prefetchWorker.submit {
-            for(offset in 1..2) {
-                val next=recommendItems.getOrNull(index+offset) ?: continue
+            for((offset,target) in targets) {
+                val (seriesId,wantedEpisode)=target
                 // 详情已经缓存过也要继续往下走：地址/首块可能还没备，跳过就等于白预取
-                val detail=recommendDetails[next.id] ?: runCatching { repository.detailLite(next.id) }.getOrNull()
-                    ?.also { recommendDetails[next.id]=it } ?: continue
-                val episode=detail.episodes.firstOrNull { it==library.progress(next.id)?.episodeId } ?: detail.episodes.firstOrNull() ?: continue
+                val detail=recommendDetails[seriesId] ?: runCatching { repository.detailLite(seriesId) }.getOrNull()
+                    ?.also { recommendDetails[seriesId]=it } ?: continue
+                val episode=detail.episodes.firstOrNull { it==wantedEpisode } ?: detail.episodes.firstOrNull() ?: continue
                 val now=android.os.SystemClock.elapsedRealtime()
                 val info=recommendStreams[episode]?.takeIf { now-it.first<10*60*1000L }?.second
                     ?: runCatching { repository.stream(episode,library.maxQuality) }.getOrNull()
@@ -2591,7 +2601,7 @@ class MainActivity: Activity() {
                         android.util.Log.i("HongguoTV","Prefetch video ready episode=$episode from=$index")
                     }
                 }
-                android.util.Log.i("HongguoTV","Prefetch recommend from=$index id=${next.id} episode=$episode stream=${recommendStreams.containsKey(episode)}")
+                android.util.Log.i("HongguoTV","Prefetch recommend from=$index id=$seriesId episode=$episode stream=${recommendStreams.containsKey(episode)}")
             }
         }
     }
