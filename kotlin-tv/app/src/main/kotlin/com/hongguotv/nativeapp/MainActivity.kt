@@ -419,6 +419,8 @@ class MainActivity: Activity() {
     private var filterToggle: TextView?=null
     private var filterSummary: TextView?=null
     private var filterExpanded=true
+    /** 进入高级搜索后首次出结果自动收起面板（issue #35.2）；之后尊重用户手动展开/收起。 */
+    private var filterAutoCollapse=false
     private var filterPanel: LinearLayout?=null
     private var filterGroupsScroll: View?=null
     private var filterChips=linkedMapOf<Pair<String,String>,TextView>()
@@ -3452,7 +3454,7 @@ class MainActivity: Activity() {
         query=""; (searchInput as? EditText)?.setText("")
         page=1; catalog=emptyList(); hasMore=false; catalogFocus=""; discoveryCursor=null; pendingFilterFocus=null
         // 每次进入高级搜索都展开筛选，收起状态只在本次会话内保持
-        if(value) filterExpanded=true
+        if(value) { filterExpanded=true; filterAutoCollapse=true }
         tabState.remove(1); tabFocus.remove(1); searchFocusPending=false
         showCatalog(load=value)
         main.post { if(advancedSearch==value) (if(value) filterToggle ?: filterPanel else searchInput)?.requestFocus() }
@@ -3648,7 +3650,12 @@ class MainActivity: Activity() {
         work({ repository.filteredDiscovery(selection,null) }, { result ->
             catalog=result.items; hasMore=result.next!=null; discoveryGroups=result.groups; discoveryCursor=result.next; page=1
             val keepNav=nav.any { it.hasFocus() }
-            renderFilterPanel()
+            // 首次出结果自动收起筛选面板（issue #35.2）：展开的面板占掉大半屏，
+            // 结果只剩一行还滚不动观感像「展示不全」。收起后结果占满屏；
+            // 摘要行仍在，要改条件点「展开筛选」。只做一次，之后尊重用户手动展开。
+            if(advancedSearch && filterAutoCollapse && result.items.isNotEmpty() && filterExpanded) {
+                filterAutoCollapse=false; filterExpanded=false; renderFilterPanel()
+            }
             body.removeAllViews(); catalogGrid(body,keepNav,false)
             main.post {
                 val key=pendingFilterFocus.also { pendingFilterFocus=null }
@@ -4164,6 +4171,10 @@ class MainActivity: Activity() {
             if(shot!=null) (layer.getChildAt(0) as? ImageView)?.let { it.setImageBitmap(shot); it.visibility=View.VISIBLE }
             return
         }
+        // 过渡层挂起期间关掉 ExoPlayer 自带的缓冲圈（issue #35.1）：新集 prepare 缓冲时
+        // PlayerView 的默认大圈会和过渡层的 38dp 小圈叠着转，「两个转圈一大一小」。
+        // 撤层时恢复，正常播放中的缓冲提示不受影响。
+        playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
         // 上一个过渡层还在淡出（连按换集）：立刻收掉，否则两层半透明叠着会发灰
         freezeFading?.let { old ->
             old.animate().cancel()
@@ -4214,11 +4225,13 @@ class MainActivity: Activity() {
      *  这不增加等待——用户在这一刻已经能看到新内容，只是旧帧还叠着半透明的一层；
      *  真要离开播放页（回首页、露错误面板）时必须传 false，否则旧帧会盖住下一页。 */
     private fun releaseFreeze(fade: Boolean=false) {
-        freezeFade?.let { main.removeCallbacks(it) }; freezeFade=null
+        freezeFade?.let { main.removeCallbacks(it); }; freezeFade=null
         // 500ms 内切完时这个任务还没到点，撤掉就等于 loading 从未出现过
         freezeLoadingJob?.let { main.removeCallbacks(it) }; freezeLoadingJob=null
         val layer=freezeLayer ?: return
         freezeLayer=null; freezeTip=null
+        // 过渡层撤掉后恢复 ExoPlayer 自带缓冲圈（showFreezeLayer 里为防双圈临时关掉）
+        playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
         val alive=android.os.SystemClock.elapsedRealtime()-freezeShownAt
         android.util.Log.w("HongguoTV","Freeze release alive=${alive}ms fade=$fade")
         // 上一层还在淡出（连按换集）：立刻收掉，别让两层的半透明叠在一起发灰
