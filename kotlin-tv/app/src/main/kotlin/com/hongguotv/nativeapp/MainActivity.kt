@@ -2040,8 +2040,15 @@ class MainActivity: Activity() {
                             val up=when(tab) {
                                 2 -> (when { newRelease -> newReleaseBack ?: newReleaseWindowButton ?: rankRefresh; aiCatalog -> aiEntry ?: aiGenreButton; else -> rankSwitch ?: rankRefresh })
                                     ?: nav.getOrNull(tab)
-                                1 -> searchInput ?: searchButton ?: searchActions.firstOrNull()?.takeIf { it.isFocusable }
-                                    ?: typeButtons[library.contentType] ?: nav.getOrNull(tab)
+                                // 高级搜索：关键词搜索行是隐藏的（searchInput 等为 GONE），此前首行 ↑ 落到
+                                // 隐藏视图上 requestFocus 静默失败＝卡片上按不上去（2026-11-23 用户反馈）。
+                                // 展开时回条件区末行，收起时回「展开筛选」按钮，两者都接得回「‹ 返回关键词搜索」→ 顶栏。
+                                1 -> (if(advancedSearch) {
+                                    if(filterExpanded) filterRows.lastOrNull()?.firstOrNull() else filterCollapse ?: filterToggle
+                                } else {
+                                    searchInput ?: searchButton ?: searchActions.firstOrNull()?.takeIf { it.isFocusable }
+                                        ?: typeButtons[library.contentType]
+                                }) ?: nav.getOrNull(tab)
                                 else -> historyRefresh ?: historySync ?: historyManage ?: favoriteCheck ?: favoriteSortFirst
                                     ?: genreClear ?: collectionBack ?: typeButtons[library.contentType]
                                     ?: segmentFirst ?: nav.getOrNull(tab)
@@ -8432,6 +8439,21 @@ class MainActivity: Activity() {
         // 之前只在右键分支续命，导致「一直用鼠标点着也会进屏保」（用户 2026-11-21）。
         lastInteractionAt=android.os.SystemClock.elapsedRealtime()
         return super.dispatchTouchEvent(ev)
+    }
+    /** 鼠标滚轮：RecyclerView 原生不吃 GenericMotion 滚轮事件，目录网格此前只能靠遥控方向键
+     *  滚（issue #35.2「鼠标下拉不下去」的一半根因）。滚轮按屏高 1/5 步进滚动结果网格。 */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if(screen=="catalog" && event.action==MotionEvent.ACTION_SCROLL
+            && event.source and InputDevice.SOURCE_CLASS_POINTER!=0) {
+            val delta=event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            val recycler=catalogRecycler
+            if(delta!=0f && recycler!=null && recycler.height>0) {
+                pointerInput=true
+                recycler.scrollBy(0,(delta*recycler.height/5f).toInt())
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // 屏保唤醒键只撤屏保不透传：防止「按一下想唤醒却把焦点卡片点开了」（用户 2026-11-19）
