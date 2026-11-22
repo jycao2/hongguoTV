@@ -1094,12 +1094,21 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             if(remaining>0) throw PlaybackThrottledException(remaining)
         }
         private fun tripPlaybackCooldown(): PlaybackThrottledException {
-            val streak=cooldownStreak.incrementAndGet()
-            val wait=COOLDOWN_STEPS[(streak-1).coerceIn(0,COOLDOWN_STEPS.lastIndex)]
-            cooldownUntil.set(System.currentTimeMillis()+wait)
-            probeLog?.invoke("空响应触发冷却 ${wait}ms（连续第 $streak 次）")
-            return PlaybackThrottledException(wait)
+            // 同一轮并发取址（如自由刷剧进入时起播+两路预取同时被拒）只记一次冷却事件：
+            // 此前每个失败各抬一级，20s 一次进 feed 就连跳成 120s。加锁串行判定，
+            // 已在冷却中的失败按剩余时间拒绝、不再叠加等级（2026-11-23）。
+            synchronized(cooldownLock) {
+                val now=System.currentTimeMillis()
+                val remaining=cooldownRemainingMs(now)
+                if(remaining>0) return PlaybackThrottledException(remaining)
+                val streak=cooldownStreak.incrementAndGet()
+                val wait=COOLDOWN_STEPS[(streak-1).coerceIn(0,COOLDOWN_STEPS.lastIndex)]
+                cooldownUntil.set(now+wait)
+                probeLog?.invoke("空响应触发冷却 ${wait}ms（连续第 $streak 次）")
+                return PlaybackThrottledException(wait)
+            }
         }
+        private val cooldownLock=Object()
         private fun clearPlaybackCooldown() {
             cooldownStreak.set(0); cooldownUntil.set(0L)
         }

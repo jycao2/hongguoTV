@@ -2564,20 +2564,20 @@ class MainActivity: Activity() {
     private fun prefetchRecommend(index: Int) {
         if(recommendPrefetching==index) return
         recommendPrefetching=index
-        for(offset in 1..2) {
-            val next=recommendItems.getOrNull(index+offset) ?: continue
-            // 起播集不一定是第 1 集：看过一半的剧会从上次那集继续。这里在主线程把目标集取出来
-            // 交给后台去备，否则预取永远只备第 1 集，续播场景必然 miss。
-            val wantedEpisode=library.progress(next.id)?.episodeId
-            prefetchWorker.submit {
+        // 两部预取收进同一个任务串行取址：此前每部各开一个线程并发打取址接口，
+        // 加上起播那一发，进自由刷剧瞬间 3 个取址齐飞，服务端风控敏感期极易当场触发冷却
+        // （2026-11-23 用户实测「一进自由刷剧就限流」）。串行后峰值并发降到 2。
+        prefetchWorker.submit {
+            for(offset in 1..2) {
+                val next=recommendItems.getOrNull(index+offset) ?: continue
                 // 详情已经缓存过也要继续往下走：地址/首块可能还没备，跳过就等于白预取
                 val detail=recommendDetails[next.id] ?: runCatching { repository.detailLite(next.id) }.getOrNull()
-                    ?.also { recommendDetails[next.id]=it } ?: return@submit
-                val episode=detail.episodes.firstOrNull { it==wantedEpisode } ?: detail.episodes.firstOrNull() ?: return@submit
+                    ?.also { recommendDetails[next.id]=it } ?: continue
+                val episode=detail.episodes.firstOrNull { it==library.progress(next.id)?.episodeId } ?: detail.episodes.firstOrNull() ?: continue
                 val now=android.os.SystemClock.elapsedRealtime()
                 val info=recommendStreams[episode]?.takeIf { now-it.first<10*60*1000L }?.second
                     ?: runCatching { repository.stream(episode,library.maxQuality) }.getOrNull()
-                        ?.also { recommendStreams[episode]=now to it } ?: return@submit
+                        ?.also { recommendStreams[episode]=now to it } ?: continue
                 // 只给「紧邻的下一部」预读首块：换剧时 RemoteVideo 已经能直接用，省掉现场 prepare 的 0.5~1 秒。
                 // 再往后那部只备地址——慢网下每部多下 2MB 会跟正在播的抢带宽。
                 if(offset==1 && !recommendVideos.containsKey(episode)) {
