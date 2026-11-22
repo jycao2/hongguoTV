@@ -3566,7 +3566,12 @@ class MainActivity: Activity() {
         val visualLines=(others.size+1)/2
         val groupsScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false; visibility=if(filterExpanded) View.VISIBLE else View.GONE }
         groupsScroll.addView(groupsHost)
-        host.addView(groupsScroll,lp(-1,if(others.isEmpty()) -2 else dp(minOf(visualLines,4)*34)))
+        // 条件区可见行数按屏幕高度自适应：540P 小电视固定 4 行会把一行卡片裁到只剩 3/4
+        // （2026-11-23 用户问「小电视是不是只能显示部分卡片」，实测 1080P 没事、540P 推演裁切）。
+        // 挤掉的高度从条件区出——其余行用 ScrollView 滚，保证手动展开时结果区至少有一行完整卡片。
+        val screenHdp=resources.displayMetrics.heightPixels/resources.displayMetrics.density
+        val maxRows=if(screenHdp>=680) 4 else if(screenHdp>=560) 2 else 1
+        host.addView(groupsScroll,lp(-1,if(others.isEmpty()) -2 else dp(minOf(visualLines,maxRows)*34)))
         filterGroupsScroll=groupsScroll
         // 焦点严格按视觉行走线：首行是类型选项+操作按钮，其余每行左右两组条件。
         // ←/→ 跨组相连，↑/↓ 在同一半区内按位置落到上/下一行，告别按↓却平移到同行另一组的跳动感
