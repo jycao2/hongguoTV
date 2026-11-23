@@ -21,9 +21,10 @@ import org.json.JSONObject
  */
 internal object MobilePlayback {
     private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
-    /** 7.4.5.32 起官方客户端回到 v1 路径；`:dr_scene` 变体（player/default）对匿名请求返回空体。 */
-    /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1` + `dr_scene=player`。 */
-    private const val PATH = "/novel/player/multi_video_model/player/v1"
+    /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1`。 */
+    const val PATH = "/novel/player/multi_video_model/player/v1"
+    /** 平铺路径（上游 `FlatPath`）：与 [PATH] 互为轮换，服务端反向切换时靠它兜住。 */
+    const val FLAT_PATH = "/novel/player/multi_video_model/v1"
     // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
     // video_tab GET 才用 Cronet 形态。此前两者混用，UA 也是错的一环。
     const val UA = PassportClient.V5_PLAYBACK_UA
@@ -74,6 +75,7 @@ internal object MobilePlayback {
         signer: Signer,
         now: Long,
         deviceLevel: Int = 4,
+        path: String = PATH,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map。
@@ -83,7 +85,7 @@ internal object MobilePlayback {
         //     之前照抄 openhongguo 抓包加的 dr_scene="player" 会被判成无效请求。
         val payload = """{"biz_param":{"detail_page_version":0,"device_level":$deviceLevel,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
-        val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
+        val signed = signer.signPlaybackV5(HOST + path, query(identity), body)
         // 2026-11-23 22:10 关键修正：V5 播放就是「Medusa v5 那一代」，头集合是三/四头
         //   x-ss-stub + x-khronos + x-helios + x-medusa（GET video_tab 时无 stub）。
         // 此前这里调 realSignedHeaders 把它们全当「占位头」过滤掉，换成了上一代 551 的

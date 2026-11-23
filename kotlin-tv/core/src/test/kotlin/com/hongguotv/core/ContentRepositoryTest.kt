@@ -116,6 +116,7 @@ class ContentRepositoryTest {
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
     // 2026-11-20 对齐官方 7.4.5.32（上游 573d75a）：v1 路径（无尾斜杠、无 dr_scene）+ mixed_video_id_map。
     private val v5Path="/novel/player/multi_video_model/player/v1"
+    private val flatPath="/novel/player/multi_video_model/v1"
 
     @Test fun tabRouteSuppliesPlaybackModelWithASingleRequest() {
         val paths=mutableListOf<String>()
@@ -141,6 +142,11 @@ class ContentRepositoryTest {
                     // v5 非空失败（有错误码、没有模型）：不触发冷却，允许退回 video_tab 兜底。
                     """{"code":100001}"""
                 }
+                request.url.encodedPath==flatPath -> {
+                    paths += flatPath
+                    // 平铺 /v1 同样给错误码，继续退到 video_tab。
+                    """{"code":100001}"""
+                }
                 request.url.encodedPath==tabPath -> {
                     paths += tabPath
                     """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
@@ -149,8 +155,8 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // v5 给错误码才退到 video_tab；顺序不能反（反了会一直在死路上耗额度）。
-        assertEquals(listOf(v5Path,tabPath),paths)
+        // 两档 device_level 都拿到错误码，再试平铺 /v1，最后退 video_tab。
+        assertEquals(listOf(v5Path,v5Path,flatPath,tabPath),paths)
     }
 
     @Test fun videoModelCanBeStringEncodedJson() {
@@ -195,8 +201,8 @@ class ContentRepositoryTest {
         assertTrue(first.remainingMs>0)
         // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
         // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却。
-        // 每次空响应打两发（device_level=4 → 升档 5），所以 3 轮身份 = 6 发。
-        val expected=List(6){v5Path}
+        // 每次空响应打三发（player/v1 dl=4 → player/v1 dl=5 → 平铺 /v1），3 轮身份 = 9 发。
+        val expected=List(3){listOf(v5Path,v5Path,flatPath,tabPath)}.flatten()
         assertEquals(expected,paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }

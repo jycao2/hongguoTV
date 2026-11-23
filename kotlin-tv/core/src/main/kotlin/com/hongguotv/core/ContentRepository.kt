@@ -1041,20 +1041,29 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         while (true) {
             val identity = playbackSession.profile(http)
             try {
-                // 2026-11-23：v5 `player/v1` 是唯一活路。此前把 `video_tab` 放前面，
-                // 它空响应后立刻换身份/抬冷却，v5 永远轮不到——顺序错了等于一直在打死路。
-                // 同身份先 device_level=4，空响应升 5 再试一次（同行 0.27.4 实测：4 空但 5 能出），
-                // 5 仍空才按「本台身份额度用尽」换身份。预取只打一发，不参与升档。
-                val model = if (quiet) MobilePlayback.model(id, identity, http, signer, clock(), 4)
-                else try {
-                    MobilePlayback.model(id, identity, http, signer, clock(), 4)
-                } catch (blank: EmptyPlaybackResponseException) {
-                    probeLog?.invoke("v5 device_level=4 空响应 → 升 5 同身份重试")
-                    MobilePlayback.model(id, identity, http, signer, clock(), 5)
+                // 候选顺序对齐上游 PhoenixReadPlaybackTransport（2026-11-23 9ba235c）：
+                //   player/v1 device_level=4 → player/v1 升 5 → 平铺 /v1（服务端反向切换时靠它兜住）。
+                // 预取只打一发，不参与升档和换路，避免替用户多消耗身份额度。
+                val candidates = if (quiet) listOf(Triple(MobilePlayback.PATH, 4, "player/v1 dl=4"))
+                else listOf(
+                    Triple(MobilePlayback.PATH, 4, "player/v1 dl=4"),
+                    Triple(MobilePlayback.PATH, 5, "player/v1 dl=5"),
+                    Triple(MobilePlayback.FLAT_PATH, 4, "v1 dl=4"),
+                )
+                var model: JSONObject? = null
+                for ((route, deviceLevel, label) in candidates) {
+                    model = try {
+                        MobilePlayback.model(id, identity, http, signer, clock(), deviceLevel, route)
+                    } catch (blank: EmptyPlaybackResponseException) {
+                        probeLog?.invoke("$label 空响应")
+                        null
+                    }
+                    if (model != null) break
                 }
-                if (model != null) {
+                val found = model
+                if (found != null) {
                     clearPlaybackCooldown()
-                    val routed = model.put(ROUTE_KEY, "v5|player")
+                    val routed = found.put(ROUTE_KEY, "v5|player")
                     rememberRoute(routed)
                     probeLog?.invoke("v5 命中 id=$id")
                     return routed
