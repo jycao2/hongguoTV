@@ -185,7 +185,7 @@ class ContentRepositoryTest {
         assertEquals(1,modelRequests.size)
     }
 
-    @Test fun blankResponseStopsAtOnceAndEntersCooldown() {
+    @Test fun blankResponseRotatesIdentityThenCoolsDown() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths += request.url.encodedPath
@@ -193,12 +193,31 @@ class ContentRepositoryTest {
         }
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
-        // 空响应 = 风控信号：原地重发、换匿名设备、扫旧路由全都不要再做。
-        // 2026-11-20 起首选 video_tab：第一个（也应是唯一一个）空请求来自它。
-        assertEquals(listOf(tabPath),paths)
+        // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
+        // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却——所以是 1 次首发 + 2 次换身份。
+        assertEquals(listOf(tabPath,tabPath,tabPath),paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
-        assertEquals(listOf(tabPath),paths)
+        assertEquals(listOf(tabPath,tabPath,tabPath),paths)
+    }
+
+    @Test fun blankResponseSucceedsOnSecondIdentity() {
+        var calls=0
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            calls++
+            paths += request.url.encodedPath
+            when {
+                calls==1 -> ""            // 首台设备额度已用尽
+                request.url.host=="example.com" -> videoInfo()
+                else -> """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+        }
+        val stream=repo.stream("123")
+        assertTrue(stream.url.isNotBlank())
+        // 换身份后仍在同一条首选路由上重试，不是改打别的路由。
+        assertEquals(tabPath,paths[0])
+        assertEquals(tabPath,paths[1])
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(

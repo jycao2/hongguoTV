@@ -65,6 +65,9 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class UnplayableVideoException(message: String, val diagnostic: String = "", val bvc2Stream: StreamInfo? = null): IOException(message)
 /** 播放信息接口返回了 HTTP 200 空体；已按有界退避重读仍未成功。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
+/** 服务端 HTTP 429：唯一真正需要「等」的信号，按 Retry-After 冷却。
+ *  与空体区分开：空体（200+0）是匿名设备额度用尽，换身份即可，不该锁死用户。 */
+class PlaybackRateLimitedException(val retryAfterMs: Long = 0): IOException("服务端限流（HTTP 429）")
 /** 官方取址接口处于行为风控冷却期：此刻任何取址都会被直接拒绝，继续请求只会拉长封禁。 */
 class PlaybackThrottledException(val remainingMs: Long): IOException(
     "官方接口限流中，约 ${((remainingMs+999)/1000).coerceAtLeast(1)} 秒后恢复")
@@ -963,11 +966,16 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                 .header("User-Agent",PLAYBACK_UA)
                 .header("Accept","application/json")
                 .get().build()
+            val statusBox = IntArray(1)
             val body=try {
                 RequestScope.execute(http.newCall(request)) { response ->
+                    statusBox[0] = response.code
+                    if(response.code==429) throw PlaybackRateLimitedException(retryAfterMs(response))
                     if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
                     response.body?.string().orEmpty()
                 }
+            } catch (limited: PlaybackRateLimitedException) {
+                throw limited
             } catch (problem: java.io.InterruptedIOException) {
                 throw problem
             } catch (problem: IOException) {
@@ -975,10 +983,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             } catch (problem: RuntimeException) {
                 continue
             }
+            val blank = body.isBlank()
+            val status = statusBox[0]
             val root=runCatching { JSONObject(body) }.getOrNull()
             if(root==null) {
                 // 200 + 0 字节是本轮风控的固定形态：别再打备用主机，直接交给上层触发冷却。
-                if(body.isBlank()) throw EmptyPlaybackResponseException()
+                if(blank) {
+                    probeLog?.invoke("tab $base 空响应 HTTP=$status len=0")
+                    throw EmptyPlaybackResponseException()
+                }
                 probeLog?.invoke("tab $base 非JSON body=${body.take(120)}")
                 continue
             }
@@ -1019,37 +1032,47 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(route.isNotEmpty()) goodRoute=route to clock()
     }
     private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false, quiet: Boolean = false): JSONObject {
-        val identity=playbackSession.profile(http)
-        // 2026-11-20 对齐上游 0.1.33：GET video_tab（真签名）是首选，POST v1 只是兜底——
-        // 官方对 v5 占位头的 POST 一律静默丢弃，先打它只会白白触发冷却。
-        // quiet（后台预取）：空响应不 trip 全局冷却——预取只是优化，不能替用户把冷却等级抬上去
-        //（2026-11-23 实测：刷剧时下一集预取被拒，冷却 20→60→120 连跳，用户看片中途被锁）。
-        val tab=try {
-            tabVideoModel(id,identity,level,preferAlt)
-        } catch(blank: EmptyPlaybackResponseException) {
-            if(quiet) throw IOException("空响应（预取静默跳过）")
-            throw tripPlaybackCooldown()
+        // 2026-11-23 全网复核（openhongguo README 与真果鉴TV 0.8.27 一致口径）：
+        // 「一台匿名设备基本只给一次播放模型」，之后同设备只会拿到 200+0。
+        // 因此空响应的正确处置是「换一台匿名设备重试」，而不是在同一身份上等——
+        // 旧实现每次都抬全局冷却（20/60/120/300s），用户看片中途被锁全是自己造成的。
+        // 只有真正的 HTTP 429 才需要冷却，且按 Retry-After。
+        var resets = 0
+        while (true) {
+            val identity = playbackSession.profile(http)
+            try {
+                // 2026-11-20 对齐上游 0.1.33：GET video_tab（真签名）是首选，POST v1 只是兜底——
+                // 官方对 v5 占位头的 POST 一律静默丢弃，先打它只会白白触发冷却。
+                val tab = tabVideoModel(id, identity, level, preferAlt)
+                if (tab != null) {
+                    clearPlaybackCooldown()
+                    rememberRoute(tab)
+                    probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
+                    return tab
+                }
+                val model = MobilePlayback.model(id, identity, http, signer, clock())
+                if (model != null) {
+                    clearPlaybackCooldown()
+                    val routed = model.put(ROUTE_KEY, "v5|player")
+                    rememberRoute(routed)
+                    probeLog?.invoke("v5 命中 id=$id")
+                    return routed
+                }
+                // 两条路由都没给模型：等同本台设备额度用尽。
+                throw EmptyPlaybackResponseException()
+            } catch (blank: EmptyPlaybackResponseException) {
+                // 预取只是优化，不能替用户消耗身份额度，也不能因此锁死正片。
+                if (quiet) throw IOException("空响应（预取静默跳过）")
+                if (resets >= MAX_IDENTITY_RESETS) throw tripPlaybackCooldown()
+                resets++
+                probeLog?.invoke("空响应 → 换匿名身份重试（第 $resets 次）")
+                playbackSession.renew(http)
+            } catch (limited: PlaybackRateLimitedException) {
+                if (quiet) throw IOException("限流（预取静默跳过）")
+                limitPlaybackCooldown(limited.retryAfterMs)
+                throw tripPlaybackCooldown()
+            }
         }
-        if(tab!=null) {
-            clearPlaybackCooldown()
-            rememberRoute(tab)
-            probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
-            return tab
-        }
-        val model=try {
-            MobilePlayback.model(id,identity,http,signer,clock())
-        } catch(blank: EmptyPlaybackResponseException) {
-            if(quiet) throw IOException("空响应（预取静默跳过）")
-            throw tripPlaybackCooldown()
-        }
-        if(model!=null) {
-            clearPlaybackCooldown()
-            val routed=model.put(ROUTE_KEY,"v5|player")
-            rememberRoute(routed)
-            probeLog?.invoke("v5 命中 id=$id")
-            return routed
-        }
-        throw IOException("播放接口暂不可用")
     }
     /** 新路由的播放模型在 `data.video_model`，旧路由在 `data[<vid>].video_model`；两种都可能被序列化成字符串。 */
     private fun modelOf(value: Any?): JSONObject? = when(value) {
@@ -1084,6 +1107,23 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 冷却期内 stream()/videoModel() 直接抛 PlaybackThrottledException，一个请求都不发。
         // 首次 20 秒（承认「偶发一次抖动」的可能，给一次 20 秒后的机会），连续命中按 60→120→300 秒递增。
         private val COOLDOWN_STEPS=listOf(20_000L, 60_000L, 120_000L, 300_000L)
+        /** 空响应换身份的次数上限：与 openhongguo 的 DeviceResets 默认值一致（一次调用最多换 2 台）。 */
+        private const val MAX_IDENTITY_RESETS=2
+        /** 解析 Retry-After（秒）；缺失或非数字返回 0，由调用方给默认值。 */
+        internal fun retryAfterMs(response: okhttp3.Response): Long {
+            val raw=response.header("Retry-After")?.trim().orEmpty()
+            val seconds=raw.toLongOrNull() ?: return 0L
+            return (seconds*1000).coerceIn(1_000L, 600_000L)
+        }
+        /** 仅 HTTP 429 走这里：按 Retry-After 冷却，不参与空响应的等级递增。 */
+        private fun limitPlaybackCooldown(retryAfter: Long) {
+            synchronized(cooldownLock) {
+                val wait=if(retryAfter>0) retryAfter else 30_000L
+                val until=System.currentTimeMillis()+wait
+                if(until>cooldownUntil.get()) cooldownUntil.set(until)
+                probeLog?.invoke("HTTP 429 限流，冷却 ${wait}ms")
+            }
+        }
         // 成功路由记忆的有效期：到期重新从主路试一次，避免主路恢复后长期停在兜底路由上。
         private const val GOOD_ROUTE_TTL_MS=600_000L
         private val cooldownUntil=java.util.concurrent.atomic.AtomicLong(0L)

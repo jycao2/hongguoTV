@@ -64,9 +64,12 @@ internal object MobilePlayback {
             // 播放模型请求不带账号 Cookie，也不复用注册身份之外的会话。
             val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
             RequestScope.execute(transport.newCall(request)) { response ->
+                if (response.code == 429) throw PlaybackRateLimitedException(ContentRepository.retryAfterMs(response))
                 if (!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
                 response.body?.string().orEmpty()
             }
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
         } catch (problem: java.io.InterruptedIOException) {
             throw problem
         } catch (problem: IOException) {
