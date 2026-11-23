@@ -22,20 +22,46 @@ import org.json.JSONObject
 internal object MobilePlayback {
     private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
     /** 7.4.5.32 起官方客户端回到 v1 路径；`:dr_scene` 变体（player/default）对匿名请求返回空体。 */
-    private const val PATH = "/novel/player/multi_video_model/v1"
-    // UA 版本号必须与 query 的 version_code 逐字一致（真果鉴「参数逐字对齐」判据）：
-    // 此前 UA 写 73932 而 query 发 74532，是「同一请求两个版本号」的可疑组合。
-    const val UA = "com.phoenix.read/74532 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
-    /** 查询串必须与 v5 签名内嵌的 7.4.5.32 / PGT-AN10 指纹一致，多一个少一个都会落到空响应。 */
-    private fun query(identity: PlaybackDeviceSession.Profile) = linkedMapOf(
-        "aid" to "8662", "app_name" to "novelread",
-        "version_code" to "74532", "version_name" to "7.4.5.32",
-        "channel" to "vivo_8662_64", "device_platform" to "android",
-        "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74532",
-        "iid" to identity.values.getValue("iid"),
-        "cdid" to identity.values.getValue("cdid"),
-        "device_id" to identity.values.getValue("device_id"),
-    )
+    /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1` + `dr_scene=player`。 */
+    private const val PATH = "/novel/player/multi_video_model/player/v1"
+    // UA 必须与 query 的 version_code 同源，且与注册画像一致（2026-11-23 复盘：此前 UA 74532 而注册 73932）。
+    const val UA = PassportClient.PLAYBACK_UA
+    /** 完整 28 项 query，缺一项都可能落到空响应；设备字段一律取自注册画像，避免两套指纹。 */
+    private fun query(identity: PlaybackDeviceSession.Profile): Map<String, String> {
+        val v = identity.values
+        fun value(key: String, fallback: String) = v[key]?.takeIf { it.isNotBlank() } ?: fallback
+        val version = value("version_code", "74332")
+        return linkedMapOf(
+            "device_platform" to value("device_platform", "android"),
+            "os" to value("os", "android"),
+            "ssmix" to "a",
+            "cdid" to v.getValue("cdid"),
+            "channel" to value("channel", "xiaomi_8662_64"),
+            "aid" to value("aid", "8662"),
+            "app_name" to value("app_name", "novelread"),
+            "version_code" to version,
+            "version_name" to value("version_name", "7.4.3.32"),
+            "manifest_version_code" to value("manifest_version_code", version),
+            "update_version_code" to value("update_version_code", version),
+            "resolution" to value("resolution", "1200*2670"),
+            "dpi" to value("dpi", "460"),
+            "device_type" to value("device_type", "23127PN0CC"),
+            "device_brand" to value("device_brand", "Xiaomi"),
+            "language" to "zh",
+            "os_api" to value("os_api", "34"),
+            "os_version" to value("os_version", "14"),
+            "ac" to "wifi",
+            "host_abi" to value("host_abi", "arm64-v8a"),
+            "dragon_device_type" to value("dragon_device_type", "phone"),
+            "pv_player" to version,
+            "compliance_status" to "0",
+            "need_personal_recommend" to "1",
+            "player_so_load" to "1",
+            "is_android_pad_screen" to "0",
+            "iid" to v.getValue("iid"),
+            "device_id" to v.getValue("device_id"),
+        )
+    }
 
     /** 返回 `video_model` 对象；调用方复用既有的 `modelOf`/`streamFromModel` 解析与解码逻辑。
      *  200 + 0 字节是站方的行为风控信号，原样抛 [EmptyPlaybackResponseException] 让上层触发全局冷却；
@@ -48,13 +74,15 @@ internal object MobilePlayback {
         now: Long,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
-        // 7.4.5.32 形态：完整 biz_param + mixed_video_id_map，v1 路径不带 dr_scene。
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
+        // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map + dr_scene=player。
+        // device_level 用 1 而非 3：3 会让 1080p 以下全部下发 bytevc2，ExoPlayer 解不了（openhongguo 实测）。
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
         val request = Request.Builder().url(signed.url)
             .header("User-Agent", UA)
-            .header("Accept", "application/json")
+            .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+            .header("x-xs-from-web", "0")
             .header("Content-Encoding", "gzip")
             // 2026-11-20 官方只认真签名：v5 占位三头换成 PlayerSigner 的 argus/ladon（按最终 query 重生成）。
             .apply { ContentRepository.realSignedHeaders(signed.url, signed.headers, body).forEach { (key, value) -> header(key, value) } }

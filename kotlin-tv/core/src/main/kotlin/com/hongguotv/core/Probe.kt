@@ -518,6 +518,221 @@ private fun mainPassport(args: Array<String>) {
                 dumpPlan(client, bookId, "登录态相关推荐", PassportClient.CONTENT_HOST)
                 dumpPlan(client, bookId, "登录态相关推荐(a域)", "https://api5-normal-sinfonlinea.fqnovel.com")
             }
+            "play" -> {
+                // 诊断：用 passport 签名族打播放接口。若它能出货而 PlayerSigner 不能，
+                // 说明当前空响应是播放签名族被判，而非设备额度/IP 风控。
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7486311576044047385"
+                val extra = linkedMapOf(
+                    "video_id" to vid, "video_id_type" to "0", "device_level" to "3",
+                    "need_all_video_definition" to "1", "need_mp4_align" to "0",
+                    "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
+                    "from_video_id" to "",
+                )
+                arg("--extra")?.split(',')?.forEach { pair ->
+                    val key = pair.substringBefore('='); val value = pair.substringAfter('=', "")
+                    extra[key] = value
+                }
+                arg("--drop")?.split(',')?.forEach { extra.remove(it) }
+                // --form：改走 body（video_detail 疑似只吃 POST）；给值时业务参数从 query 移入 body。
+                val form = linkedMapOf<String, String>()
+                arg("--form")?.split(',')?.filter { it.isNotBlank() }?.forEach { pair ->
+                    val key = pair.substringBefore('=').trim(); val value = pair.substringAfter('=', "")
+                    if (key in extra) extra.remove(key)
+                    form[key] = value
+                }
+                if (form.isNotEmpty()) arg("--drop")?.split(',')?.forEach { form.remove(it) }
+                val method = arg("--method") ?: if (form.isEmpty()) "GET" else "POST"
+                for (host in listOf(PassportClient.CONTENT_HOST, "https://reading.snssdk.com")) {
+                    val path = arg("--path") ?: "/reading/bookapi/video_tab/multi_video_model/v1/"
+                    val raw = try { client.signedRequest(method, path, extra, form, host) }
+                    catch (e: Exception) { println("  ${host.substringAfter("//").substringBefore('.')} 失败 ${e.message}"); continue }
+                    val code = raw.optInt("code", raw.optInt("Code", -1))
+                    val data = raw.optJSONObject("data")
+                    val hasModel = data != null && data.toString().contains("video_model")
+                    println("  ${host.substringAfter("//").substringBefore('.')} [$method] code=$code len=${raw.toString().length} 有模型=$hasModel")
+                    arg("--dump")?.let { java.io.File(it).writeText(raw.toString()) }
+                    if (code != 0) println("     ${raw.toString().take(160)}")
+                }
+            }
+            "openv5" -> {
+                // 逐字复刻 openhongguo PlaybackV5Pairs/PlaybackV5Body（7.4.3.32 抓包，2026-11-18），
+                // 与 MobilePlayback 的差异在：完整 30 项 query（pv_player/compliance_status/player_so_load…）、
+                // dr_scene=player、device_level=1、version 74332。
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7296039582766746686"
+                val level = (arg("--level") ?: "1").toInt()
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .callTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .cookieJar(MemoryCookies())
+                    .build()
+                val identity = PlaybackDeviceSession().profile(client)
+                val q = linkedMapOf(
+                    "device_platform" to "android", "os" to "android", "ssmix" to "a",
+                    "cdid" to identity.values.getValue("cdid"),
+                    "channel" to "xiaomi_8662_64",
+                    "aid" to "8662", "app_name" to "novelread",
+                    "version_code" to "74332", "version_name" to "7.4.3.32",
+                    "manifest_version_code" to "74332", "update_version_code" to "74332",
+                    "resolution" to "1200*2670", "dpi" to "460",
+                    "device_type" to "23127PN0CC", "device_brand" to "Xiaomi",
+                    "language" to "zh", "os_api" to "34", "os_version" to "14",
+                    "ac" to "wifi", "host_abi" to "arm64-v8a",
+                    "dragon_device_type" to "phone", "pv_player" to "74332",
+                    "compliance_status" to "0", "need_personal_recommend" to "1",
+                    "player_so_load" to "1", "is_android_pad_screen" to "0",
+                    "iid" to identity.values.getValue("iid"),
+                    "device_id" to identity.values.getValue("device_id"),
+                )
+                val body = """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$vid"]},"dr_scene":"player"}"""
+                val gz = java.io.ByteArrayOutputStream().also { out ->
+                    java.util.zip.GZIPOutputStream(out).use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                }.toByteArray()
+                val signer = Signer()
+                for (host in listOf("https://api5-normal-sinfonlinea.fqnovel.com", "https://api5-normal-sinfonlineb.fqnovel.com")) {
+                    val signed = try { signer.signPlaybackV5(host + "/novel/player/multi_video_model/player/v1", q, gz) }
+                    catch (e: Exception) { println("  签名失败 ${e.message}"); continue }
+                    val req = okhttp3.Request.Builder().url(signed.url)
+                        .header("User-Agent", PassportClient.PLAYBACK_UA)
+                        .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+                        .header("x-xs-from-web", "0")
+                        .header("Content-Encoding", "gzip")
+                        .apply { ContentRepository.realSignedHeaders(signed.url, signed.headers, gz).forEach { (k, v) -> header(k, v) } }
+                        .post(okhttp3.RequestBody.create(null, gz))
+                        .build()
+                    try {
+                        client.newCall(req).execute().use { resp ->
+                            val text = resp.body?.string().orEmpty()
+                            println("  ${host.substringAfter("//").substringBefore('.')} HTTP=${resp.code} len=${text.length}")
+                            if (text.isBlank()) return@use
+                            val root = runCatching { org.json.JSONObject(text) }.getOrNull()
+                            val code = root?.optInt("code", -1) ?: -1
+                            println("     code=$code ${text.take(200)}")
+                            arg("--dump")?.let { java.io.File(it).writeText(text) }
+                        }
+                    } catch (e: Exception) { println("  失败 ${e.message}") }
+                }
+            }
+            "v5" -> {
+                // 按 openhongguo PlaybackV5Body / PlaybackBody 复刻：JSON body + gzip，这条是唯一活路。
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7296039582766746686"
+                val level = (arg("--level") ?: "1").toInt()
+                val v5Body = """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$vid"]},"dr_scene":"player"}"""
+                val legacyBody = """{"video_id":"$vid","biz_param":{"video_id_type":0,"need_all_video_definition":true,"video_platform":3}}"""
+                val only = arg("--only")
+                if (only != "legacy") {
+                    println("== V5 /novel/player/multi_video_model/player/v1 (level=$level)")
+                    runCatching { client.signedJson("/novel/player/multi_video_model/player/v1", v5Body) }
+                        .onSuccess { r ->
+                            val code = r.optInt("code", -1)
+                            println("   code=$code len=${r.toString().length} 有 url=${r.toString().contains("\"url\"")} 有 video_model=${r.toString().contains("video_model")}")
+                            arg("--dump")?.let { java.io.File(it).writeText(r.toString()) }
+                            if (code != 0) println("   ${r.toString().take(220)}")
+                            else if (!r.toString().contains("\"url\"")) println("   ${r.toString().take(300)}")
+                        }
+                        .onFailure { println("   失败 ${it.message}") }
+                }
+                if (only != "v5") {
+                    println("== legacy /novel/player/video_model/v1/")
+                    runCatching { client.signedJson("/novel/player/video_model/v1/", legacyBody) }
+                        .onSuccess { r ->
+                            val code = r.optInt("code", -1)
+                            println("   code=$code len=${r.toString().length} 有 url=${r.toString().contains("\"url\"")}")
+                            if (code != 0) println("   ${r.toString().take(220)}")
+                        }
+                        .onFailure { println("   失败 ${it.message}") }
+                }
+            }
+            "rotate" -> {
+                // 验证「一台匿名设备只给一次播放模型」：同一身份连打两次 + 每次换新身份。
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7486311576044047385"
+                val tries = (arg("--tries") ?: "3").toInt()
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .callTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .cookieJar(MemoryCookies())
+                    .build()
+                val signer = Signer()
+                fun once(identity: PlaybackDeviceSession.Profile): String = try {
+                    val model = MobilePlayback.model(vid, identity, client, signer, System.currentTimeMillis())
+                    if (model == null || !model.toString().contains("http")) "空" else "成功"
+                } catch (e: Exception) { "${e.javaClass.simpleName}" }
+                for (i in 1..tries) {
+                    val identity = PlaybackDeviceSession().profile(client)
+                    println("#$i 新身份 device=${identity.values["device_id"]} 首发=${once(identity)}")
+                    println("#$i 同身份复用=${once(identity)}")
+                }
+            }
+            "throttle" -> {
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val ps = PassportClient.fromJson(base.readText())
+                val videoId = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7486311576044047385"
+                val rounds = (arg("--rounds") ?: "4").toInt()
+                val gap = (arg("--gap") ?: "5000").toLong()
+                val cookieLine = ps.cookies.entries.joinToString("; ") { (k, v) -> "$k=$v" }
+                fun build(login: Boolean): ContentRepository {
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        .callTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                        .cookieJar(MemoryCookies())
+                        .apply {
+                            // 换出口 IP 用：判定「空响应」是身份级还是 IP 级（本机代理 7890）。
+                            arg("--proxy")?.let { p ->
+                                val host = p.substringBefore(':')
+                                val port = p.substringAfter(':', "7890").toIntOrNull() ?: 7890
+                                proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress(host, port)))
+                            }
+                            if (login) addInterceptor { chain ->
+                                val request = chain.request()
+                                val merged = listOf(request.header("Cookie").orEmpty(), cookieLine)
+                                    .filter { it.isNotBlank() }.joinToString("; ")
+                                val builder = request.newBuilder()
+                                if (merged.isNotBlank()) builder.header("Cookie", merged)
+                                if (ps.token.isNotBlank()) builder.header("X-Tt-Token", ps.token)
+                                chain.proceed(builder.build())
+                            }
+                        }
+                        .build()
+                    // 登录身份：设备 id 必须与下发 Cookie 的那台一致，否则服务端视同匿名。
+                    val session = if (login) PlaybackDeviceSession { _, _ ->
+                        DeviceRegister.Registered(ps.deviceId, ps.installId, cookies = ps.cookies)
+                    } else PlaybackDeviceSession()
+                    return ContentRepository(client, playbackSession = session)
+                }
+                val anon = build(false)
+                val auth = build(true)
+                fun probe(repo: ContentRepository): String = try {
+                    val model = repo.videoModel(videoId, 3)
+                    val ok = model.toString().contains("http")
+                    "成功 url=${ok}"
+                } catch (e: Exception) { "${e.javaClass.simpleName}: ${e.message?.take(40)}" }
+                // 冷却状态是进程级共享的，交替调用会 A 臂失败后把 B 臂直接挡在守卫上；
+                // 因此单臂模式一进程一请求，由外部脚本交替编排。
+                arg("--arm")?.let { arm ->
+                    if (args.contains("--debug")) ContentRepository.probeLog = { println("   · $it") }
+                    println("[$arm] ${probe(if (arm == "login") auth else anon)}")
+                    return
+                }
+                println("== 对照 id=$videoId rounds=$rounds gap=${gap}ms 登录态=${ps.loggedIn}")
+                var anonFail = 0
+                for (round in 1..rounds) {
+                    val a = probe(anon)
+                    val b = probe(auth)
+                    println("  #$round 匿名→ $a    |    登录→ $b")
+                    if (a.startsWith("成功").not()) anonFail++
+                    if (round < rounds) Thread.sleep(gap)
+                    if (anonFail >= 2 && round >= 2) { println("  （匿名连续失败，提前收敛，避免继续放大风控）"); break }
+                }
+            }
             "froms" -> {
                 val base = java.io.File(sessionFile).takeIf { it.exists() }
                     ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }

@@ -52,8 +52,8 @@ class ContentRepositoryTest {
             } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
-        // 2026-11-20 起取址首选 video_tab（真签名），fallback_api 模型的诊断路由标记来自 video_tab。
-        assertTrue(error.diagnostic.startsWith("route=video_tab|"))
+        // 2026-11-23 起取址首选 v5 player/v1，诊断里的路由标记随之变成 v5。
+        assertTrue(error.diagnostic.startsWith("route=v5|"))
         assertTrue(error.diagnostic.contains("video_list=video_1:bytevc2:1080:enc/enc;video_5:bytevc2:720:enc/empty"))
     }
 
@@ -115,7 +115,7 @@ class ContentRepositoryTest {
         """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
     // 2026-11-20 对齐官方 7.4.5.32（上游 573d75a）：v1 路径（无尾斜杠、无 dr_scene）+ mixed_video_id_map。
-    private val v5Path="/novel/player/multi_video_model/v1"
+    private val v5Path="/novel/player/multi_video_model/player/v1"
 
     @Test fun tabRouteSuppliesPlaybackModelWithASingleRequest() {
         val paths=mutableListOf<String>()
@@ -127,8 +127,8 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // 2026-11-20 起首选 video_tab（真签名）：一次就够，POST v1 不再先打。
-        assertEquals(listOf(tabPath),paths)
+        // 2026-11-23 起首选 v5 player/v1：一次就够，video_tab 不再先打。
+        assertEquals(listOf(v5Path),paths)
     }
 
     @Test fun tabFailureFallsBackToPostRoute() {
@@ -136,21 +136,21 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             when {
                 request.url.host=="example.com" -> videoInfo()
-                request.url.encodedPath==tabPath -> {
-                    paths += tabPath
-                    // tab 非空失败（有错误码、没有模型）：不触发冷却，允许 POST v1 兜底。
-                    """{"code":100001}"""
-                }
                 request.url.encodedPath==v5Path -> {
                     paths += v5Path
+                    // v5 非空失败（有错误码、没有模型）：不触发冷却，允许退回 video_tab 兜底。
+                    """{"code":100001}"""
+                }
+                request.url.encodedPath==tabPath -> {
+                    paths += tabPath
                     """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
                 }
                 else -> ""
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // tab 双主机预算用尽（100001 非空失败 continue）才落到 POST v1 兜底。
-        assertEquals(listOf(tabPath,tabPath,v5Path),paths)
+        // v5 给错误码才退到 video_tab；顺序不能反（反了会一直在死路上耗额度）。
+        assertEquals(listOf(v5Path,tabPath),paths)
     }
 
     @Test fun videoModelCanBeStringEncodedJson() {
@@ -195,10 +195,10 @@ class ContentRepositoryTest {
         assertTrue(first.remainingMs>0)
         // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
         // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却——所以是 1 次首发 + 2 次换身份。
-        assertEquals(listOf(tabPath,tabPath,tabPath),paths)
+        assertEquals(listOf(v5Path,v5Path,v5Path),paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
-        assertEquals(listOf(tabPath,tabPath,tabPath),paths)
+        assertEquals(listOf(v5Path,v5Path,v5Path),paths)
     }
 
     @Test fun blankResponseSucceedsOnSecondIdentity() {
@@ -216,8 +216,8 @@ class ContentRepositoryTest {
         val stream=repo.stream("123")
         assertTrue(stream.url.isNotBlank())
         // 换身份后仍在同一条首选路由上重试，不是改打别的路由。
-        assertEquals(tabPath,paths[0])
-        assertEquals(tabPath,paths[1])
+        assertEquals(v5Path,paths[0])
+        assertEquals(v5Path,paths[1])
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(
@@ -226,7 +226,7 @@ class ContentRepositoryTest {
                 .code(200).message("OK").body(respond(chain.request()).toResponseBody()).build()
         }.build(),clock,
         // 播放身份固定，测试不真的去注册设备。
-        PlaybackDeviceSession { DeviceRegister.Registered("1905892595382586","1905892595378490") }
+        PlaybackDeviceSession { _, _ -> DeviceRegister.Registered("1905892595382586","1905892595378490") }
     )
 
     private fun rankPayload(page: Int = 1, totalPages: Int = 2) = JSONObject()

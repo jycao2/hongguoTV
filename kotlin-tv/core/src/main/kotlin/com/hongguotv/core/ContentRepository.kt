@@ -1041,15 +1041,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         while (true) {
             val identity = playbackSession.profile(http)
             try {
-                // 2026-11-20 对齐上游 0.1.33：GET video_tab（真签名）是首选，POST v1 只是兜底——
-                // 官方对 v5 占位头的 POST 一律静默丢弃，先打它只会白白触发冷却。
-                val tab = tabVideoModel(id, identity, level, preferAlt)
-                if (tab != null) {
-                    clearPlaybackCooldown()
-                    rememberRoute(tab)
-                    probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
-                    return tab
-                }
+                // 2026-11-23：v5 `player/v1` 是唯一活路。此前把 `video_tab` 放前面，
+                // 它空响应后立刻换身份/抬冷却，v5 永远轮不到——顺序错了等于一直在打死路。
                 val model = MobilePlayback.model(id, identity, http, signer, clock())
                 if (model != null) {
                     clearPlaybackCooldown()
@@ -1057,6 +1050,19 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                     rememberRoute(routed)
                     probeLog?.invoke("v5 命中 id=$id")
                     return routed
+                }
+                // v5 给了非空失败（错误码/解析不到模型）才退回老 tab；它的空响应不再放大成全局冷却。
+                val tab = try {
+                    tabVideoModel(id, identity, level, preferAlt)
+                } catch (blank: EmptyPlaybackResponseException) {
+                    probeLog?.invoke("tab 兜底空响应，忽略")
+                    null
+                }
+                if (tab != null) {
+                    clearPlaybackCooldown()
+                    rememberRoute(tab)
+                    probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
+                    return tab
                 }
                 // 两条路由都没给模型：等同本台设备额度用尽。
                 throw EmptyPlaybackResponseException()

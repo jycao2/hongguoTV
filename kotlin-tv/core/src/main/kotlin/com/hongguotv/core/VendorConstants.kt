@@ -15,34 +15,44 @@ object VendorConstants {
     var installDeviceId: String = randomInstallId()
     var processNonce: String = randomNonce()
     var processStarted: Long = System.currentTimeMillis()
+    /** 客户端版本：注册与取流必须同源（var 便于签名 golden 测试固定回旧样本）。 */
+    var versionCode: String = "74332"
+    var versionName: String = "7.4.3.32"
     fun regenerate() { installIid = randomInstallId(); installDeviceId = randomInstallId(); processNonce = randomNonce(); processStarted = System.currentTimeMillis() }
     private fun randomInstallId(): String = buildString(16) { append('1'); repeat(15) { append(Random.nextInt(10)) } }
     private fun randomNonce(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(Random.nextBytes(18))
+    /**
+     * 设备画像：注册与播放必须完全一致（openhongguo v0.4.0 抓包口径，2026-11-18）。
+     *
+     * 2026-11-23 复盘：此前注册走 7.3.9.32 + 「AOSP on Intel Platform」模拟器画像，
+     * 播放却发 7.4.5.32 + PGT-AN10，同一请求里出现两套版本/两套机型——服务端一律回 200+0。
+     * 现在统一成 7.4.3.32 + Xiaomi 23127PN0CC（Android 14 / 1200*2670 / 460dpi / xiaomi 渠道）。
+     */
     val device: Map<String, String>
         get() = linkedMapOf(
         "iid" to installIid,
         "device_id" to installDeviceId,
         "ac" to "wifi",
-        "channel" to "update_64",
+        "channel" to "xiaomi_8662_64",
         "aid" to "8662",
         "app_name" to "novelread",
-        "version_code" to "71332",
-        "version_name" to "7.1.3.32",
+        "version_code" to versionCode,
+        "version_name" to versionName,
         "device_platform" to "android",
         "os" to "android",
         "ssmix" to "a",
-        "device_type" to "25053RT47C",
-        "device_brand" to "Redmi",
+        "device_type" to "23127PN0CC",
+        "device_brand" to "Xiaomi",
         "language" to "zh",
-        "os_api" to "36",
-        "os_version" to "16",
-        "manifest_version_code" to "71332",
-        "resolution" to "1280*2772",
-        "dpi" to "520",
-        "update_version_code" to "71332",
+        "os_api" to "34",
+        "os_version" to "14",
+        "manifest_version_code" to versionCode,
+        "resolution" to "1200*2670",
+        "dpi" to "460",
+        "update_version_code" to versionCode,
         "host_abi" to "arm64-v8a",
         "dragon_device_type" to "phone",
-        "pv_player" to "71332",
+        "pv_player" to versionCode,
         "compliance_status" to "0",
         "need_personal_recommend" to "1",
         "player_so_load" to "1",

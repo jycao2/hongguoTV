@@ -18,10 +18,13 @@ class PlaybackDeviceRegistrationException(cause: Throwable? = null) :
  * 平台按「注册过的 device_id + install_id」放行播放接口，未注册设备的播放请求只会拿到空响应。
  */
 class PlaybackDeviceSession(
-    private val register: (OkHttpClient) -> DeviceRegister.Registered? = { http ->
-        val body = DeviceRegister.payload(VendorConstants.device)
+    // cdid 必须注册与取流同名：注册 body 里的 cdid 和播放 query 里的 cdid 分开随机生成，
+    // 会被服务端当成两台不同设备（2026-11-23 复盘）。
+    private val register: (OkHttpClient, String) -> DeviceRegister.Registered? = { http, cdid ->
+        val device = VendorConstants.device + ("cdid" to cdid)
+        val body = DeviceRegister.payload(device)
         val request = Request.Builder().url(DeviceRegister.url())
-        DeviceRegister.headers(body, VendorConstants.device).forEach { (key, value) ->
+        DeviceRegister.headers(body, device).forEach { (key, value) ->
             request.header(key, value)
         }
         request.post(body.toRequestBody("application/octet-stream".toMediaType()))
@@ -47,7 +50,7 @@ class PlaybackDeviceSession(
         if (Thread.currentThread().isInterrupted) throw InterruptedIOException("播放请求已取消")
         val device =
             try {
-                register(http) ?: throw PlaybackDeviceRegistrationException()
+                register(http, cdid) ?: throw PlaybackDeviceRegistrationException()
             } catch (error: InterruptedIOException) {
                 throw error
             } catch (error: IOException) {

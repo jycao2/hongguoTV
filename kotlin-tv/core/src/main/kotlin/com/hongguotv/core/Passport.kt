@@ -265,6 +265,9 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
         const val VERSION_CODE = "73532"
         const val UA =
             "com.phoenix.read/$VERSION_CODE (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+        /** 播放请求的 Cronet UA（openhongguo `PlaybackUserAgent`，7.4.3.32 抓包口径）。 */
+        const val PLAYBACK_UA =
+            "com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:8d40f833 2026-03-03 QuicVersion:21ac1950 2025-11-18)"
         private val KDF_SALT = hex("4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58")
         private val TT_MAGIC = byteArrayOf(0x74, 0x63, 0x05, 0x10, 0x00, 0x00)
 
@@ -523,14 +526,29 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
     }
 
     /** 携会话发签名 GET（plan/v1 等登录态接口）。[host] 缺省为 passport 域，内容接口传 sinfonline 域。 */
-    fun signedGet(path: String, extraQuery: Map<String, String> = emptyMap(), host: String = API_BASE): org.json.JSONObject {
+    fun signedGet(path: String, extraQuery: Map<String, String> = emptyMap(), host: String = API_BASE): org.json.JSONObject =
+        signedRequest("GET", path, extraQuery, emptyMap(), host)
+
+    /**
+     * 通用签名请求：query 参与 F13/Gorgon/Medusa 的 query 段，form 编码为 body 参与其 body 段。
+     * video_detail 这类老播放接口疑似只吃 POST，用 [form] 传业务参数。
+     */
+    fun signedRequest(
+        method: String,
+        path: String,
+        extraQuery: Map<String, String> = emptyMap(),
+        form: Map<String, String> = emptyMap(),
+        host: String = API_BASE,
+    ): org.json.JSONObject {
         val stamp = System.currentTimeMillis()
+        val body = if (form.isEmpty()) ByteArray(0) else Signer.encode(form).toByteArray(Charsets.UTF_8)
         val base = queryBase(includeDevice = true) + extraQuery
-        val (query, signedHeaders) = PassportSign.sign(base, ByteArray(0), stamp, session.deviceId)
-        val request = okhttp3.Request.Builder()
-            .url("$host$path?$query")
-            .get()
+        val (query, signedHeaders) = PassportSign.sign(base, body, stamp, session.deviceId)
+        val builder = okhttp3.Request.Builder().url("$host$path?$query")
+        if (body.isEmpty()) builder.get() else builder.post(okhttp3.RequestBody.create(null, body))
+        val request = builder
             .apply {
+                if (body.isNotEmpty()) header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 header("User-Agent", UA)
                 header("Accept", "application/json")
                 header("X-XS-From-Web", "0")
@@ -540,6 +558,56 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
                 header("X-Tt-Store-Region", "cn")
                 header("X-Tt-Store-Region-Src", "did")
                 cookies["store-region"]?.let { header("X-Tt-Store-Region", it) }
+                if (session.loggedIn) header("X-Tt-Token", session.token)
+                for ((name, value) in signedHeaders) header(name, value)
+                val cookieHeader = cookies.entries.filter { it.key != "install_id" }.joinToString("; ") { "${it.key}=${it.value}" }
+                if (cookieHeader.isNotEmpty()) header("Cookie", cookieHeader)
+            }
+            .build()
+        return http.newCall(request).execute().use { resp ->
+            resp.headers("Set-Cookie").forEach { line ->
+                val pair = line.substringBefore(';')
+                val name = pair.substringBefore('=').trim()
+                val value = pair.substringAfter('=', "").trim()
+                if (name.isNotEmpty() && value.isNotEmpty()) cookies[name] = value
+            }
+            resp.header("X-Tt-Token")?.takeIf { it.isNotBlank() }?.let { session.token = it }
+            val text = resp.body?.string().orEmpty()
+            check(text.isNotBlank()) { "空响应（HTTP ${resp.code}）" }
+            org.json.JSONObject(text)
+        }
+    }
+
+    /**
+     * 取流专用：JSON body（默认 gzip 压缩），对齐 openhongguo `PlaybackV5Body`。
+     * 服务端对播放接口的 body 形态卡得很死——form 编码一律 200+0。
+     */
+    fun signedJson(
+        path: String,
+        json: String,
+        extraQuery: Map<String, String> = emptyMap(),
+        host: String = CONTENT_HOST,
+        compress: Boolean = true,
+        ua: String = PLAYBACK_UA,
+    ): org.json.JSONObject {
+        val stamp = System.currentTimeMillis()
+        val plain = json.toByteArray(Charsets.UTF_8)
+        val body = if (!compress) plain else java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.GZIPOutputStream(out).use { it.write(plain) }
+        }.toByteArray()
+        val (query, signedHeaders) = PassportSign.sign(queryBase(includeDevice = true) + extraQuery, body, stamp, session.deviceId)
+        val request = okhttp3.Request.Builder()
+            .url("$host$path?$query")
+            .post(okhttp3.RequestBody.create(null, body))
+            .apply {
+                header("User-Agent", ua)
+                header("Content-Type", "application/json; charset=utf-8")
+                if (compress) header("Content-Encoding", "gzip")
+                header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+                header("x-xs-from-web", "0")
+                header("X-SS-DP", "8662")
+                header("X-Tt-Store-Region", "cn")
+                header("X-Tt-Store-Region-Src", "did")
                 if (session.loggedIn) header("X-Tt-Token", session.token)
                 for ((name, value) in signedHeaders) header(name, value)
                 val cookieHeader = cookies.entries.filter { it.key != "install_id" }.joinToString("; ") { "${it.key}=${it.value}" }

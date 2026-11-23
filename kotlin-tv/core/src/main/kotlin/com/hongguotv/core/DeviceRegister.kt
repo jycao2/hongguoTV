@@ -75,20 +75,23 @@ object DeviceRegister {
     fun payload(device: Map<String, String>, now: Long = System.currentTimeMillis()): ByteArray {
         fun value(key: String, fallback: String) =
             device[key]?.takeIf { it.isNotBlank() } ?: fallback
+        // 注册版本必须与取流 query 的 version_code 一致，否则同一台设备出现两套客户端画像。
+        val code = value("version_code", "74332").toIntOrNull() ?: 74332
+        val name = value("version_name", "7.4.3.32")
         val json = org.json.JSONObject()
         json.put("magic_tag", "ss_app_log")
         json.put(
             "header",
             org.json.JSONObject().apply {
                 put("display_name", "红果免费短剧")
-                put("update_version_code", 73932)
-                put("manifest_version_code", 73932)
-                put("app_version_minor", "7.3.9.32")
+                put("update_version_code", code)
+                put("manifest_version_code", code)
+                put("app_version_minor", name)
                 put("aid", 8662)
                 put("channel", value("channel", "69310258a"))
                 put("package", "com.phoenix.read")
-                put("app_version", "7.3.9.32")
-                put("version_code", 73932)
+                put("app_version", name)
+                put("version_code", code)
                 put("sdk_version", "3.7.0-rc.34-fanqie-xiaoshuo")
                 put("sdk_target_version", 29)
                 put("git_hash", "3a88f4e")
@@ -96,9 +99,9 @@ object DeviceRegister {
                 put("os", "Android")
                 put("os_version", value("os_version", "12"))
                 put("os_api", value("os_api", "32").toIntOrNull() ?: 32)
-                put("device_model", value("device_type", "AOSP on Intel Platform"))
+                put("device_model", value("device_type", "23127PN0CC"))
                 put("device_brand", value("device_brand", "SAMSUNG"))
-                put("device_manufacturer", value("device_brand", "Intel"))
+                put("device_manufacturer", value("device_brand", "Xiaomi"))
                 put("cpu_abi", value("host_abi", "arm64-v8a"))
                 put("release_build", "b5e187f")
                 put("density_dpi", value("dpi", "360").toIntOrNull() ?: 360)
@@ -111,7 +114,7 @@ object DeviceRegister {
                 put("carrier", "CHINA MOBILE")
                 put("mcc_mnc", "46000")
                 put("rom", "eng.root.20231116.160340")
-                put("rom_version", value("rom_version", "W528JS release-keys"))
+                put("rom_version", value("rom_version", "UKQ1.230804.001 release-keys"))
                 put("cdid", value("cdid", UUID.randomUUID().toString()))
                 // sig_hash 是安装包签名指纹；平台不校验与真实包一致，但缺了会拒。
                 put("sig_hash", "56a962410c494bbaf0b58dba20cae56f")

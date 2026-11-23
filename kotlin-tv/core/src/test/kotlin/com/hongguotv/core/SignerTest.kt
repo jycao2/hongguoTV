@@ -10,6 +10,9 @@ class SignerTest {
         VendorConstants.installDeviceId = "1905892595378490"
         VendorConstants.processNonce = "Ai6svO3PyrwDOUSmO6ZcResxu"
         VendorConstants.processStarted = 1728388016635L
+        // golden 向量按 7.1.3.32 生成；生产已切到 7.4.3.32，这里固定回样本版本。
+        VendorConstants.versionCode = "71332"
+        VendorConstants.versionName = "7.1.3.32"
     }
     @Test fun matchesPinnedJavaScriptOracleAcrossTimestampVariants() {
         val rows = JSONArray(javaClass.getResource("/signing.json")!!.readText())
