@@ -680,6 +680,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         ladderCache[id]?.takeIf { it.expireAt>now && it.tiers.isNotEmpty() }?.let { return it.tiers }
         guardPlaybackCooldown()
         val model=videoModel(id,quiet=quiet)
+        // 内联档位（7.4.5.32 现行 App）：模型自带全部直链，省掉 fallback_api 那一发。
+        inlineStreams(model,1080)?.let { tiers ->
+            val now2=System.currentTimeMillis()/1000
+            val expire=model.optLong("url_expire").takeIf { it>now2 } ?: (now2+3600)
+            ladderCache[id]=StreamLadder(id,tiers,expire)
+            return tiers
+        }
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -719,6 +726,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     }
 
     private fun streamFromModel(model: JSONObject, maxQuality: Int): StreamInfo {
+        // 7.4.5.32 现行 App 把全部档位直链内联在模型的 `video_list` 数组里（带 video_meta），
+        // 一次请求即可起播，无需再打 fallback_api 那第二发。
+        inlineStreams(model, maxQuality)?.let { tiers ->
+            return tiers.lastOrNull { it.qNum in 1..maxQuality }
+                ?: tiers.lastOrNull { it.qNum>0 }
+                ?: tiers.first()
+        }
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -743,6 +757,36 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             // 并带上该模型来源路由，定位降级模型由哪条接口下发。
             "route="+model.optString(ROUTE_KEY).ifEmpty { "unknown" }+" lvl="+model.optString(LEVEL_KEY).ifEmpty { "?" }+" video_list="+compactVideoList(videoList),
             bvc2Stream)
+    }
+    /** 模型内联 `video_list`（**数组**形态，7.4.5.32 现行 App 返回）：每项带 `video_meta`
+     *  （codec_type / vheight / definition）与 `main_url`，直链可直接下载；
+     *  但内容是 CENC 加密（stsd=encv/sinf，cenc-aes-ctr），密钥在行内 `encrypt_info.spade_a`，
+     *  由 [MediaCrypto.deriveKey] 派生、[RemoteVideo] 在数据层逐样本解密（bytevc2 兜底同机制）。
+     *  按清晰度从高到低返回；bytevc2 不在此列（电视解不了，交给老的 fallback 路径处理）。
+     *  老 7.4.3.32 形态的 `video_list` 是按档位分组的对象，走 fallback_api 路径。 */
+    private fun inlineStreams(model: JSONObject, maxQuality: Int): List<StreamInfo>? {
+        val array=model.optJSONArray("video_list") ?: return null
+        if(array.length()==0) return null
+        val tiers=ArrayList<StreamInfo>(array.length())
+        for(i in 0 until array.length()) {
+            val row=array.optJSONObject(i) ?: continue
+            val url=cleanUrl(row.str("main_url"))
+            if(!url.startsWith("http")) continue
+            val meta=row.optJSONObject("video_meta")
+            val codec=(meta?.str("codec_type") ?: row.str("codec_type")).lowercase()
+            if(codec in setOf("bytevc2","bvc2")) continue
+            val height=meta?.optInt("vheight",0)?.takeIf { it>0 } ?: row.optInt("vheight",0)
+            val definition=meta?.str("definition").orEmpty()
+            val num=qualityNumber(definition.ifEmpty { if(height>0) height.toString() else "" })
+            val label=if(num>0) "${num}P" else "自动"
+            // spade_a 在 encrypt_info 里；缺了它就是密文直喂解码器（Invalid NAL length），宁可少一档。
+            val spade=row.optJSONObject("encrypt_info")?.str("spade_a").orEmpty().ifEmpty { row.str("spade_a") }
+            val key=spade.takeIf { it.isNotEmpty() }?.let { runCatching { MediaCrypto.deriveKey(it) }.getOrNull() }
+            tiers+=StreamInfo(url,key,if(num>maxQuality) "$label（兼容资源）" else label,codec,num)
+        }
+        if(tiers.isEmpty()) return null
+        // 升序（低 → 高）：与 [StreamLadder] 的既有约定一致，调用方用 lastOrNull 取最高可用档。
+        return tiers.sortedBy { it.qNum }
     }
     /** 从一条 video_list 记录解析出可下载的直链与 CENC key（兼容档与 bytevc2 共用）。 */
     private fun makeStream(row: Triple<Int,String,JSONObject>, info: JSONObject, maxQuality: Int): StreamInfo {
@@ -999,27 +1043,30 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             val routeBudget = resets == 0
             try {
                 var blank = false
+                // 2026-11-23 22:45 起首选现行 App 协议（上游 0.16.14 验收）：reading.snssdk.com +
+                // preload/v1 + dr_scene=preload + device_level=2 + Medusa F21=312。这一发就是正常工作的一发。
                 var model: JSONObject? = try {
-                    MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH)
+                    MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH,
+                        currentApp = true)
                 } catch (blanked: EmptyPlaybackResponseException) {
                     blank = true
-                    probeLog?.invoke("player/v1 dl=4 空响应")
+                    probeLog?.invoke("preload/v1 空响应")
                     null
                 }
+                if (model != null) model = model.put(ROUTE_KEY, "v5|preload")
                 if (blank) {
-                    probeLog?.invoke("player/v1 空响应 → 转 video_tab 备用通道（不扫其它端点）")
+                    probeLog?.invoke("preload/v1 空响应 → 转 video_tab 备用通道（不扫其它端点）")
                 }
+                // 现行协议给了非空失败（错误码/解析不到模型）才值得回退老 7.4.3.32 形态一发。
                 if (!blank && model == null && routeBudget) {
-                    for ((route, deviceLevel, label) in ESCALATION_ROUTES) {
-                        model = try {
-                            MobilePlayback.model(id, identity, http, signer, clock(), deviceLevel, route)
-                        } catch (blanked: EmptyPlaybackResponseException) {
-                            blank = true
-                            probeLog?.invoke("$label 空响应")
-                            null
-                        }
-                        if (model != null || blank) break
+                    model = try {
+                        MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH)
+                    } catch (blanked: EmptyPlaybackResponseException) {
+                        blank = true
+                        probeLog?.invoke("player/v1 空响应")
+                        null
                     }
+                    if (model != null) model = model.put(ROUTE_KEY, "v5|player")
                 }
                 // video_tab 是主接口空响应下唯一确认可用的通道，每台身份都给它 1 发——
                 // 命中就不必再换一台设备（换设备还得再打 2 发）。

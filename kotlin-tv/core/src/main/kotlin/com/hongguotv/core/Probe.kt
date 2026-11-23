@@ -576,6 +576,26 @@ private fun mainPassport(args: Array<String>) {
                     println("RESULT 失败 ${e.javaClass.simpleName}: ${e.message} ms=${System.currentTimeMillis()-started}")
                 }
             }
+            "v5app" -> {
+                // 2026-11-23 22:45 上游 0.16.14 配方验证：Medusa F21 由 377 改 312，请求走
+                // reading.snssdk.com + preload/v1 + dr_scene=preload + device_level=2 + 平台默认 UA。
+                // 单发一次，不换身份、不重试。
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7709197486451084312"
+                val identity = PlaybackDeviceSession().profile(http)
+                println("== v5app video=$vid device_id=${identity.values["device_id"]} device=${identity.values["device_type"]} ver=7.4.5.32")
+                val started = System.currentTimeMillis()
+                runCatching {
+                    MobilePlayback.model(vid, identity, http, Signer(), System.currentTimeMillis(), 4,
+                        MobilePlayback.PATH, "", "", true)
+                }.onSuccess { model ->
+                    val list = model?.optJSONObject("video_list")
+                    val codecs = list?.keys()?.asSequence()?.mapNotNull { list.optJSONObject(it)?.optString("codec_type") }?.toList()
+                    println("RESULT 有模型=${model != null} videoList=${list?.length() ?: 0} codecs=$codecs ms=${System.currentTimeMillis()-started}")
+                    arg("--dump")?.let { java.io.File(it).writeText(model.toString()) }
+                }.onFailure { e ->
+                    println("RESULT 失败 ${e.javaClass.simpleName}: ${e.message} ms=${System.currentTimeMillis()-started}")
+                }
+            }
             "v5play" -> {
                 // 2026-11-23 22:15 实验：真 v5 头（ss-stub/khronos/helios/medusa）+ 登录账号 Cookie，单发一次。
                 // 要判定的假设：官方 APK 能播只是因为它带账号——匿名请求没有计次主体，服务端给空最省事。

@@ -21,6 +21,10 @@ import org.json.JSONObject
  */
 internal object MobilePlayback {
     const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
+    /** 7.4.5.32 现行 App 协议（上游 0.16.14 实网验收）：默认落在 `reading.snssdk.com`，
+     *  端点 `preload/v1`，`dr_scene=preload`、`device_level=2`。 */
+    const val APP_HOST = "https://reading.snssdk.com"
+    const val PRELOAD_PATH = "/novel/player/multi_video_model/preload/v1"
     /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1`。 */
     const val PATH = "/novel/player/multi_video_model/player/v1"
     /** 平铺路径（上游 `FlatPath`）：与 [PATH] 互为轮换，服务端反向切换时靠它兜住。 */
@@ -70,6 +74,30 @@ internal object MobilePlayback {
         )
     }
 
+    /** 现行 App（7.4.5.32）的精简 query：上游 0.16.14 实网通过的那一套。
+     *  与老 28 项相比去掉了 resolution/dpi/dragon_device_type/pv_player/compliance_status/
+     *  need_personal_recommend/player_so_load/is_android_pad_screen；设备字段仍取注册画像，
+     *  保证 query 与 Medusa 里的设备串是同一条指纹。 */
+    private fun appQuery(identity: PlaybackDeviceSession.Profile): Map<String, String> {
+        val v = identity.values
+        fun value(key: String, fallback: String) = v[key]?.takeIf { it.isNotBlank() } ?: fallback
+        return linkedMapOf(
+            "aid" to "8662", "app_name" to "novelread",
+            "version_code" to "74532", "version_name" to "7.4.5.32",
+            "update_version_code" to "74532", "manifest_version_code" to "74532",
+            "os" to "android", "ssmix" to "a",
+            "channel" to value("channel", "update_64"),
+            "device_platform" to "android",
+            "device_type" to value("device_type", "25053RT47C"),
+            "device_brand" to value("device_brand", "Redmi"),
+            "os_version" to value("os_version", "16"), "os_api" to value("os_api", "36"),
+            "ac" to "wifi", "language" to "zh",
+            "host_abi" to value("host_abi", "arm64-v8a"),
+            "iid" to v.getValue("iid"), "cdid" to v.getValue("cdid"),
+            "device_id" to v.getValue("device_id"),
+        )
+    }
+
     /** 返回 `video_model` 对象；调用方复用既有的 `modelOf`/`streamFromModel` 解析与解码逻辑。
      *  200 + 0 字节是站方的行为风控信号，原样抛 [EmptyPlaybackResponseException] 让上层触发全局冷却；
      *  其余问题一律返回 null（由上层决定是否走一次 video_tab 兜底），线程被取消时原样抛出。 */
@@ -86,6 +114,9 @@ internal object MobilePlayback {
         cookie: String = "",
         /** 账号登录 token（`X-Tt-Token` 头）。官方客户端取址同时带 Cookie 与该头，缺一都可能被判匿名。 */
         token: String = "",
+        /** true = 走 7.4.5.32 现行 App 协议：`reading.snssdk.com` + `preload/v1` + `dr_scene=preload`
+         *  + `device_level=2` + 平台默认 UA（上游 0.16.14 验收形态）。 */
+        currentApp: Boolean = false,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map。
@@ -93,20 +124,23 @@ internal object MobilePlayback {
         //  1) device_level 固定 4（我们曾填 1）；4 空响应时由上层升到 5 再试同一身份。
         //  2) PLAYER 直连**不带 dr_scene**——只有 PRELOAD 请求才带 dr_scene="preload"，
         //     之前照抄 openhongguo 抓包加的 dr_scene="player" 会被判成无效请求。
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":$deviceLevel,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
+        val level = if (currentApp) 2 else deviceLevel
+        val scene = if (currentApp) ""","dr_scene":"preload"""" else ""
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}$scene}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
-        val signed = signer.signPlaybackV5(HOST + path, query(identity), body)
+        val endpoint = if (currentApp) APP_HOST + PRELOAD_PATH else HOST + path
+        val signed = signer.signPlaybackV5(endpoint, if (currentApp) appQuery(identity) else query(identity), body)
         // 2026-11-23 22:10 关键修正：V5 播放就是「Medusa v5 那一代」，头集合是三/四头
         //   x-ss-stub + x-khronos + x-helios + x-medusa（GET video_tab 时无 stub）。
         // 此前这里调 realSignedHeaders 把它们全当「占位头」过滤掉，换成了上一代 551 的
         //   x-gorgon/x-ladon/x-argus/x-ss-req-ticket —— 服务端要的签名我们根本没发出去，
         // 这是 200+0 的直接原因（PhoenixReadApi 2026-11-23 9ba235c 实测口径）。
         val request = Request.Builder().url(signed.url)
-            .header("User-Agent", UA)
+            .header("User-Agent", if (currentApp) System.getProperty("http.agent", "okhttp/4.12.0") else UA)
             .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
-            .header("X-XS-From-Web", "0")
-            .header("x-ss-dp", "8662")
-            .header("lc", "101")
+            .apply { if (!currentApp) header("X-XS-From-Web", "0") }
+            .apply { if (!currentApp) header("x-ss-dp", "8662") }
+            .apply { if (!currentApp) header("lc", "101") }
             .header("Content-Encoding", "gzip")
             .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
             .apply { if (token.isNotBlank()) header("X-Tt-Token", token) }

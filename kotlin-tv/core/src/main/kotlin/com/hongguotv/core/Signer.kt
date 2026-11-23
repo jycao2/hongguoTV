@@ -186,7 +186,7 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
             f(7,version),f(8,"v04.10.03-ml-android"),f(9,0x040a0300,"sint"),
             f(10,flags),f(12,ts,"sint"),f(13,f13),f(14,query.copyOf(6)),
             f(15,proto(f(1,1,"sint"),f(2,1,"sint"),f(3,1,"sint"),f(5,1,"sint"))),
-            f(17,ts,"sint"),f(20,"none"),f(21,377,"sint"),f(23,env),
+            f(17,ts,"sint"),f(20,"none"),f(21,V5Constants.field21,"sint"),f(23,env),
             f(24,"""{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}"""),
         )
         val nonce = rand()
