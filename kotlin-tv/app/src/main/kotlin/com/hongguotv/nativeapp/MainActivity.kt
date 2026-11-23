@@ -2443,7 +2443,22 @@ class MainActivity: Activity() {
             val revealOnce={ if(!revealed) { revealed=true; revealFreeFeed(startedAt) } }
             work({ repository.detailLite(series.id) },{ d ->
                 recommendDetails[series.id]=d
-                android.util.Log.i("HongguoTV","FreeFeed first detail ready after ${android.os.SystemClock.elapsedRealtime()-startedAt}ms")
+                // 揭幕前把本部续播集的地址也备好（用户 2026-11-23：首次进入偏慢）：
+                // 过渡动画还剩几百毫秒，正好并行打这一发取址；起播时 playEpisode 命中
+                // recommendStreams 直接 prepare，省掉一次串行的取址往返（约 0.5~1 秒）。
+                val progress=library.progress(series.id)
+                val target=ResumePlayback.target(d.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
+                val episode=d.episodes.getOrNull(target.index)
+                val fresh=episode!=null && recommendStreams[episode]?.let { android.os.SystemClock.elapsedRealtime()-it.first<10*60_000L }==null
+                if(fresh) {
+                    val maxQ=library.maxQuality; val wanted=episode!!
+                    prefetchWorker.submit {
+                        runCatching { repository.stream(wanted,maxQ,quiet=true) }.getOrNull()?.let {
+                            recommendStreams[wanted]=android.os.SystemClock.elapsedRealtime() to it
+                        }
+                    }
+                }
+                android.util.Log.i("HongguoTV","FreeFeed first detail ready after ${android.os.SystemClock.elapsedRealtime()-startedAt}ms streamPrefetch=${fresh}")
                 revealOnce()
             },{ _ -> revealOnce() })
             // 兜底：详情 3.5 秒还没回来也照样揭幕，让 openDetail 自己的加载顶上，动画不至于一直盖着
@@ -2546,7 +2561,7 @@ class MainActivity: Activity() {
         val cached=recommendDetails[series.id]
         val open={ if(cached!=null) openDetail(series,resume=true,preloaded=cached) else openDetail(series,resume=true) }
         // 换剧整页重建，中间一样会黑：先冻住当前画面，新剧首帧渲染出来才撤（用户 2026-11-19）
-        if(screen=="player" && player!=null && playerView!=null) freezeFrame(loadingTip) { open() }
+        if(screen=="player" && player!=null && playerView!=null) freezeFrame(seriesLoadingTip) { open() }
         else open()
     }
 
@@ -4275,6 +4290,8 @@ class MainActivity: Activity() {
     }
     /** 过渡层转圈下的小字：只写「正在载入中...」，剧名/集数不重复报（用户 2026-11-20）。 */
     private val loadingTip="正在载入中..."
+    /** 换剧专用文案（用户 2026-11-23）：上下切剧与换集区分开，让用户知道是在换一部新剧。 */
+    private val seriesLoadingTip="新剧载入中..."
     /** 统一的 MediaSource 构建：融合开关打开时挂 Vc2ExtractorsFactory（嗅探式接管 bvc2），
      *  关闭时与改造前完全一致（单参 Factory + 默认 Mp4Extractor）。 */
     private fun mediaSourceFor(remote: RemoteVideo,mediaId: String): MediaSource {
@@ -4332,19 +4349,39 @@ class MainActivity: Activity() {
             }
         }
         val prefetched=if(position==0L && !recovering) preparedNext.take("$requestedId:$maxQuality") else null
-        val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
+        // 换剧专用：预取阶段已经把下一部首集连首块都拉好了（recommendVideos，10 分钟 TTL）
+        val readyVideo=recommendVideos.remove(requestedId)?.let { cached ->
+            if(android.os.SystemClock.elapsedRealtime()-cached.first<10*60_000L) cached.second
+            else { runCatching { cached.second.close() }; null }
+        }
+        // 队列附着：把备好的流直接挂进现有播放器队列再 seek 过去，解码器不重建。
+        // 实测（TCL，2026-11-23）：stop+clear 重建换剧首帧 2.9 秒；剧内无缝切集（同为队列切换）
+        // 只要 155ms——差距全在解码器重建上。挂载路径对齐 seamlessNext。
+        val queueAttach=readyVideo!=null && reuse && player!=null && !vc2Active && !recovering
+        if(!queueAttach && prefetched!=null && readyVideo!=null) {
+            // 下一集预挂的流优先级更高：把换剧预取的连接就地还回去，别白占一个
+            runCatching { readyVideo.close() }
+        }
+        if(queueAttach && prefetched!=null) {
+            // 换剧以换剧预取为准：预取的下一集就地回收
+            runCatching { prefetched.close() }
+            closeTransport(prefetchHttp); prefetchHttp=null
+        }
+        val claimedHttp=if(prefetched!=null && !queueAttach) prefetchHttp.also { prefetchHttp=null } else null
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews(); stopDanmaku()
+        // 旧集的流先记下来：队列附着路径要等新集挂上、旧 item 摘掉之后再关（见挂载处）
+        val outgoingVideo=if(reuse) video else null
         if(reuse) {
             cancelRecovery(); cancelPrefetch(); tvTools.close()
             // 自由刷剧用纯色底（用户 2026-11-18：不要海报当背景），换剧时不必换底
             episodePanel?.dismiss(); episodePanel=null; speedDialog?.dismiss(); speedDialog=null
             playerListener?.let { player?.removeListener(it) }; playerListener=null
-            // 保留 stop+clear：实测不 stop（直接 setMediaSource 替换）并不能复用硬解，
-            // 首帧时间几乎没变化（1199ms vs 1166ms），反而有旧音轨残留风险。
-            // 真正的快路径是 seamlessNext()——下一集预挂好时根本不走这里。
-            if(!preservePlayer) { player?.stop(); player?.clearMediaItems() }
+            // 队列附着时不 stop/clear（解码器保住），旧集的流也还托着屏幕上这帧：
+            // 先不关，等新集挂上、旧 item 摘掉之后再收（见下方 queueAttach 挂载处）。
+            if(!queueAttach && !preservePlayer) { player?.stop(); player?.clearMediaItems() }
             video?.let { android.util.Log.w("HongguoTV","Prefetch episode=${episodeIndex+1} ${it.stats()}") }
-            video?.close(); video=null; closeTransport(playbackHttp); playbackHttp=null
+            if(!queueAttach) outgoingVideo?.close()
+            video=null; closeTransport(playbackHttp); playbackHttp=null
             teardownVc2(); vc2Failed=false
             main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         } else releasePlayer()
@@ -4475,13 +4512,7 @@ class MainActivity: Activity() {
         // 推荐 feed 预取过首集地址就直接用（10 分钟 TTL，地址带时效）
         val warmStream=recommendStreams[requestedId]
             ?.takeIf { android.os.SystemClock.elapsedRealtime()-it.first<10*60*1000L }?.second
-        // 换剧专用：预取阶段已经把首块拉好了，这里直接拿来用，不再现场下载（真机实测省 500~900ms）
-        val readyVideo=recommendVideos.remove(requestedId)?.let { cached ->
-            if(android.os.SystemClock.elapsedRealtime()-cached.first<10*60*1000L) cached.second
-            else { runCatching { cached.second.close() }; null }
-        }
-        // 下一集预挂好的流优先级最高；两条都命中时把预取的视频连接还回去，别白占一个
-        if(prefetched!=null && readyVideo!=null) runCatching { readyVideo.close() }
+        // readyVideo 已在函数开头取好（queueAttach 判定要用）；这里只合并两条预取路径
         val preparedSource=prefetched ?: readyVideo
         work({
             preparedSource ?: run {
@@ -4648,9 +4679,20 @@ class MainActivity: Activity() {
             playerListener=listener; p.addListener(listener)
             val source=mediaSourceFor(remote,requestedId)
             val introSkip=if(position<=0 && (skipMark?.introSeconds ?: 0)>0) skipMark!!.introSeconds*1000L else position.coerceAtLeast(0)
-            p.setMediaSource(source); p.seekTo(introSkip)
-            android.util.Log.w("HongguoTV","Playback timing episode=${episodeIndex+1} toPrepare=${android.os.SystemClock.elapsedRealtime()-playbackStarted}ms")
-            p.prepare(); p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
+            if(queueAttach) {
+                // 队列附着（对齐 seamlessNext）：新集挂到现有播放器尾部再 seek 过去，
+                // 解码器不重建——换剧首帧从 2.9 秒降到百毫秒级。旧集的 item 摘掉后再回收。
+                val at=p.mediaItemCount
+                p.addMediaSource(source); p.seekTo(at,introSkip)
+                if(at>0) p.removeMediaItem(0)
+                main.post { runCatching { outgoingVideo?.close() } }
+                android.util.Log.w("HongguoTV","Playback queue-attach episode=${episodeIndex+1} oldItems=$at")
+            } else {
+                p.setMediaSource(source); p.seekTo(introSkip)
+            }
+            android.util.Log.w("HongguoTV","Playback timing episode=${episodeIndex+1} toPrepare=${android.os.SystemClock.elapsedRealtime()-playbackStarted}ms attached=$queueAttach")
+            if(!queueAttach || p.playbackState==Player.STATE_IDLE || p.playbackState==Player.STATE_ENDED) p.prepare()
+            p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
             if(introSkip>0 && position<=0) Toast.makeText(this,"已跳过片头 ${skipMark!!.introSeconds} 秒",Toast.LENGTH_SHORT).show()
         }, { problem -> playerFailure(problem) })
     }
@@ -6378,15 +6420,55 @@ class MainActivity: Activity() {
         if(screensaverLeft<=0) { dismissScreensaver(); return }
         refreshScreensaverHint()
     }
-    /** 中央时钟（内置风格通用）：样式各不相同但走同一秒级 tick。 */
-    private fun addClockOverlay(layer: FrameLayout,clockColor: Int,dateColor: Int,hint: String?=null) {
-        val clock=text("",54f,clockColor).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER; includeFontPadding=false }
-        val date=text("",16f,dateColor).apply { gravity=Gravity.CENTER; setPadding(0,dp(14),0,0) }
-        val box=column().apply { gravity=Gravity.CENTER }
-        box.addView(clock,lp(-1,-2)); box.addView(date,lp(-1,-2))
-        if(hint!=null) box.addView(text(hint,13f,dateColor).apply { gravity=Gravity.CENTER; setPadding(0,dp(18),0,0) },lp(-1,-2))
-        layer.addView(box,FrameLayout.LayoutParams(-1,-1,Gravity.CENTER))
-        screensaverClock=clock; screensaverDate=date
+    /** 屏保时钟：位置完全跟随设置（居中/右上/左下/右下/不显示），内置风格与自定义素材共用一套。
+     *  2026-11-23 修复两点：内置风格以前固定居中、根本不读 screensaverClockPos（设置里换位置预览没变化）；
+     *  位置选项补上「居中」档。返回时钟容器（自定义素材换图后要 bringToFront 顶回最上层），关闭时返回 null。 */
+    private fun addClockOverlay(layer: FrameLayout,clockColor: Int,dateColor: Int,hint: String?=null): View? {
+        val pos=library.screensaverClockPos
+        var box: LinearLayout?=null
+        if(pos!="off") {
+            val corner=pos!="mid"
+            val clock=text("",if(corner) 26f else 54f,clockColor).apply {
+                setTypeface(null,Typeface.BOLD)
+                gravity=if(corner) Gravity.START else Gravity.CENTER
+                includeFontPadding=false
+            }
+            val date=text("",if(corner) 12f else 16f,dateColor).apply {
+                gravity=if(corner) Gravity.START else Gravity.CENTER
+                if(!corner) setPadding(0,dp(14),0,0)
+            }
+            box=column().apply {
+                if(corner) {
+                    gravity=if(pos=="bl") Gravity.START else Gravity.END
+                    background=rounded(Color.argb(64,0,0,0))
+                    setPadding(dp(14),dp(8),dp(14),dp(10))
+                } else gravity=Gravity.CENTER
+                // 自定义素材的图/视频是后加的会盖住时钟，直接抬 Z 轴（与提示条同一个坑）
+                translationZ=dp(20).toFloat()
+            }
+            box.addView(clock,lp(-1,-2)); box.addView(date,lp(-1,-2))
+            val (gravity,wide)=when(pos) {
+                "bl" -> (Gravity.BOTTOM or Gravity.START) to false
+                "br" -> (Gravity.BOTTOM or Gravity.END) to false
+                "tr" -> (Gravity.TOP or Gravity.END) to false
+                else -> Gravity.CENTER to true
+            }
+            layer.addView(box,FrameLayout.LayoutParams(if(wide) -1 else -2,if(wide) -1 else -2,gravity).apply {
+                when(pos) {
+                    "tr" -> setMargins(0,dp(28),dp(36),0)
+                    "bl" -> setMargins(dp(36),0,0,dp(40))
+                    "br" -> setMargins(0,0,dp(36),dp(40))
+                }
+            })
+            screensaverClock=clock; screensaverDate=date
+        }
+        if(hint!=null) {
+            val tip=text(hint,13f,dateColor).apply { gravity=Gravity.CENTER }
+            // 居中时钟时提示挂到时钟下面，避免叠字；其余位置提示居中摆放
+            if(pos=="mid" && box!=null) box.addView(tip,lp(-1,-2))
+            else layer.addView(tip,FrameLayout.LayoutParams(-2,-2,Gravity.CENTER))
+        }
+        return box
     }
     private fun updateScreensaverClock() {
         val now=java.util.Calendar.getInstance()
@@ -7019,26 +7101,9 @@ class MainActivity: Activity() {
             addCornerClock()
             playAt(pool,index)
         }
-        /** 角标时钟：位置跟随设置（右上/左下/右下/不显示），加一层很浅暗底，满幅明亮壁纸上白字也能看清。 */
+        /** 时钟：位置跟随设置（居中/右上/左下/右下/不显示），与内置风格共用 addClockOverlay。 */
         private fun addCornerClock() {
-            val pos=library.screensaverClockPos
-            if(pos=="off") return
-            val clock=text("",26f,Color.argb(235,255,255,255)).apply { setTypeface(null,Typeface.BOLD) }
-            val date=text("",12f,Color.argb(190,255,255,255))
-            val corner=column().apply {
-                gravity=if(pos=="bl") Gravity.START else Gravity.END
-                background=rounded(Color.argb(64,0,0,0))
-                setPadding(dp(14),dp(8),dp(14),dp(10))
-            }
-            corner.addView(clock); corner.addView(date)
-            val (gravity,margins)=when(pos) {
-                "bl" -> (Gravity.BOTTOM or Gravity.START) to intArrayOf(dp(36),0,0,dp(40))
-                "br" -> (Gravity.BOTTOM or Gravity.END) to intArrayOf(0,0,dp(36),dp(40))
-                else -> (Gravity.TOP or Gravity.END) to intArrayOf(0,dp(28),dp(36),0)
-            }
-            layer.addView(corner,FrameLayout.LayoutParams(-2,-2,gravity).apply { setMargins(margins[0],margins[1],margins[2],margins[3]) })
-            cornerView=corner
-            screensaverClock=clock; screensaverDate=date
+            cornerView=addClockOverlay(layer,Color.argb(235,255,255,255),Color.argb(190,255,255,255))
         }
         /** 换下一个媒体前先撤掉上一个的 view：否则 GIF/图片/视频互相叠加，角标时钟也会被盖住。 */
         private fun removeMedia() {

@@ -211,7 +211,7 @@ object LibraryDisk {
             values["screensaverMedia"] as? String ?: "",
             ScreenSaverPrefs.normalizeFit(values["screensaverFit"] as? String ?: "fit"),
             ScreenSaverPrefs.normalizeInterval((values["screensaverInterval"] as? Number)?.toInt() ?: 10),
-            ScreenSaverPrefs.normalizeClockPos(values["screensaverClockPos"] as? String ?: "tr"),
+            ScreenSaverPrefs.normalizeClockPos(values["screensaverClockPos"] as? String ?: "mid"),
             PlaybackQuality.normalizeSoft((values["softQuality"] as? Number)?.toInt() ?: 360))
         val groupMap = runCatching { JSONObject(values["favoriteGroups"] as? String ?: "{}") }.getOrDefault(JSONObject())
             .let { o -> o.keys().asSequence().mapNotNull { k -> (o.opt(k) as? String)?.let { k to it } }.toMap() }

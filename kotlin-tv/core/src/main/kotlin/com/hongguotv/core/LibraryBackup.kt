@@ -12,7 +12,7 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
     val danmakuOpacity: Int=DanmakuPrefs.OPACITY_DEFAULT,val danmakuFont: Int=DanmakuPrefs.FONT_DEFAULT,val danmakuSpeed: Int=DanmakuPrefs.SPEED_DEFAULT,val danmakuRows: Int=DanmakuPrefs.ROWS_DEFAULT,
     val showClock: Boolean=true,val sourceHidden: Boolean=true,val navHidden: Set<String> = setOf("nas"),val feedAutoSwipe: Boolean=false,
     val screensaverMinutes: Int=0,val screensaverStyle: String="classic",val screensaverMuted: Boolean=false,val screensaverMedia: String="",
-    val screensaverFit: String="fit",val screensaverInterval: Int=10,val screensaverClockPos: String="tr",
+    val screensaverFit: String="fit",val screensaverInterval: Int=10,val screensaverClockPos: String="mid",
     val softQuality: Int=360,
     // 播放器键位/快进偏好与收藏排序（2026-11-21 查缺补漏）：这些值存在 playback-extras-v1 / native-library-v1 的独立键里，
     // 不在 disk decode 的通用管道里，由 app 侧 provider 在 snapshot 时注入、restore 时回填
@@ -40,8 +40,9 @@ object ScreenSaverPrefs {
     val FITS = listOf("fit" to "适应","fill" to "填充")
     /** 轮播换图间隔（秒）。 */
     val INTERVALS = listOf(10, 30, 60)
-    /** 自定义屏保角标时钟位置：右上 / 左下 / 右下 / 不显示。 */
-    val CLOCK_POSITIONS = listOf("tr" to "右上","bl" to "左下","br" to "右下","off" to "不显示")
+    /** 屏保时钟位置：居中 / 右上 / 左下 / 右下 / 不显示。
+     *  2026-11-23 加「居中」并让内置风格真正跟随该设置（此前内置风格固定居中、设置不生效）。 */
+    val CLOCK_POSITIONS = listOf("mid" to "居中","tr" to "右上","bl" to "左下","br" to "右下","off" to "不显示")
     fun normalize(value: Int): Int = if (value in LEVELS) value else 0
     fun label(minutes: Int): String = if (minutes == 0) "关闭" else "$minutes 分钟"
     fun styleName(key: String): String = STYLES.firstOrNull { it.first == key }?.second ?: STYLES[0].second
@@ -221,7 +222,7 @@ object LibraryBackup {
         // 画面填充 / 轮播间隔 / 角标位置：旧备份缺字段时给默认值（2026-11-19）
         val screensaverFit=ScreenSaverPrefs.normalizeFit(settings.optString("screensaverFit","fit"))
         val screensaverInterval=ScreenSaverPrefs.normalizeInterval(settings.optInt("screensaverInterval",10))
-        val screensaverClockPos=ScreenSaverPrefs.normalizeClockPos(settings.optString("screensaverClockPos","tr"))
+        val screensaverClockPos=ScreenSaverPrefs.normalizeClockPos(settings.optString("screensaverClockPos","mid"))
         // bvc2 软解清晰度上限：旧备份没有该字段时默认 360P（2026-11-21）
         val softQuality=PlaybackQuality.normalizeSoft(settings.optInt("softQuality",360))
         // 播放器键位/快进偏好与收藏排序：旧备份缺字段回落默认；非法值一律回落默认（与 app 侧常量保持一致）
