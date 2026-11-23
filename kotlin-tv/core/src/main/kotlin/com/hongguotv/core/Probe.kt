@@ -484,6 +484,7 @@ private fun mainPassport(args: Array<String>) {
                 val retry = client.sendCode(phone)
                 save(client)
                 println("== 验证码已发送（打码 ${phone.take(3)}****${phone.takeLast(4)}），${retry}s 后可重发")
+                if (args.contains("--debug")) println("原始响应: ${client.lastReply}")
             }
             "login" -> {
                 val phone = arg("--phone") ?: args.getOrNull(args.indexOf("--passport") + 2)
@@ -493,16 +494,83 @@ private fun mainPassport(args: Array<String>) {
                 val base = java.io.File(sessionFile).takeIf { it.exists() }?.let { PassportClient.fromJson(it.readText()) } ?: PassportSession()
                 val client = PassportClient(http, base)
                 if (!base.registered) { client.registerDevice(); println("设备已注册 device_id=${client.snapshot().deviceId}") }
-                val retry = client.sendCode(phone)
-                println("验证码已发送（${retry}s 可重发），等待输入…")
+                // 已有 mobile_ticket 时直接验码，不重发（重发会让用户手上的码作废）。
+                if (base.mobileTicket.isBlank() || args.contains("--resend")) {
+                    val retry = client.sendCode(phone)
+                    println("验证码已发送（${retry}s 可重发）")
+                    if (args.contains("--debug")) println("原始响应: ${client.lastReply}")
+                } else {
+                    println("复用已发出的验证码（ticket 已存在，未重发）")
+                }
+                save(client)
                 // 交互式读验证码，避免把验证码写进 shell 历史；非交互环境走 --code。
-                val entered = runCatching { readLine()?.trim() }.getOrNull()?.takeIf { it.matches(Regex("[0-9]{4,8}")) } ?: code
-                val session = client.smsLogin(phone, entered)
+                val entered = if (code.matches(Regex("[0-9]{4,8}"))) code
+                    else runCatching { readLine()?.trim() }.getOrNull()?.takeIf { it.matches(Regex("[0-9]{4,8}")) }
+                        ?: run { println("缺验证码：--code <验证码>"); return }
+                val session = try { client.smsLogin(phone, entered, arg("--variant") ?: "none") } catch (e: Exception) {
+                    println("验码失败: ${e.message}")
+                    client.lastReply?.let { println("原始响应: $it") }
+                    return
+                }
                 save(client)
                 println("== 登录成功 device_id=${session.deviceId} token=${if (session.token.isNotBlank()) "有" else "无"} cookies=${session.cookies.keys.joinToString(",")}")
                 val bookId = arg("--book") ?: "7706512650816982040"
                 dumpPlan(client, bookId, "登录态相关推荐", PassportClient.CONTENT_HOST)
                 dumpPlan(client, bookId, "登录态相关推荐(a域)", "https://api5-normal-sinfonlinea.fqnovel.com")
+            }
+            "froms" -> {
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                val bookId = arg("--book") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7706512650816982040"
+                for (from in listOf("select_panel_recommend", "select_panel_related", "video_detail", "detail_recommend",
+                    "book_detail", "select_panel_series", "reading_recommend", "video_detail_end", "select_panel_feed")) {
+                    val raw = try { client.planRaw(bookId, from) } catch (e: Exception) { println("  $from 失败 ${e.message}"); continue }
+                    val cells = raw.optJSONArray("data") ?: raw.optJSONObject("data")?.optJSONArray("data") ?: org.json.JSONArray()
+                    val info = (0 until cells.length()).mapNotNull { cells.optJSONObject(it)?.let { c -> "${c.optInt("show_type")}:${c.str("cell_name")}" } }
+                    println("  from=$from code=${raw.optInt("code", -1)} cells=$info")
+                }
+            }
+            "raw" -> {
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                val bookId = arg("--book") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7706512650816982040"
+                val raw = client.planRaw(bookId, arg("--from") ?: "select_panel_recommend")
+                java.io.File(".workbuddy-plan-raw.json").writeText(raw.toString())
+                println("已写入 .workbuddy-plan-raw.json 长度=${raw.toString().length}")
+                println(raw.toString().take(1200))
+            }
+            "deep" -> {
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                println("登录态=${client.snapshot().loggedIn}")
+                val seed = arg("--book") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7706512650816982040"
+                val ids = LinkedHashSet<String>()
+                val wantKeys = if (args.contains("--series")) setOf("series_id") else setOf("book_id", "vid", "series_id", "bookId")
+                fun harvest(value: Any?) {
+                    when (value) {
+                        is org.json.JSONObject -> value.keys().forEach { key ->
+                            if (key in wantKeys) {
+                                value.opt(key)?.toString()?.takeIf { it.length > 10 }?.let { ids += it }
+                            } else harvest(value.opt(key))
+                        }
+                        is org.json.JSONArray -> for (i in 0 until value.length()) harvest(value.opt(i))
+                    }
+                }
+                harvest(client.planRaw(seed, "select_panel_recommend"))
+                println("候选 ${ids.size} 部")
+                var hit = false
+                for (id in ids.take(12)) {
+                    if (hit) break
+                    val raw = try { client.planRaw(id, "select_panel_recommend") } catch (e: Exception) { println("  $id 失败 ${e.message}"); continue }
+                    val cells = raw.optJSONArray("data") ?: raw.optJSONObject("data")?.optJSONArray("data") ?: org.json.JSONArray()
+                    val types = (0 until cells.length()).mapNotNull { cells.optJSONObject(it)?.optInt("show_type") }
+                    println("  $id code=${raw.optInt("code", -1)} cells=$types")
+                    if (types.contains(160)) { hit = true; dumpPlan(client, id, "★160 命中", PassportClient.CONTENT_HOST) }
+                }
+                if (!hit) println("（本轮未见 160）")
             }
             "plan" -> {
                 val bookId = arg("--book") ?: args.getOrNull(args.indexOf("--passport") + 2)

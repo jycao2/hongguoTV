@@ -17,6 +17,8 @@ data class PassportSession(
     var openudid: String = "",
     var clientUdid: String = "",
     var token: String = "",
+    /** 发码返回的 mobile_ticket，验码必须复用；持久化后发码与验码可分两次进程完成。 */
+    var mobileTicket: String = "",
     val cookies: Map<String, String> = emptyMap(),
 ) {
     /** 有登录态（token 或 sessionid cookie）即可携带会话请求。 */
@@ -291,6 +293,7 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
                 openudid = json.optString("openudid"),
                 clientUdid = json.optString("clientudid"),
                 token = json.optString("token"),
+                mobileTicket = json.optString("mobile_ticket"),
                 cookies = cookies,
             )
         }
@@ -473,23 +476,40 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
         }
         check(reply.optString("message") == "success") { failureMessage(reply) }
         ticket = data.optString("mobile_ticket")
+        session.mobileTicket = ticket
+        lastReply = reply
         return data.optInt("retry_time", 60).coerceIn(1, 3600)
     }
 
     private var ticket = ""
 
-    /** 验证码登录。成功返回带登录态的会话快照；`sms_code_key`（MFA）暂不支持。 */
-    fun smsLogin(phone: String, code: String): PassportSession {
-        require(ticket.isNotBlank()) { "请先获取验证码" }
+    /** 最近一次 passport 响应原文（诊断用）。 */
+    var lastReply: org.json.JSONObject? = null
+        private set
+
+    /**
+     * 验证码登录。成功返回带登录态的会话快照。
+     * [ticketMode] 控制票据编码：`none`（实测有效，平台只认 code）/`xor`（参考实现，实测 1066）/
+     * `raw`/`noprefix`。带上 sms_code_key 会让服务端判定「流程已过期」，故默认不带。
+     */
+    fun smsLogin(phone: String, code: String, ticketMode: String = "none"): PassportSession {
+        if (ticketMode != "none" && ticket.isBlank()) ticket = session.mobileTicket
+        if (ticketMode != "none") require(ticket.isNotBlank()) { "请先获取验证码" }
         val form = linkedMapOf(
             "mobile" to xorWire(wirePhone(phone)),
             "account_sdk_source" to "app",
             "passport_support_flow" to "captcha,verify",
             "mix_mode" to "1",
             "code" to xorWire(code),
-            "passport_mfa_retry_tag" to "1",
-            "sms_code_key" to xorWire(ticket),
         )
+        if (ticketMode != "none") {
+            form["passport_mfa_retry_tag"] = "1"
+            form["sms_code_key"] = when (ticketMode) {
+                "raw" -> ticket
+                "noprefix" -> xorWire(ticket.removePrefix("mobile_ticket_"))
+                else -> xorWire(ticket)
+            }
+        }
         val reply = post("/passport/mobile/sms_login/", form)
         if (!cookies.containsKey("sessionid") && !cookies.containsKey("sessionid_ss")) {
             val data = reply.optJSONObject("data") ?: org.json.JSONObject()
@@ -546,6 +566,7 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
             "book_id" to bookId,
             "from" to from,
             "scene" to "10",
+            "user_is_login" to if (session.loggedIn) "1" else "0",
             "session_uuid" to java.util.UUID.randomUUID().toString().replace("-", ""),
         )
         filterIds?.let { extra["filter_ids"] = it }
@@ -567,6 +588,7 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
         .put("openudid", session.openudid)
         .put("clientudid", session.clientUdid)
         .put("token", session.token)
+        .put("mobile_ticket", session.mobileTicket)
         .put("cookies", org.json.JSONObject(session.cookies as Map<*, *>))
         .toString()
 
@@ -602,7 +624,7 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
             resp.header("X-Tt-Token")?.takeIf { it.isNotBlank() }?.let { session.token = it }
             val text = resp.body?.string().orEmpty()
             check(text.isNotBlank()) { "passport 空响应（HTTP ${resp.code}）" }
-            org.json.JSONObject(text)
+            return org.json.JSONObject(text).also { lastReply = it }
         }
     }
 
