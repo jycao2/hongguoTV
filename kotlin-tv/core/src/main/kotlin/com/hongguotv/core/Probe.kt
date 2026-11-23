@@ -8,6 +8,12 @@ private fun DiscoveryIdentityStyle(did:String,iid:String):Map<String,String> =
     VendorConstants.device.toMutableMap().apply { put("device_id",did); put("iid",iid) }
 
 fun main(args: Array<String>) {
+    // --passport <register|send|login>：登录平面（官方 App 原生会话）探针。
+    //   register            设备注册（7.3.5.32 画像）→ 打印 device_id/iid，会话落盘 --session
+    //   send <phone>        发短信验证码
+    //   login <phone> <code>  验码登录 → 落盘会话 → 立即打 plan/v1 打印全部 cell（验证 160 是否解锁）
+    //   plan <bookId>       读 --session 落盘会话，打 plan/v1（160 相关推荐 + 547 系列剧）
+    if(args.contains("--passport")) { mainPassport(args); return }
     // --dump-spade：绕过 bytevc2 过滤，dump 播放模型里所有分档的 spade_a / codec / url。
     // --ladder <episodeId>：打印清晰度阶梯缓存输出，验证五档一次下发/缓存命中。
     if(args.contains("--dump-spade") || args.contains("--ladder")) { mainDump(args); return }
@@ -419,5 +425,101 @@ private fun mainBatchProbe(args: Array<String>) {
         catch(e:Exception) { println("$label → 异常: ${e.javaClass.simpleName} ${e.message}"); continue }
         println("$label → $result")
         Thread.sleep(2000)
+    }
+}
+
+/**
+ * 登录平面探针：设备注册 → 短信登录 → 携会话打 plan/v1。
+ *
+ * 用法：
+ *   --passport register [--session <file>]
+ *   --passport send <phone> [--session <file>]
+ *   --passport login <phone> <code> [--session <file>] [--book <id>]
+ *   --passport plan <bookId> [--session <file>] [--host a|b]
+ *
+ * 会话文件是 PassportClient.toJson 的落盘结果；不传则每次从零注册（登录必须同一次调用里完成，
+ * 因为发码与验码是同一会话的 ticket）。
+ */
+private fun mainPassport(args: Array<String>) {
+    fun arg(name: String): String? { val i = args.indexOf(name); return if (i >= 0) args.getOrNull(i + 1) else null }
+    val action = arg("--passport") ?: run { println("用法: --passport <register|send|login|plan>"); return }
+    val sessionFile = arg("--session") ?: ".passport-session.json"
+    val http = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+    fun save(client: PassportClient) {
+        java.io.File(sessionFile).writeText(client.toJson())
+        println("会话已落盘: $sessionFile")
+    }
+    fun dumpPlan(client: PassportClient, bookId: String, label: String, host: String) {
+        println("== plan/v1 $label book_id=$bookId host=${host.substringAfter("//").substringBefore('.')}")
+        val raw = try { client.planRaw(bookId, "select_panel_recommend", null, host) }
+        catch (e: Exception) { println("   失败: ${e.message}"); return }
+        val code = raw.optInt("code", -1)
+        if (code != 0) { println("   code=$code message=${raw.optString("message")} ${raw.toString().take(160)}"); return }
+        val cells = raw.optJSONArray("data") ?: raw.optJSONObject("data")?.optJSONArray("data") ?: org.json.JSONArray()
+        if (cells.length() == 0) { println("   （code=0 但无 cell：${raw.toString().take(200)}）"); return }
+        for (i in 0 until cells.length()) {
+            val cell = cells.optJSONObject(i) ?: continue
+            val rows = cell.optJSONArray("video_data") ?: cell.optJSONArray("cell_data")
+            println("   cell$i show_type=${cell.optInt("show_type")}  「${cell.str("cell_name")}」  条目=${rows?.length() ?: 0}")
+        }
+    }
+
+    try {
+        when (action) {
+            "register" -> {
+                val client = PassportClient(http, PassportSession())
+                val session = client.registerDevice()
+                println("== 设备注册成功 device_id=${session.deviceId} iid=${session.installId} cdid=${session.cdid}")
+                save(client)
+            }
+            "send" -> {
+                val phone = arg("--phone") ?: args.getOrNull(args.indexOf("--passport") + 2)
+                    ?: run { println("用法: --passport send <phone>"); return }
+                val base = java.io.File(sessionFile).takeIf { it.exists() }?.let { PassportClient.fromJson(it.readText()) } ?: PassportSession()
+                val client = PassportClient(http, base)
+                if (!base.registered) { client.registerDevice(); println("设备已注册 device_id=${client.snapshot().deviceId}") }
+                val retry = client.sendCode(phone)
+                save(client)
+                println("== 验证码已发送（打码 ${phone.take(3)}****${phone.takeLast(4)}），${retry}s 后可重发")
+            }
+            "login" -> {
+                val phone = arg("--phone") ?: args.getOrNull(args.indexOf("--passport") + 2)
+                    ?: run { println("用法: --passport login <phone> <code>"); return }
+                val code = arg("--code") ?: args.getOrNull(args.indexOf("--passport") + 3)
+                    ?: run { println("用法: --passport login <phone> <code>"); return }
+                val base = java.io.File(sessionFile).takeIf { it.exists() }?.let { PassportClient.fromJson(it.readText()) } ?: PassportSession()
+                val client = PassportClient(http, base)
+                if (!base.registered) { client.registerDevice(); println("设备已注册 device_id=${client.snapshot().deviceId}") }
+                val retry = client.sendCode(phone)
+                println("验证码已发送（${retry}s 可重发），等待输入…")
+                // 交互式读验证码，避免把验证码写进 shell 历史；非交互环境走 --code。
+                val entered = runCatching { readLine()?.trim() }.getOrNull()?.takeIf { it.matches(Regex("[0-9]{4,8}")) } ?: code
+                val session = client.smsLogin(phone, entered)
+                save(client)
+                println("== 登录成功 device_id=${session.deviceId} token=${if (session.token.isNotBlank()) "有" else "无"} cookies=${session.cookies.keys.joinToString(",")}")
+                val bookId = arg("--book") ?: "7706512650816982040"
+                dumpPlan(client, bookId, "登录态相关推荐", PassportClient.CONTENT_HOST)
+                dumpPlan(client, bookId, "登录态相关推荐(a域)", "https://api5-normal-sinfonlinea.fqnovel.com")
+            }
+            "plan" -> {
+                val bookId = arg("--book") ?: args.getOrNull(args.indexOf("--passport") + 2)
+                    ?: run { println("用法: --passport plan <bookId>"); return }
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val client = PassportClient(http, PassportClient.fromJson(base.readText()))
+                val host = if (arg("--host") == "a") "https://api5-normal-sinfonlinea.fqnovel.com" else PassportClient.CONTENT_HOST
+                println("会话: device_id=${client.snapshot().deviceId} 登录态=${client.snapshot().loggedIn}")
+                dumpPlan(client, bookId, "相关推荐", host)
+                dumpPlan(client, bookId, "系列剧", host)
+            }
+            else -> println("未知动作: $action（register|send|login|plan）")
+        }
+    } catch (e: Exception) {
+        println("失败: ${e.javaClass.simpleName} ${e.message}")
+    } finally {
+        http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown()
     }
 }

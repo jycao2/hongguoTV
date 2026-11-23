@@ -14,6 +14,11 @@ internal class ProtoBuf {
     private val fields = mutableListOf<Field>()
     private val blobs = mutableListOf<ByteArray>()
     fun putVarint(idx: Int, v: Long): ProtoBuf { fields += Field(idx, 0, v, -1); return this }
+    /** Go `sint`（zigzag）字段。 */
+    fun putSint(idx: Int, v: Long): ProtoBuf = putVarint(idx, (v shl 1) xor (v shr 63))
+    /** zigzag 且不截断到 32 位（passport 的设备时间戳等大数需要）。 */
+    fun putSint64(idx: Int, v: Long): ProtoBuf { fields += Field(idx, 6, (v shl 1) xor (v shr 63), -1); return this }
+    fun putFloat(idx: Int, v: Float): ProtoBuf { fields += Field(idx, 5, java.lang.Float.floatToIntBits(v).toLong(), -1); return this }
     private fun putBlob(idx: Int, data: ByteArray): ProtoBuf { blobs += data; fields += Field(idx, 2, 0, blobs.size - 1); return this }
     fun putUtf8(idx: Int, s: String) = putBlob(idx, s.toByteArray(Charsets.UTF_8))
     fun putBytes(idx: Int, data: ByteArray) = putBlob(idx, data)
@@ -21,10 +26,13 @@ internal class ProtoBuf {
     fun toBuf(): ByteArray {
         val out = ByteArrayOutputStream()
         for (f in fields) {
-            writeVarint(out, (f.tag.toLong() shl 3) or f.type.toLong())
+            // type 6 只是「不截断的 varint」，wire type 仍是 0。
+            writeVarint(out, (f.tag.toLong() shl 3) or (if (f.type == 6) 0L else f.type.toLong()))
             when (f.type) {
                 0 -> writeVarint(out, f.value)
                 2 -> { val b = blobs[f.blobIndex]; writeVarint(out, b.size.toLong()); out.write(b) }
+                5 -> out.write(le32(f.value.toInt()))
+                6 -> { var n = f.value; while (n < 0 || n >= 128) { out.write(((n and 127) or 128).toInt()); n = n ushr 7 }; out.write(n.toInt()) }
             }
         }
         return out.toByteArray()
