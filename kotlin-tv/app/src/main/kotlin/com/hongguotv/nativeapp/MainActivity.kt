@@ -2903,6 +2903,7 @@ class MainActivity: Activity() {
         val saver=groupColumn()
         val device=groupColumn()
         val lab=groupColumn()
+        val guide=groupColumn()
         val about=groupColumn()
         val settingRows=mutableListOf<TextView>()
         val groupRows=linkedMapOf<LinearLayout,MutableList<TextView>>()
@@ -2944,6 +2945,7 @@ class MainActivity: Activity() {
             Triple("待机屏保","空闲后自动盖屏：挑自带画面，或用手机传自己的",saver),
             Triple("设备与数据","账号、本机记录与快传文件",device),
             Triple("实验室功能","外部遥控、语音与自动化接口",lab),
+            Triple("使用说明","整套系统的介绍与用法：键位、功能、常见问题",guide),
             Triple("关于红果","版本更新、接口自检与许可",about))
         var active=0
         val railButtons=categories.map { entry ->
@@ -3280,7 +3282,18 @@ class MainActivity: Activity() {
         xiaoAiButton=setting(lab,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
         lateinit var proxyButton: TextView
         proxyButton=setting(lab,proxyLabel()) { showProxyDialog(proxyButton) }
-        heading(about,"关于红果",categories[6].second)
+        heading(guide,"使用说明",categories[6].second)
+        // 每个主题一条说明弹窗：正文包在滚动区里，遥控上下键直接翻页（TvDialog.bindScrollKeys），
+        // 关闭后焦点回到刚才那条，继续往下看下一主题
+        val guideRows=UsageGuide.TOPICS.map { TextView(this) }.toMutableList()
+        UsageGuide.TOPICS.forEachIndexed { index,(name,body) ->
+            guideRows[index]=setting(guide,name) {
+                val dlg=TvDialog.info(this,"使用说明 · $name",body)
+                dlg.setOnDismissListener { runCatching { guideRows[index].requestFocus() } }
+                dlg.show()
+            }
+        }
+        heading(about,"关于红果",categories[7].second)
         lateinit var updates: TextView
         updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
         lateinit var checkButton: TextView
@@ -6375,6 +6388,9 @@ class MainActivity: Activity() {
             "neon" -> { layer.addView(NeonBackdrop(this),FrameLayout.LayoutParams(-1,-1)); addClockOverlay(layer,Color.WHITE,Color.argb(210,180,220,255)) }
             "stars" -> { layer.addView(StarfieldView(this),FrameLayout.LayoutParams(-1,-1)); addClockOverlay(layer,Color.WHITE,Color.argb(210,255,255,255)) }
             "breath" -> { layer.addView(BreathBackdrop(this),FrameLayout.LayoutParams(-1,-1)); addClockOverlay(layer,Color.WHITE,Color.argb(210,255,255,255)) }
+            // 仿真时钟两档：表盘自己就是时钟（指针实时走动），不再叠数字角标，「时钟位置」设置不参与
+            "clockgold" -> layer.addView(AnalogClockView(this,true),FrameLayout.LayoutParams(-1,-1))
+            "clockdawn" -> layer.addView(AnalogClockView(this,false),FrameLayout.LayoutParams(-1,-1))
             "custom" -> screensaverCustom=ScreensaverCustom(layer,onlyFile).also { it.start() }
             else -> addClockOverlay(layer,Color.WHITE,muted)
         }
@@ -6935,6 +6951,8 @@ class MainActivity: Activity() {
             "neon" -> { frame.addView(NeonBackdrop(this),FrameLayout.LayoutParams(-1,-1)); frame.addView(clockLabel,FrameLayout.LayoutParams(-1,-1)) }
             "stars" -> { frame.addView(StarfieldView(this),FrameLayout.LayoutParams(-1,-1)); frame.addView(clockLabel,FrameLayout.LayoutParams(-1,-1)) }
             "breath" -> { frame.addView(BreathBackdrop(this),FrameLayout.LayoutParams(-1,-1)); frame.addView(clockLabel,FrameLayout.LayoutParams(-1,-1)) }
+            "clockgold" -> frame.addView(AnalogClockView(this,true),FrameLayout.LayoutParams(-1,-1))
+            "clockdawn" -> frame.addView(AnalogClockView(this,false),FrameLayout.LayoutParams(-1,-1))
             "custom" -> {
                 frame.setBackgroundColor(Color.argb(255,16,20,30))
                 val all=saverMediaFiles()
@@ -6958,7 +6976,7 @@ class MainActivity: Activity() {
     private fun showSaverStylePicker(anchor: TextView) {
         val content=column()
         content.addView(TvDialog.title(this,"选择屏保画面"))
-        content.addView(text("左右键浏览，确认键选用。前四种是自带画面；「我的素材」放你自己传的图片和视频。",13f,muted).apply { setPadding(0,dp(4),0,dp(10)) })
+        content.addView(text("左右键浏览，确认键选用。前六种是自带画面（含两款指针走动的仿真时钟）；「我的素材」放你自己传的图片和视频。",13f,muted).apply { setPadding(0,dp(4),0,dp(10)) })
         val scroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; isFillViewport=false }
         val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(8),0,dp(8),dp(4)) }
         val index=ScreenSaverPrefs.STYLES.indexOfFirst { it.first==library.screensaverStyle }.coerceAtLeast(0)
@@ -7061,6 +7079,96 @@ class MainActivity: Activity() {
             canvas.drawColor(Color.BLACK)
             canvas.drawRect(0f,0f,w,h,paint)
             postInvalidateDelayed(66)
+        }
+    }
+
+    /** 仿真时钟（用户 2026-11-23）：指针实时走动的自绘表盘，整屏做底、表盘居中，日期画在表盘下方。
+     *  两档配色：gold=墨金（暗底 + 金圈金针），否则晨白（晨光底 + 素白表盘 + 深色指针）。
+     *  表盘本身就是时钟，这两档不再叠数字时钟角标（「时钟位置」设置对它们不生效）。 */
+    private class AnalogClockView(ctx: Context,private val gold: Boolean): View(ctx) {
+        private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+        private val calendar=java.util.Calendar.getInstance()
+        override fun onDraw(canvas: Canvas) {
+            val w=width.toFloat(); val h=height.toFloat(); val d=resources.displayMetrics.density
+            // 整屏底：中央微亮、四周收暗的径向渐变，避免大黑屏中间孤零零一个表盘的呆板
+            paint.style=Paint.Style.FILL
+            paint.shader=RadialGradient(w/2f,h/2f,Math.max(w,h)*0.72f,
+                intArrayOf(if(gold) Color.argb(255,40,46,62) else Color.argb(255,70,80,108), if(gold) Color.BLACK else Color.argb(255,20,23,32)),
+                floatArrayOf(0f,1f),android.graphics.Shader.TileMode.CLAMP)
+            canvas.drawRect(0f,0f,w,h,paint)
+            paint.shader=null
+            val cx=w/2f; val cy=h/2f
+            val r=Math.min(w,h)*0.32f
+            val goldLine=Color.argb(255,214,182,108)
+            val goldBright=Color.argb(255,236,210,148)
+            val darkInk=Color.argb(255,44,50,66)
+            // 表盘面 + 外圈
+            paint.color=if(gold) Color.argb(255,32,38,52) else Color.argb(255,242,238,229)
+            canvas.drawCircle(cx,cy,r,paint)
+            paint.style=Paint.Style.STROKE
+            paint.strokeWidth=3.5f*d
+            paint.color=if(gold) goldLine else Color.argb(255,124,132,152)
+            canvas.drawCircle(cx,cy,r,paint)
+            paint.strokeWidth=1f*d
+            paint.color=if(gold) Color.argb(150,214,182,108) else Color.argb(150,124,132,152)
+            canvas.drawCircle(cx,cy,r*0.90f,paint)
+            // 刻度：12 个主刻度粗而亮，分钟刻度细而淡
+            for(i in 0 until 60) {
+                val major=i%5==0
+                val angle=Math.toRadians((i*6-90).toDouble())
+                val sin=Math.sin(angle).toFloat(); val cos=Math.cos(angle).toFloat()
+                paint.strokeWidth=(if(major) 3.5f else 1.2f)*d
+                paint.color=when { gold&&major -> goldBright; gold -> Color.argb(130,180,160,110); major -> darkInk; else -> Color.argb(120,100,108,130) }
+                val inner=r*(if(major) 0.74f else 0.82f); val outer=r*0.86f
+                canvas.drawLine(cx+cos*inner,cy+sin*inner,cx+cos*outer,cy+sin*outer,paint)
+            }
+            // 数字 12 / 3 / 6 / 9
+            paint.style=Paint.Style.FILL
+            paint.textSize=r*0.16f
+            paint.textAlign=Paint.Align.CENTER
+            paint.typeface=Typeface.create("sans-serif-light",Typeface.BOLD)
+            paint.color=if(gold) goldBright else darkInk
+            val nr=r*0.60f
+            val asc=paint.fontMetrics.ascent; val desc=paint.fontMetrics.descent
+            fun vText(value: String,x: Float,y: Float)=canvas.drawText(value,x,y-(asc+desc)/2f,paint)
+            vText("12",cx,cy-nr)
+            vText("6",cx,cy+nr)
+            paint.textAlign=Paint.Align.LEFT
+            vText("3",cx+nr-paint.measureText("3")/2f,cy)
+            paint.textAlign=Paint.Align.RIGHT
+            vText("9",cx-nr+paint.measureText("9")/2f,cy)
+            // 指针：时针 / 分针常亮，秒针细一档、配色做区分
+            calendar.timeInMillis=System.currentTimeMillis()
+            val hour=calendar.get(java.util.Calendar.HOUR)+calendar.get(java.util.Calendar.MINUTE)/60f
+            val minute=calendar.get(java.util.Calendar.MINUTE)+calendar.get(java.util.Calendar.SECOND)/60f
+            val second=calendar.get(java.util.Calendar.SECOND)+calendar.get(java.util.Calendar.MILLISECOND)/1000f
+            fun hand(angleDeg: Float,length: Float,width: Float,color: Int) {
+                val angle=Math.toRadians((angleDeg-90).toDouble())
+                paint.style=Paint.Style.STROKE
+                paint.strokeWidth=width*d
+                paint.strokeCap=Paint.Cap.ROUND
+                paint.color=color
+                canvas.drawLine(cx,cy,cx+Math.sin(angle).toFloat()*length,cy-Math.cos(angle).toFloat()*length,paint)
+            }
+            hand(hour*30f,r*0.48f,6f,if(gold) goldBright else darkInk)
+            hand(minute*6f,r*0.70f,4f,if(gold) goldBright else darkInk)
+            hand(second*6f,r*0.78f,1.6f,if(gold) Color.argb(255,220,128,104) else Color.argb(255,198,94,86))
+            paint.style=Paint.Style.FILL
+            paint.color=if(gold) goldBright else darkInk
+            canvas.drawCircle(cx,cy,4f*d,paint)
+            // 表盘下方：日期与星期，两档共用
+            paint.textSize=r*0.11f
+            paint.textAlign=Paint.Align.CENTER
+            paint.typeface=Typeface.create("sans-serif",Typeface.NORMAL)
+            paint.color=if(gold) Color.argb(210,222,198,140) else Color.argb(210,226,232,248)
+            val week=when(calendar.get(java.util.Calendar.DAY_OF_WEEK)) {
+                java.util.Calendar.MONDAY -> "周一"; java.util.Calendar.TUESDAY -> "周二"; java.util.Calendar.WEDNESDAY -> "周三"
+                java.util.Calendar.THURSDAY -> "周四"; java.util.Calendar.FRIDAY -> "周五"; java.util.Calendar.SATURDAY -> "周六"
+                else -> "周日"
+            }
+            canvas.drawText("${calendar.get(java.util.Calendar.MONTH)+1}月${calendar.get(java.util.Calendar.DAY_OF_MONTH)}日  ·  $week",cx,cy+r*1.22f,paint)
+            // 250ms 一帧：秒针连续扫动不跳格，CPU 占用也远低于逐帧
+            postInvalidateDelayed(250)
         }
     }
 

@@ -31,11 +31,13 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
 }
 
 /** 待机屏保档位（用户 2026-11-19）：分钟数，0=关闭；非播放页空闲超过设定时长后盖全屏时钟。
- *  风格（用户 2026-11-19 加）：classic 经典墨夜 / neon 霓虹都市 / stars 星河流光 / breath 晨雾呼吸 / custom 自定义媒体（手机快传上传的图片、动图、视频）。 */
+ *  风格（用户 2026-11-19 加）：classic 经典墨夜 / neon 霓虹都市 / stars 星河流光 / breath 晨雾呼吸
+ *  / clockgold 仿真时钟·墨金 / clockdawn 仿真时钟·晨白（用户 2026-11-23 加，指针实时走动的自绘表盘）
+ *  / custom 自定义媒体（手机快传上传的图片、动图、视频）。 */
 object ScreenSaverPrefs {
     val LEVELS = listOf(5, 10, 15)
     /** key to 名称；顺序即跑马灯筛选顺序。 */
-    val STYLES = listOf("classic" to "经典墨夜","neon" to "霓虹都市","stars" to "星河流光","breath" to "晨雾呼吸","custom" to "我的素材")
+    val STYLES = listOf("classic" to "经典墨夜","neon" to "霓虹都市","stars" to "星河流光","breath" to "晨雾呼吸","clockgold" to "仿真时钟 · 墨金","clockdawn" to "仿真时钟 · 晨白","custom" to "我的素材")
     /** 自定义画面填充方式：fit 适应（整图可见、可能留黑边）/ fill 填充（铺满裁切）。 */
     val FITS = listOf("fit" to "适应","fill" to "填充")
     /** 轮播换图间隔（秒）。 */
