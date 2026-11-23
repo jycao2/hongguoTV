@@ -557,6 +557,69 @@ private fun mainPassport(args: Array<String>) {
                     if (code != 0) println("     ${raw.toString().take(160)}")
                 }
             }
+            "tabplay" -> {
+                // 2026-11-23 22:30 上游 0.16.12 配方验证：video_tab GET 用 v5 签名 + MD5(空字节)。
+                // 只发这一发（不打主 POST）：这是主接口空响应下唯一确认可用的通道。
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7296031515048152100"
+                val host = if (args.contains("--alt")) PassportClient.CONTENT_HOST else MobilePlayback.HOST
+                val identity = PlaybackDeviceSession().profile(http)
+                println("== tabplay video=$vid host=${host.removePrefix("https://").substringBefore('/')} device_id=${identity.values["device_id"]}")
+                val started = System.currentTimeMillis()
+                runCatching {
+                    MobilePlayback.videoTab(vid, identity, http, Signer(), System.currentTimeMillis(), host)
+                }.onSuccess { model ->
+                    val list = model?.optJSONObject("video_list")
+                    val codecs = list?.keys()?.asSequence()?.mapNotNull { list.optJSONObject(it)?.optString("codec_type") }?.toList()
+                    println("RESULT 有模型=${model != null} videoList=${list?.length() ?: 0} codecs=$codecs ms=${System.currentTimeMillis()-started}")
+                    arg("--dump")?.let { java.io.File(it).writeText(model.toString()) }
+                }.onFailure { e ->
+                    println("RESULT 失败 ${e.javaClass.simpleName}: ${e.message} ms=${System.currentTimeMillis()-started}")
+                }
+            }
+            "v5play" -> {
+                // 2026-11-23 22:15 实验：真 v5 头（ss-stub/khronos/helios/medusa）+ 登录账号 Cookie，单发一次。
+                // 要判定的假设：官方 APK 能播只是因为它带账号——匿名请求没有计次主体，服务端给空最省事。
+                // 关键：query 里的 device_id / iid / cdid 与 Cookie 必须来自同一会话，否则服务端会当成两台设备。
+                // 加 --anonymous 则同身份不带 Cookie 做对照（默认不带，避免多花一发）。
+                val base = java.io.File(sessionFile).takeIf { it.exists() }
+                    ?: run { println("缺会话文件 $sessionFile：先跑 --passport login"); return }
+                val session = PassportClient.fromJson(base.readText())
+                val vid = arg("--video") ?: args.getOrNull(args.indexOf("--passport") + 2) ?: "7486311576044047385"
+                val cookie = if (args.contains("--anonymous")) "" else
+                    session.cookies.entries.filter { it.key != "install_id" }
+                        .joinToString("; ") { "${it.key}=${it.value}" }
+                val values = linkedMapOf(
+                    "device_platform" to "android", "os" to "android", "ssmix" to "a",
+                    "cdid" to session.cdid, "channel" to "xiaomi_8662_64",
+                    "aid" to "8662", "app_name" to "novelread",
+                    "version_code" to "74332", "version_name" to "7.4.3.32",
+                    "manifest_version_code" to "74332", "update_version_code" to "74332",
+                    "resolution" to "1200*2670", "dpi" to "460",
+                    "device_type" to "23127PN0CC", "device_brand" to "Xiaomi",
+                    "language" to "zh", "os_api" to "34", "os_version" to "14", "ac" to "wifi",
+                    "host_abi" to "arm64-v8a", "dragon_device_type" to "phone",
+                    "pv_player" to "74332", "compliance_status" to "0",
+                    "need_personal_recommend" to "1", "player_so_load" to "1",
+                    "is_android_pad_screen" to "0",
+                    "iid" to session.installId, "device_id" to session.deviceId,
+                )
+                val profile = PlaybackDeviceSession.Profile(values, "")
+                println("== v5play video=$vid device_id=${session.deviceId} 带Cookie=${cookie.isNotBlank()} " +
+                    "cookieKeys=${session.cookies.size} token=${if (session.token.isBlank()) "无" else "有"} " +
+                    "loggedIn=${session.loggedIn}")
+                val started = System.currentTimeMillis()
+                runCatching {
+                    MobilePlayback.model(vid, profile, http, Signer(), System.currentTimeMillis(), 4, MobilePlayback.PATH, cookie,
+                        if (args.contains("--anonymous")) "" else session.token)
+                }.onSuccess { model ->
+                    val list = model?.optJSONObject("video_list")
+                    val codecs = list?.keys()?.asSequence()?.mapNotNull { list.optJSONObject(it)?.optString("codec_type") }?.toList()
+                    println("RESULT 有模型=${model != null} videoList=${list?.length() ?: 0} codecs=$codecs ms=${System.currentTimeMillis()-started}")
+                    arg("--dump")?.let { java.io.File(it).writeText(model.toString()) }
+                }.onFailure { e ->
+                    println("RESULT 失败 ${e.javaClass.simpleName}: ${e.message} ms=${System.currentTimeMillis()-started}")
+                }
+            }
             "openv5" -> {
                 // 逐字复刻 openhongguo PlaybackV5Pairs/PlaybackV5Body（7.4.3.32 抓包，2026-11-18），
                 // 与 MobilePlayback 的差异在：完整 30 项 query（pv_player/compliance_status/player_so_load…）、

@@ -942,72 +942,16 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             .build()
     }
     /** 官方 App 现行的播放模型接口：`GET /reading/bookapi/video_tab/multi_video_model/v1/`。
-     *  2026-11-02 起旧的 `/novel/player/` 接口族对所有请求返回 HTTP 200 + 0 字节（多域名、多 UA、
-     *  签名与匿名身份均如此），而这条 GET 接口同刻正常返回 `code 0` 与完整 `video_list`。
-     *  参数取自官方 `GetVideoModelRequest` 的 snake_case 字段，缺任一字段会回 `100103`。
-     *  失败一律返回 null，由调用方回退旧接口，不改变旧的空响应与身份轮换语义。 */
+     *  2026-11-02 起旧的 `/novel/player/` 接口族对所有请求返回 HTTP 200 + 0 字节，而这条 GET 当时正常。
+     *  **2026-11-22 上游 0.16.12 定论（SIGNING_V5.md Issue #83）**：主 POST 返空时，同一身份用
+     *  **v5 签名** 打这条 GET 能连续拿到多集模型；我们此前用旧 v3 签名 + null body（零摘要），
+     *  所以它一直返回空正文——这才是「tab 兜底从来没成功过」的真正原因。
+     *  每台身份只打一台主机（2026-11-23 请求预算），签名与解析都在 [MobilePlayback.videoTab]。 */
     internal fun tabVideoModel(id: String, identity: PlaybackDeviceSession.Profile, level: Int = 1, preferAlt: Boolean = false): JSONObject? {
-        val extra=linkedMapOf(
-            "video_id" to id, "video_id_type" to "0", "device_level" to level.toString(),
-            "need_all_video_definition" to "1", "need_mp4_align" to "0",
-            "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
-            "from_video_id" to "",
-        )
-        val hosts=listOf(
-            "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/",
-            "https://reading.snssdk.com/reading/bookapi/video_tab/multi_video_model/v1/",
-        )
         // preferAlt：重试诊断用，优先探测备用主机（两个主机可能落在不同后端集群）。
-        // 2026-11-23 压缩请求：只打一台主机。同一台设备在风控口径里「多打一次」就是放大，
-        // 非空失败也不再去第二台（此前每台身份光 tab 兜底就可能 2 发）。
-        val ordered=if(preferAlt) listOf(hosts.last()) else listOf(hosts.first())
-        for(base in ordered) {
-            // GET video_tab 是上游 0.1.33 的首选取址：v5 占位头换成 PlayerSigner 真 argus/ladon。
-            val signed=signer.signPlaybackV5(base,playbackValues(identity)+extra,null)
-            val request=signedRealBuilder(signed,null,identity)
-                .header("User-Agent",PLAYBACK_UA)
-                .header("Accept","application/json")
-                .get().build()
-            val statusBox = IntArray(1)
-            val body=try {
-                RequestScope.execute(http.newCall(request)) { response ->
-                    statusBox[0] = response.code
-                    if(response.code==429) throw PlaybackRateLimitedException(retryAfterMs(response))
-                    if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
-                    response.body?.string().orEmpty()
-                }
-            } catch (limited: PlaybackRateLimitedException) {
-                throw limited
-            } catch (problem: java.io.InterruptedIOException) {
-                throw problem
-            } catch (problem: IOException) {
-                continue
-            } catch (problem: RuntimeException) {
-                continue
-            }
-            val blank = body.isBlank()
-            val status = statusBox[0]
-            val root=runCatching { JSONObject(body) }.getOrNull()
-            if(root==null) {
-                // 200 + 0 字节是本轮风控的固定形态：别再打备用主机，直接交给上层触发冷却。
-                if(blank) {
-                    probeLog?.invoke("tab $base 空响应 HTTP=$status len=0")
-                    throw EmptyPlaybackResponseException()
-                }
-                probeLog?.invoke("tab $base 非JSON body=${body.take(120)}")
-                continue
-            }
-            if(root.optInt("code",root.optInt("Code",-1))!=0) {
-                probeLog?.invoke("tab $base code=${root.optInt("code",-1)} body=${body.take(160)}")
-                continue
-            }
-            val data=root.optJSONObject("data") ?: continue
-            val rows=data.optJSONObject("video_model_data") ?: data
-            val row=rows.optJSONObject(id) ?: rows.keys().asSequence().mapNotNull { rows.optJSONObject(it) }.firstOrNull() ?: continue
-            val model=modelOf(row.opt("video_model")) ?: continue
-            return model.put(ROUTE_KEY,"video_tab|"+base.removePrefix("https://").substringBefore('/'))
-        }
-        return null
+        val host = if (preferAlt) PassportClient.CONTENT_HOST else MobilePlayback.HOST
+        val model = MobilePlayback.videoTab(id, identity, http, signer, clock(), host) ?: return null
+        return model.put(ROUTE_KEY, "video_tab|" + host.removePrefix("https://").substringBefore('/'))
     }
     /** 播放模型：官方现用 `/novel/player/video_model/v1/`（旧参数格式）。
      *  2026-11-20 下午 `multi_video_model/player/v1` 对所有身份/版本/参数组合一律返 200+0，
@@ -1041,12 +985,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 只有真正的 HTTP 429 才需要冷却，且按 Retry-After。
         //
         // —— 请求预算（2026-11-23 22:00 压缩，原 4 发 × 3 台身份 = 12 发）——
-        //  空响应 = 这台设备的取址额度已用尽：**不在同身份换路径、也不打 video_tab**
-        //    （同一台设备换个端点照样空，纯属给风控窗口添柴）。一台身份只花 1 发。
-        //  非空失败（回了错误码/解析不到模型）= 服务端在正常处理请求，才值得换路径：
-        //    dl=5 → 平铺 /v1 → video_tab，各 1 发，且只允许在首台身份上做。
+        //  主 POST 空响应 = 这一代端点的固定形态（上游 0.16.12 也仍为空），
+        //    此时 **不再扫 dl=5 / 平铺**（换端点照样空），直接打 video_tab 备用通道——
+        //    它是主接口空响应下唯一确认可用的路径（v5 签名后实网 4 集验证）。
+        //  非空失败（回了错误码/解析不到模型）= 服务端在正常处理请求，才值得扫路径：
+        //    dl=5 → 平铺 /v1，且只在首台身份上做。video_tab 仍然每台都给 1 发。
         //  身份上限 2 台（[MAX_IDENTITY_RESETS] = 1 次换设备）。
-        //  最坏：空响应 1+1 = 2 发；错误码 1+3+1 = 5 发。恢复期内不再出现 12 发的轮次。
+        //  最坏：空响应 2+2 = 4 发；错误码 4+2 = 6 发。仍远低于旧的 12 发。
         var resets = 0
         while (true) {
             val identity = playbackSession.profile(http)
@@ -1062,8 +1007,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                     null
                 }
                 if (blank) {
-                    // 额度用尽：连 dl=5 / 平铺 / tab 都不试，直接进入换身份分支。
-                    probeLog?.invoke("空响应 → 本台身份额度已用尽，不追加路径")
+                    probeLog?.invoke("player/v1 空响应 → 转 video_tab 备用通道（不扫其它端点）")
                 }
                 if (!blank && model == null && routeBudget) {
                     for ((route, deviceLevel, label) in ESCALATION_ROUTES) {
@@ -1077,12 +1021,14 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                         if (model != null || blank) break
                     }
                 }
-                if (!blank && model == null && routeBudget) {
+                // video_tab 是主接口空响应下唯一确认可用的通道，每台身份都给它 1 发——
+                // 命中就不必再换一台设备（换设备还得再打 2 发）。
+                if (model == null) {
                     model = try {
                         tabVideoModel(id, identity, level, preferAlt)
                     } catch (blanked: EmptyPlaybackResponseException) {
                         blank = true
-                        probeLog?.invoke("tab 兜底空响应")
+                        probeLog?.invoke("video_tab 兜底空响应")
                         null
                     }
                 }

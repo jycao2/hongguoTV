@@ -202,27 +202,54 @@ class ContentRepositoryTest {
         }
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
-        // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
-        // 换满 MAX_IDENTITY_RESETS(1) 台仍空才进冷却。
-        // 2026-11-23 22:00 压缩预算：空响应 = 本台额度用尽，不再扫 dl=5 / 平铺 / video_tab，
-        // 一台身份只花 1 发 → 2 台身份共 2 发（此前 4 发 × 3 台 = 12 发）。
-        val expected=listOf(v5Path,v5Path)
+        // 2026-11-23 22:30：主接口空响应后，video_tab（v5 签名）是唯一确认可用的通道，
+        // 每台身份「主 1 发 + tab 1 发」；2 台身份共 4 发（仍远低于压缩前的 12 发）。
+        val expected=listOf(v5Path,tabPath,v5Path,tabPath)
         assertEquals(expected,paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
         assertEquals(expected,paths)
     }
 
-    @Test fun nonEmptyFailureIsCappedAtFiveRequests() {
+    @Test fun nonEmptyFailureIsCappedAtSixRequests() {
         // 非空失败（服务端回错误码）才允许换路径：首台身份 dl=4 → dl=5 → 平铺 → video_tab 共 4 发，
-        // 第二台身份只发 1 发主路做确认，合计封顶 5 发（压缩前是 3 台 × 4 发 = 12 发）。
+        // 第二台身份「主 1 发 + tab 1 发」，合计封顶 6 发（压缩前是 3 台 × 4 发 = 12 发）。
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths += request.url.encodedPath
             if(request.url.host=="example.com") videoInfo() else """{"code":100103,"message":"invalid param"}"""
         }
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
-        assertEquals(listOf(v5Path,v5Path,flatPath,tabPath,v5Path),paths)
+        assertEquals(listOf(v5Path,v5Path,flatPath,tabPath,v5Path,tabPath),paths)
+    }
+
+    @Test fun blankResponseSucceedsOnVideoTabWithoutRotatingIdentity() {
+        // 2026-11-22 上游口径：主 POST 空响应时，同一身份的 video_tab（v5 签名）能直接拿到模型。
+        // 命中后不再换设备——这是「少发请求」与「能播」同时成立的唯一组合。
+        val requests=mutableListOf<Request>()
+        val repo=repository { request ->
+            requests += request
+            when {
+                request.url.host=="example.com" -> videoInfo()
+                request.url.encodedPath==v5Path -> ""
+                else -> """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
+            }
+        }
+        val stream=repo.stream("123")
+        assertTrue(stream.url.isNotBlank())
+        assertEquals(listOf(v5Path,tabPath),requests.map{it.url.encodedPath}.take(2))
+        val tab=requests[1]
+        // GET + v5 三头；空字节只是签名输入，不该出现 POST 专用的 stub / Content-Encoding。
+        assertEquals("GET",tab.method)
+        assertTrue(tab.header("x-khronos").orEmpty().isNotBlank())
+        assertTrue(tab.header("x-helios").orEmpty().isNotBlank())
+        assertTrue(tab.header("x-medusa").orEmpty().isNotBlank())
+        assertNull(tab.header("x-ss-stub"))
+        assertNull(tab.header("Content-Encoding"))
+        assertNull(tab.header("Content-Type"))
+        assertNull(tab.header("Cookie"))
+        assertEquals("1",tab.url.queryParameter("device_level"))
+        assertEquals("123",tab.url.queryParameter("video_id"))
     }
 
     @Test fun blankResponseSucceedsOnSecondIdentity() {
@@ -232,7 +259,7 @@ class ContentRepositoryTest {
             calls++
             paths += request.url.encodedPath
             when {
-                calls==1 -> ""            // 首台设备额度已用尽
+                calls<=2 -> ""            // 首台设备：主路与 tab 都空 = 额度用尽
                 request.url.host=="example.com" -> videoInfo()
                 else -> """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
             }
@@ -241,7 +268,8 @@ class ContentRepositoryTest {
         assertTrue(stream.url.isNotBlank())
         // 换身份后仍在同一条首选路由上重试，不是改打别的路由。
         assertEquals(v5Path,paths[0])
-        assertEquals(v5Path,paths[1])
+        assertEquals(tabPath,paths[1])
+        assertEquals(v5Path,paths[2])
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(

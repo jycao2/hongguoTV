@@ -20,11 +20,16 @@ import org.json.JSONObject
  * 旧参数 `data.video_model` 直挂格式仍由 [directModel] 兼容，`1004` 分组格式走通用解析。
  */
 internal object MobilePlayback {
-    private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
+    const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
     /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1`。 */
     const val PATH = "/novel/player/multi_video_model/player/v1"
     /** 平铺路径（上游 `FlatPath`）：与 [PATH] 互为轮换，服务端反向切换时靠它兜住。 */
     const val FLAT_PATH = "/novel/player/multi_video_model/v1"
+    /** 备用取址 GET（官方 `GetVideoModelRequest` 形态）。2026-11-22 上游 0.16.12 实网确认：
+     *  主 POST 返空时，同一身份用 **v5 签名** 打这条 GET 能拿到模型（4 集跨 2 部剧）。 */
+    private const val TAB_PATH = "/reading/bookapi/video_tab/multi_video_model/v1/"
+    /** video_tab 是 GET + Cronet 传输，UA 与主 POST 的 tt-ok 形态不同（上游 0.16.12 原样值）。 */
+    private const val TAB_UA = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
     // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
     // video_tab GET 才用 Cronet 形态。此前两者混用，UA 也是错的一环。
     const val UA = PassportClient.V5_PLAYBACK_UA
@@ -76,6 +81,11 @@ internal object MobilePlayback {
         now: Long,
         deviceLevel: Int = 4,
         path: String = PATH,
+        /** 账号登录 Cookie（`sessionid=…; sid_tt=…`）。默认空 = 匿名取址。
+         *  2026-11-23 实验入口：官方 APK 是登录态取址，匿名请求没有计次主体，服务端最省事的处理就是给空。 */
+        cookie: String = "",
+        /** 账号登录 token（`X-Tt-Token` 头）。官方客户端取址同时带 Cookie 与该头，缺一都可能被判匿名。 */
+        token: String = "",
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map。
@@ -98,6 +108,8 @@ internal object MobilePlayback {
             .header("x-ss-dp", "8662")
             .header("lc", "101")
             .header("Content-Encoding", "gzip")
+            .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
+            .apply { if (token.isNotBlank()) header("X-Tt-Token", token) }
             .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
             .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
@@ -126,25 +138,110 @@ internal object MobilePlayback {
             ContentRepository.probeLog?.invoke("v5 空响应（HTTP 200 / 0 字节）")
             throw EmptyPlaybackResponseException()
         }
+        return parse(text, id)
+    }
+
+    /**
+     * 备用取址：`GET /reading/bookapi/video_tab/multi_video_model/v1/`，**必须用 v5 签名**。
+     *
+     * 2026-11-22 上游 0.16.12（`SIGNING_V5.md` Issue #83）实网验证：主 POST 持续 200+0 时，
+     * 同一匿名身份用 v5 签这条 GET 能连续拿到 4 集模型并解出 MP4 头。此前这条 GET 用的是
+     * 旧 v3 签名/profile，所以也拿空正文——正是我们 11-20 以来「tab 兜底从来没成功过」的原因。
+     *
+     * 两个细节不能省：
+     *  1) 签名输入是 `ByteArray(0)`（MD5 = d41d8cd9…），**不是 null**——null 会被算成 16 字节零摘要，不等价；
+     *  2) GET 不带 body/Content-Encoding/Content-Type/x-ss-stub，也不带账号 Cookie。
+     */
+    fun videoTab(
+        id: String,
+        identity: PlaybackDeviceSession.Profile,
+        http: OkHttpClient,
+        signer: Signer,
+        now: Long,
+        host: String = HOST,
+    ): JSONObject? {
+        if (!id.matches(Regex("[0-9]{1,30}"))) return null
+        val v = identity.values
+        fun value(key: String, fallback: String) = v[key]?.takeIf { it.isNotBlank() } ?: fallback
+        // 设备/版本字段一律取注册画像（同一台设备不能出现两套指纹），其余对齐官方 GetVideoModelRequest。
+        val version = value("version_code", "74332")
+        val values = linkedMapOf(
+            "aid" to value("aid", "8662"),
+            "app_name" to value("app_name", "novelread"),
+            "version_code" to version,
+            "version_name" to value("version_name", "7.4.3.32"),
+            "channel" to value("channel", "vivo_8662_64"),
+            "device_platform" to "android",
+            "device_type" to value("device_type", "PGT-AN10"),
+            "os_version" to value("os_version", "12"),
+            "update_version_code" to value("update_version_code", version),
+            "iid" to v.getValue("iid"),
+            "cdid" to v.getValue("cdid"),
+            "device_id" to v.getValue("device_id"),
+            "video_id" to id, "video_id_type" to "0", "device_level" to "1",
+            "need_all_video_definition" to "1", "need_mp4_align" to "0",
+            "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
+            "from_video_id" to "",
+        )
+        val signed = signer.signPlaybackV5("$host$TAB_PATH", values, ByteArray(0))
+        val request = Request.Builder().url(signed.url).get()
+            .header("User-Agent", TAB_UA)
+            .header("Accept", "application/json; charset=utf-8")
+            .header("Accept-Language", "zh-CN,zh;q=0.9")
+            .apply {
+                signed.headers.forEach { (key, value) -> header(key, value) }
+                // 空字节只是签名输入：GET 没有 body，也不该带 POST 那三个头。
+                removeHeader("x-ss-stub")
+                removeHeader("Content-Type")
+                removeHeader("Content-Encoding")
+            }
+            .build()
+        val text = try {
+            val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
+            RequestScope.execute(transport.newCall(request)) { response ->
+                if (response.code == 429) throw PlaybackRateLimitedException(ContentRepository.retryAfterMs(response))
+                if (!response.isSuccessful) throw IOException("video_tab 请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
+        } catch (problem: java.io.InterruptedIOException) {
+            throw problem
+        } catch (problem: IOException) {
+            ContentRepository.probeLog?.invoke("video_tab 请求失败 ${problem.message}")
+            return null
+        } catch (problem: RuntimeException) {
+            ContentRepository.probeLog?.invoke("video_tab 请求异常 ${problem.message}")
+            return null
+        }
+        if (text.isBlank()) {
+            ContentRepository.probeLog?.invoke("video_tab 空响应（HTTP 200 / 0 字节）")
+            throw EmptyPlaybackResponseException()
+        }
+        return parse(text, id)
+    }
+
+    /** 两种响应形态共用：扁平 `data.video_model`、`data.1004[vid]`、`data.video_model_data[vid]`。 */
+    private fun parse(text: String, id: String): JSONObject? {
         val root = runCatching { JSONObject(text) }.getOrNull() ?: run {
-            ContentRepository.probeLog?.invoke("v5 非 JSON body=${text.take(120)}")
+            ContentRepository.probeLog?.invoke("播放模型非 JSON body=${text.take(120)}")
             return null
         }
         val code = root.optInt("code", root.optInt("Code", -1))
         if (code != 0) {
-            ContentRepository.probeLog?.invoke("v5 code=$code body=${text.take(200)}")
+            ContentRepository.probeLog?.invoke("播放模型 code=$code body=${text.take(200)}")
             return null
         }
         val data = root.optJSONObject("data") ?: run {
-            ContentRepository.probeLog?.invoke("v5 无 data len=${text.length} body=${text.take(240)}")
+            ContentRepository.probeLog?.invoke("播放模型无 data len=${text.length} body=${text.take(240)}")
             return null
         }
-        // 旧端点把模型直接挂在 `data.video_model`（可能是字符串），没有 1004 分组这一层。
+        // 旧端点把模型直接挂在 `data.video_model`（可能是字符串），没有分组这一层。
         directModel(data)?.let { return it }
-        val entries = data.optJSONObject("1004") ?: data
+        val entries = data.optJSONObject("1004") ?: data.optJSONObject("video_model_data") ?: data
         val row = entries.optJSONObject(id) ?: entries.keys().asSequence()
             .mapNotNull { entries.optJSONObject(it) }.firstOrNull() ?: run {
-            ContentRepository.probeLog?.invoke("v5 无剧集行 id=$id entries=${entries.keys().asSequence().toList().take(8)}")
+            ContentRepository.probeLog?.invoke("播放模型无剧集行 id=$id entries=${entries.keys().asSequence().toList().take(8)}")
             return null
         }
         val model = when (val value = row.opt("video_model")) {
@@ -152,7 +249,7 @@ internal object MobilePlayback {
             is String -> runCatching { JSONObject(value) }.getOrNull()
             else -> null
         } ?: run {
-            ContentRepository.probeLog?.invoke("v5 无 video_model rowKeys=${row.keys().asSequence().toList().take(10)}")
+            ContentRepository.probeLog?.invoke("播放模型无 video_model rowKeys=${row.keys().asSequence().toList().take(10)}")
             return null
         }
         return model
