@@ -67,6 +67,9 @@ class ContentRepositoryTest {
                 """{"code":100103,"message":"invalid param"}"""
             else if(request.url.encodedPath==tabPath)
                 """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
+            // 平铺 /v1 也给错误码：只有「非空失败」才允许继续往 tab 兜底，空响应会直接判额度用尽。
+            else if(request.url.encodedPath==flatPath)
+                """{"code":100103,"message":"invalid param"}"""
             else ""
         }
         val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123",1080) }
@@ -200,13 +203,26 @@ class ContentRepositoryTest {
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
         // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
-        // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却。
-        // 每次空响应打三发（player/v1 dl=4 → player/v1 dl=5 → 平铺 /v1），3 轮身份 = 9 发。
-        val expected=List(3){listOf(v5Path,v5Path,flatPath,tabPath)}.flatten()
+        // 换满 MAX_IDENTITY_RESETS(1) 台仍空才进冷却。
+        // 2026-11-23 22:00 压缩预算：空响应 = 本台额度用尽，不再扫 dl=5 / 平铺 / video_tab，
+        // 一台身份只花 1 发 → 2 台身份共 2 发（此前 4 发 × 3 台 = 12 发）。
+        val expected=listOf(v5Path,v5Path)
         assertEquals(expected,paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
         assertEquals(expected,paths)
+    }
+
+    @Test fun nonEmptyFailureIsCappedAtFiveRequests() {
+        // 非空失败（服务端回错误码）才允许换路径：首台身份 dl=4 → dl=5 → 平铺 → video_tab 共 4 发，
+        // 第二台身份只发 1 发主路做确认，合计封顶 5 发（压缩前是 3 台 × 4 发 = 12 发）。
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths += request.url.encodedPath
+            if(request.url.host=="example.com") videoInfo() else """{"code":100103,"message":"invalid param"}"""
+        }
+        assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
+        assertEquals(listOf(v5Path,v5Path,flatPath,tabPath,v5Path),paths)
     }
 
     @Test fun blankResponseSucceedsOnSecondIdentity() {

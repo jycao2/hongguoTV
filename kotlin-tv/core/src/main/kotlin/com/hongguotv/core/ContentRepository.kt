@@ -958,7 +958,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             "https://reading.snssdk.com/reading/bookapi/video_tab/multi_video_model/v1/",
         )
         // preferAlt：重试诊断用，优先探测备用主机（两个主机可能落在不同后端集群）。
-        val ordered=if(preferAlt) hosts.reversed() else hosts
+        // 2026-11-23 压缩请求：只打一台主机。同一台设备在风控口径里「多打一次」就是放大，
+        // 非空失败也不再去第二台（此前每台身份光 tab 兜底就可能 2 发）。
+        val ordered=if(preferAlt) listOf(hosts.last()) else listOf(hosts.first())
         for(base in ordered) {
             // GET video_tab 是上游 0.1.33 的首选取址：v5 占位头换成 PlayerSigner 真 argus/ladon。
             val signed=signer.signPlaybackV5(base,playbackValues(identity)+extra,null)
@@ -1037,58 +1039,66 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 因此空响应的正确处置是「换一台匿名设备重试」，而不是在同一身份上等——
         // 旧实现每次都抬全局冷却（20/60/120/300s），用户看片中途被锁全是自己造成的。
         // 只有真正的 HTTP 429 才需要冷却，且按 Retry-After。
+        //
+        // —— 请求预算（2026-11-23 22:00 压缩，原 4 发 × 3 台身份 = 12 发）——
+        //  空响应 = 这台设备的取址额度已用尽：**不在同身份换路径、也不打 video_tab**
+        //    （同一台设备换个端点照样空，纯属给风控窗口添柴）。一台身份只花 1 发。
+        //  非空失败（回了错误码/解析不到模型）= 服务端在正常处理请求，才值得换路径：
+        //    dl=5 → 平铺 /v1 → video_tab，各 1 发，且只允许在首台身份上做。
+        //  身份上限 2 台（[MAX_IDENTITY_RESETS] = 1 次换设备）。
+        //  最坏：空响应 1+1 = 2 发；错误码 1+3+1 = 5 发。恢复期内不再出现 12 发的轮次。
         var resets = 0
         while (true) {
             val identity = playbackSession.profile(http)
+            // 只有首台身份允许在非空失败后继续扫路径，避免第二台再复制一轮 4 发。
+            val routeBudget = resets == 0
             try {
-                // 候选顺序对齐上游 PhoenixReadPlaybackTransport（2026-11-23 9ba235c）：
-                //   player/v1 device_level=4 → player/v1 升 5 → 平铺 /v1（服务端反向切换时靠它兜住）。
-                // 预取只打一发，不参与升档和换路，避免替用户多消耗身份额度。
-                val candidates = if (quiet) listOf(Triple(MobilePlayback.PATH, 4, "player/v1 dl=4"))
-                else listOf(
-                    Triple(MobilePlayback.PATH, 4, "player/v1 dl=4"),
-                    Triple(MobilePlayback.PATH, 5, "player/v1 dl=5"),
-                    Triple(MobilePlayback.FLAT_PATH, 4, "v1 dl=4"),
-                )
-                var model: JSONObject? = null
-                for ((route, deviceLevel, label) in candidates) {
-                    model = try {
-                        MobilePlayback.model(id, identity, http, signer, clock(), deviceLevel, route)
-                    } catch (blank: EmptyPlaybackResponseException) {
-                        probeLog?.invoke("$label 空响应")
-                        null
-                    }
-                    if (model != null) break
-                }
-                val found = model
-                if (found != null) {
-                    clearPlaybackCooldown()
-                    val routed = found.put(ROUTE_KEY, "v5|player")
-                    rememberRoute(routed)
-                    probeLog?.invoke("v5 命中 id=$id")
-                    return routed
-                }
-                // v5 给了非空失败（错误码/解析不到模型）才退回老 tab；它的空响应不再放大成全局冷却。
-                val tab = try {
-                    tabVideoModel(id, identity, level, preferAlt)
-                } catch (blank: EmptyPlaybackResponseException) {
-                    probeLog?.invoke("tab 兜底空响应，忽略")
+                var blank = false
+                var model: JSONObject? = try {
+                    MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH)
+                } catch (blanked: EmptyPlaybackResponseException) {
+                    blank = true
+                    probeLog?.invoke("player/v1 dl=4 空响应")
                     null
                 }
-                if (tab != null) {
-                    clearPlaybackCooldown()
-                    rememberRoute(tab)
-                    probeLog?.invoke("tab 命中 id=$id route=${tab.optString(ROUTE_KEY)}")
-                    return tab
+                if (blank) {
+                    // 额度用尽：连 dl=5 / 平铺 / tab 都不试，直接进入换身份分支。
+                    probeLog?.invoke("空响应 → 本台身份额度已用尽，不追加路径")
                 }
-                // 两条路由都没给模型：等同本台设备额度用尽。
-                throw EmptyPlaybackResponseException()
-            } catch (blank: EmptyPlaybackResponseException) {
+                if (!blank && model == null && routeBudget) {
+                    for ((route, deviceLevel, label) in ESCALATION_ROUTES) {
+                        model = try {
+                            MobilePlayback.model(id, identity, http, signer, clock(), deviceLevel, route)
+                        } catch (blanked: EmptyPlaybackResponseException) {
+                            blank = true
+                            probeLog?.invoke("$label 空响应")
+                            null
+                        }
+                        if (model != null || blank) break
+                    }
+                }
+                if (!blank && model == null && routeBudget) {
+                    model = try {
+                        tabVideoModel(id, identity, level, preferAlt)
+                    } catch (blanked: EmptyPlaybackResponseException) {
+                        blank = true
+                        probeLog?.invoke("tab 兜底空响应")
+                        null
+                    }
+                }
+                if (model != null) {
+                    clearPlaybackCooldown()
+                    // tab 路由自带 `video_tab|host` 标记，别覆盖成 v5。
+                    val routed = if(model.has(ROUTE_KEY)) model else model.put(ROUTE_KEY, "v5|player")
+                    rememberRoute(routed)
+                    probeLog?.invoke("取址命中 id=$id route=${routed.optString(ROUTE_KEY)}")
+                    return routed
+                }
                 // 预取只是优化，不能替用户消耗身份额度，也不能因此锁死正片。
-                if (quiet) throw IOException("空响应（预取静默跳过）")
+                if (quiet) throw IOException("取址未命中（预取静默跳过）")
                 if (resets >= MAX_IDENTITY_RESETS) throw tripPlaybackCooldown()
                 resets++
-                probeLog?.invoke("空响应 → 换匿名身份重试（第 $resets 次）")
+                probeLog?.invoke((if (blank) "空响应" else "接口未下发模型") + " → 换匿名身份重试（第 $resets 次）")
                 playbackSession.renew(http)
             } catch (limited: PlaybackRateLimitedException) {
                 if (quiet) throw IOException("限流（预取静默跳过）")
@@ -1130,8 +1140,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 冷却期内 stream()/videoModel() 直接抛 PlaybackThrottledException，一个请求都不发。
         // 首次 20 秒（承认「偶发一次抖动」的可能，给一次 20 秒后的机会），连续命中按 60→120→300 秒递增。
         private val COOLDOWN_STEPS=listOf(20_000L, 60_000L, 120_000L, 300_000L)
-        /** 空响应换身份的次数上限：与 openhongguo 的 DeviceResets 默认值一致（一次调用最多换 2 台）。 */
-        private const val MAX_IDENTITY_RESETS=2
+        /** 空响应换身份的次数上限：1 次 = 最多 2 台匿名设备。
+         *  2026-11-23 压缩请求时从 2 降到 1：一台设备只给一次模型，第三台的成功率远抵不上多出的 4 发请求。 */
+        private const val MAX_IDENTITY_RESETS=1
+        /** 非空失败时的换路径阶梯（每台身份最多各 1 发，仅在首台身份上执行）。
+         *  顺序对齐上游 PhoenixReadPlaybackTransport：升 device_level → 平铺路径 → video_tab（由调用方接着打）。 */
+        private val ESCALATION_ROUTES=listOf(
+            Triple(MobilePlayback.PATH, 5, "player/v1 dl=5"),
+            Triple(MobilePlayback.FLAT_PATH, 4, "v1 dl=4"),
+        )
         /** 解析 Retry-After（秒）；缺失或非数字返回 0，由调用方给默认值。 */
         internal fun retryAfterMs(response: okhttp3.Response): Long {
             val raw=response.header("Retry-After")?.trim().orEmpty()
