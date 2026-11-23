@@ -1043,7 +1043,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             try {
                 // 2026-11-23：v5 `player/v1` 是唯一活路。此前把 `video_tab` 放前面，
                 // 它空响应后立刻换身份/抬冷却，v5 永远轮不到——顺序错了等于一直在打死路。
-                val model = MobilePlayback.model(id, identity, http, signer, clock())
+                // 同身份先 device_level=4，空响应升 5 再试一次（同行 0.27.4 实测：4 空但 5 能出），
+                // 5 仍空才按「本台身份额度用尽」换身份。预取只打一发，不参与升档。
+                val model = if (quiet) MobilePlayback.model(id, identity, http, signer, clock(), 4)
+                else try {
+                    MobilePlayback.model(id, identity, http, signer, clock(), 4)
+                } catch (blank: EmptyPlaybackResponseException) {
+                    probeLog?.invoke("v5 device_level=4 空响应 → 升 5 同身份重试")
+                    MobilePlayback.model(id, identity, http, signer, clock(), 5)
+                }
                 if (model != null) {
                     clearPlaybackCooldown()
                     val routed = model.put(ROUTE_KEY, "v5|player")

@@ -194,11 +194,13 @@ class ContentRepositoryTest {
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
         // 2026-11-23 起口径改为上游一致：一台匿名设备基本只给一次播放模型，空响应先换身份重试，
-        // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却——所以是 1 次首发 + 2 次换身份。
-        assertEquals(listOf(v5Path,v5Path,v5Path),paths)
+        // 换满 MAX_IDENTITY_RESETS(2) 台仍空才进冷却。
+        // 每次空响应打两发（device_level=4 → 升档 5），所以 3 轮身份 = 6 发。
+        val expected=List(6){v5Path}
+        assertEquals(expected,paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
-        assertEquals(listOf(v5Path,v5Path,v5Path),paths)
+        assertEquals(expected,paths)
     }
 
     @Test fun blankResponseSucceedsOnSecondIdentity() {

@@ -72,11 +72,15 @@ internal object MobilePlayback {
         http: OkHttpClient,
         signer: Signer,
         now: Long,
+        deviceLevel: Int = 4,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
-        // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map + dr_scene=player。
-        // device_level 用 1 而非 3：3 会让 1080p 以下全部下发 bytevc2，ExoPlayer 解不了（openhongguo 实测）。
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}"""
+        // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map。
+        // 2026-11-23 按同行 0.27.4/0.27.6 实测配方修正两处（此前我们正好写反）：
+        //  1) device_level 固定 4（我们曾填 1）；4 空响应时由上层升到 5 再试同一身份。
+        //  2) PLAYER 直连**不带 dr_scene**——只有 PRELOAD 请求才带 dr_scene="preload"，
+        //     之前照抄 openhongguo 抓包加的 dr_scene="player" 会被判成无效请求。
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":$deviceLevel,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
         val request = Request.Builder().url(signed.url)
