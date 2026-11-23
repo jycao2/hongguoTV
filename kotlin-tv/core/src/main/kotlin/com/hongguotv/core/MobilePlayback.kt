@@ -24,8 +24,9 @@ internal object MobilePlayback {
     /** 7.4.5.32 起官方客户端回到 v1 路径；`:dr_scene` 变体（player/default）对匿名请求返回空体。 */
     /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1` + `dr_scene=player`。 */
     private const val PATH = "/novel/player/multi_video_model/player/v1"
-    // UA 必须与 query 的 version_code 同源，且与注册画像一致（2026-11-23 复盘：此前 UA 74532 而注册 73932）。
-    const val UA = PassportClient.PLAYBACK_UA
+    // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
+    // video_tab GET 才用 Cronet 形态。此前两者混用，UA 也是错的一环。
+    const val UA = PassportClient.V5_PLAYBACK_UA
     /** 完整 28 项 query，缺一项都可能落到空响应；设备字段一律取自注册画像，避免两套指纹。 */
     private fun query(identity: PlaybackDeviceSession.Profile): Map<String, String> {
         val v = identity.values
@@ -83,13 +84,19 @@ internal object MobilePlayback {
         val payload = """{"biz_param":{"detail_page_version":0,"device_level":$deviceLevel,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val signed = signer.signPlaybackV5(HOST + PATH, query(identity), body)
+        // 2026-11-23 22:10 关键修正：V5 播放就是「Medusa v5 那一代」，头集合是三/四头
+        //   x-ss-stub + x-khronos + x-helios + x-medusa（GET video_tab 时无 stub）。
+        // 此前这里调 realSignedHeaders 把它们全当「占位头」过滤掉，换成了上一代 551 的
+        //   x-gorgon/x-ladon/x-argus/x-ss-req-ticket —— 服务端要的签名我们根本没发出去，
+        // 这是 200+0 的直接原因（PhoenixReadApi 2026-11-23 9ba235c 实测口径）。
         val request = Request.Builder().url(signed.url)
             .header("User-Agent", UA)
             .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
-            .header("x-xs-from-web", "0")
+            .header("X-XS-From-Web", "0")
+            .header("x-ss-dp", "8662")
+            .header("lc", "101")
             .header("Content-Encoding", "gzip")
-            // 2026-11-20 官方只认真签名：v5 占位三头换成 PlayerSigner 的 argus/ladon（按最终 query 重生成）。
-            .apply { ContentRepository.realSignedHeaders(signed.url, signed.headers, body).forEach { (key, value) -> header(key, value) } }
+            .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
             .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         val text = try {

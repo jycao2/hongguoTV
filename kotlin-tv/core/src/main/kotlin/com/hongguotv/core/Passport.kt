@@ -268,6 +268,11 @@ class PassportClient(private val http: okhttp3.OkHttpClient, private val session
         /** 播放请求的 Cronet UA（openhongguo `PlaybackUserAgent`，7.4.3.32 抓包口径）。 */
         const val PLAYBACK_UA =
             "com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:8d40f833 2026-03-03 QuicVersion:21ac1950 2025-11-18)"
+        /** V5 播放 POST 专用 UA（PhoenixReadApi `V5PlaybackUserAgent`）。
+         *  官方在这里的版本号 73932 与 query 的 74332 **故意不一致**（客户端编译期常量 vs 服务端下发），
+         *  此前我们强行「UA 与 query 逐字一致」改成 74532，反而偏离真实形态。 */
+        const val V5_PLAYBACK_UA =
+            "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
         private val KDF_SALT = hex("4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58")
         private val TT_MAGIC = byteArrayOf(0x74, 0x63, 0x05, 0x10, 0x00, 0x00)
 
