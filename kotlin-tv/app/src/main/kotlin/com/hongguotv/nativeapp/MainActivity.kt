@@ -4660,11 +4660,18 @@ class MainActivity: Activity() {
         networkCleanup.execute { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
     }
     private fun cancelPrefetch() {
+        cancelNextPrefetch()
+        cancelWarm()
+        dropQueuedNext()
+    }
+    /** 只收掉「下一集」这条预取，不动整窗预热。
+     *  2026-11-23：maybePrefetch() 原来调的是 cancelPrefetch()，而它内部会 cancelWarm()，
+     *  于是每次预取下一集都把 warmWindow 清空 → 下一次 warmEpisodeWindow() 又整窗重打一遍批量请求。
+     *  电视日志里 `window warmed 1/15` 每 5 秒出现一次就是这么来的（整窗预热被反复重启）。 */
+    private fun cancelNextPrefetch() {
         prefetchScope?.cancel(); prefetchScope=null
         preparedNext.clear(); prefetchJob?.cancel(true); prefetchJob=null
         closeTransport(prefetchHttp); prefetchHttp=null; prefetchedFor=""
-        cancelWarm()
-        dropQueuedNext()
     }
     /** 播放就绪后预热当前集前后的一窗（最多 15 集）：之后切集直接命中缓存，不再走「取址失败→自动重试」。 */
     private fun warmEpisodeWindow() {
@@ -4744,7 +4751,7 @@ class MainActivity: Activity() {
         // 缓冲余量门槛从 5 秒提高到 10 秒：提前预取会拉走一块带宽，慢网上别把当前集的口粮抢走。
         if(readySince==0L || now-readySince<3000 || p.bufferedPosition-p.currentPosition<10_000) return
         if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
-        cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
+        cancelNextPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
         // 记住播放身份的匿名 Cookie 罐必须继承，否则预加载与正式播放不是同一个会话。
         val http=repository.http.newBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()

@@ -838,40 +838,26 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         return WarmReport(ids.size,cached+batch.filled,batch.filled,batch.route)
     }
     private data class Batch(val filled: Int, val route: String?)
-    /** 一次签名请求问一整窗；空体就是风控信号，直接停手（换设备再问只会加剧），交给按需取址。 */
-    private fun batchModels(ids: List<String>): Batch =
-        sweepBatch(batchPayload(ids),ids,playbackSession.profile(http))
-    private fun sweepBatch(payload: ByteArray, ids: List<String>, identity: PlaybackDeviceSession.Profile): Batch {
-        for(path in BATCH_ROUTES) {
-            val body=try {
-                RequestScope.execute(http.newCall(playerRequest(path,payload,identity))) { response ->
-                    if(!response.isSuccessful) throw IOException("播放接口请求失败（HTTP ${response.code}）")
-                    response.body?.string().orEmpty()
-                }
-            } catch(problem: java.io.InterruptedIOException) {
-                throw problem
-            } catch(_: IOException) {
-                continue
-            } catch(_: RuntimeException) {
-                continue
-            }
-            if(body.isBlank()) {
-                // 批量只是预取优化：空体按「这条路由没批量能力」处理，静默跳过；
-                // 绝不 trip 全局冷却——否则一次预取失败会让后面正常起播全被拦下（2026-11-20 实测踩过）。
-                probeLog?.invoke("batch $path 空体，跳过该路由")
-                continue
-            }
-            val root=runCatching { JSONObject(body) }.getOrNull() ?: continue
-            if(root.optInt("Code",root.optInt("code",-1))!=0) continue
-            val data=root.optJSONObject("data") ?: continue
-            val models=modelsOf(data).filterKeys { it in ids }
-            if(models.isEmpty()) continue
-            val now=clock()
-            // 批量取到的模型也会进缓存、后续被 stream 消费：路由标记在这里一起注入，诊断才能覆盖批量预热路径。
-            models.forEach { (id,model) -> modelCache.put(id,model.put(ROUTE_KEY,path),now) }
-            return Batch(models.size,path)
+    /** 一次签名请求问一整窗。
+     *
+     *  2026-11-23 深夜：老的 [sweepBatch]/[playerRequest] 走 551 签名（`realSignedHeaders` 会把
+     *  v5 的 helios/medusa 过滤掉换成 gorgon/ladon/argus），在当前协议下每次都是零填充——
+     *  电视日志 `window warmed 1/15 batch=0` 连续出现，说明预取从未生效，这也是「上下集加载慢」的根。
+     *  改为与主取址同一条已验收链路（preload/v1 + Medusa F21=312 + v5 四头），一发喂满 15 集。 */
+    private fun batchModels(ids: List<String>): Batch {
+        val identity = playbackSession.profile(http)
+        val models = try {
+            MobilePlayback.batch(ids, identity, http, signer)
+        } catch (blank: EmptyPlaybackResponseException) {
+            emptyMap()
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
         }
-        return Batch(0,null)
+        if (models.isEmpty()) return Batch(0, null)
+        val now = clock()
+        // 批量取到的模型也会进缓存、后续被 stream 消费：路由标记在这里一起注入，诊断才能覆盖批量预热路径。
+        models.forEach { (id, model) -> modelCache.put(id, model.put(ROUTE_KEY, BATCH_ROUTE), now) }
+        return Batch(models.size, BATCH_ROUTE)
     }
     /** 批量响应的模型可能嵌在 `data.video_model_data[<id>]`，也可能直接以 id 为键。 */
     private fun modelsOf(data: JSONObject): Map<String,JSONObject> {
@@ -1209,7 +1195,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 2026-11-20 下午实测：`multi_video_model/v1/` 用精简 biz_param + video_platform:1024 仍正常下发，
         // 而 `.../player/v1` 及兄弟路径一律 200+0。批量只打这一条，避免空体把主路带进冷却。
         // 2026-11-20 对齐官方 7.4.5.32：v1 路径（无尾斜杠、无 dr_scene）+ mixed_video_id_map + 74532 版本参数。
-        private val BATCH_ROUTES=listOf("/novel/player/multi_video_model/v1")
+        private val BATCH_ROUTE="v5|batch"
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")

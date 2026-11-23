@@ -32,6 +32,8 @@ internal object MobilePlayback {
     /** 备用取址 GET（官方 `GetVideoModelRequest` 形态）。2026-11-22 上游 0.16.12 实网确认：
      *  主 POST 返空时，同一身份用 **v5 签名** 打这条 GET 能拿到模型（4 集跨 2 部剧）。 */
     private const val TAB_PATH = "/reading/bookapi/video_tab/multi_video_model/v1/"
+    /** 单发批量最多带多少集：站方上限 20，留出余量取 15（与 [ContentRepository] 的窗口一致）。 */
+    private const val MAX_BATCH = 15
     /** video_tab 是 GET + Cronet 传输，UA 与主 POST 的 tt-ok 形态不同（上游 0.16.12 原样值）。 */
     private const val TAB_UA = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
     // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
@@ -173,6 +175,88 @@ internal object MobilePlayback {
             throw EmptyPlaybackResponseException()
         }
         return parse(text, id)
+    }
+
+    /** 一窗剧集的批量取址：同一发 `preload/v1`，`mixed_video_id_map["1004"]` 放多个 id。
+     *
+     *  2026-11-23 深夜定位「上下集加载慢」：`ContentRepository.warm()` 的批量路径还在用
+     *  `playerRequest`（v5 占位头被 `realSignedHeaders` 换成了 551 的 gorgon/ladon/argus），
+     *  电视日志每轮都是 `window warmed 1/15 batch=0`——预取从来没成功过，等于只有「下一集」
+     *  靠单集预取兜着，「上一集」永远是冷启动现取一次。
+     *  批量走和主取址同一条已验收协议（preload + Medusa F21=312 + v5 四头），一次请求喂满一窗。
+     *
+     *  返回 id → `video_model` 映射；空响应抛 [EmptyPlaybackResponseException]（由上层决定退避），
+     *  其余失败返回空表（批量只是优化，绝不因此 trip 全局冷却）。 */
+    fun batch(
+        ids: List<String>,
+        identity: PlaybackDeviceSession.Profile,
+        http: OkHttpClient,
+        signer: Signer,
+    ): Map<String, JSONObject> {
+        val clean = ids.filter { it.matches(Regex("[0-9]{1,30}")) }.distinct().take(MAX_BATCH)
+        if (clean.isEmpty()) return emptyMap()
+        val array = org.json.JSONArray().also { target -> clean.forEach(target::put) }
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":2,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":$array},"dr_scene":"preload"}"""
+        val body = gzip(payload.toByteArray(Charsets.UTF_8))
+        val signed = signer.signPlaybackV5(APP_HOST + PRELOAD_PATH, appQuery(identity), body)
+        val request = Request.Builder().url(signed.url)
+            .header("User-Agent", System.getProperty("http.agent", "okhttp/4.12.0"))
+            .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+            .header("Content-Encoding", "gzip")
+            .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        val text = try {
+            val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
+            RequestScope.execute(transport.newCall(request)) { response ->
+                if (response.code == 429) throw PlaybackRateLimitedException(ContentRepository.retryAfterMs(response))
+                if (!response.isSuccessful) throw IOException("批量取址请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
+        } catch (problem: java.io.InterruptedIOException) {
+            throw problem
+        } catch (problem: IOException) {
+            ContentRepository.probeLog?.invoke("批量取址请求失败 ${problem.message}")
+            return emptyMap()
+        } catch (problem: RuntimeException) {
+            ContentRepository.probeLog?.invoke("批量取址请求异常 ${problem.message}")
+            return emptyMap()
+        }
+        if (text.isBlank()) {
+            ContentRepository.probeLog?.invoke("批量取址空响应（HTTP 200 / 0 字节）")
+            throw EmptyPlaybackResponseException()
+        }
+        return parseAll(text).also { models ->
+            ContentRepository.probeLog?.invoke("批量取址 ${clean.size} 集 → ${models.size} 个模型")
+        }
+    }
+
+    /** 批量响应可能是 `data.video_model_data[vid]` / `data.1004[vid]` / 直接以 vid 为键。 */
+    private fun parseAll(text: String): Map<String, JSONObject> {
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return emptyMap()
+        if (root.optInt("code", root.optInt("Code", -1)) != 0) {
+            ContentRepository.probeLog?.invoke("批量取址 code=${root.optInt("code", -1)} body=${text.take(160)}")
+            return emptyMap()
+        }
+        val data = root.optJSONObject("data") ?: return emptyMap()
+        val out = LinkedHashMap<String, JSONObject>()
+        fun harvest(container: JSONObject) {
+            for (key in container.keys()) {
+                val row = container.optJSONObject(key) ?: continue
+                val model = when (val value = row.opt("video_model")) {
+                    is JSONObject -> value
+                    is String -> runCatching { JSONObject(value) }.getOrNull()
+                    else -> row.takeIf { it.has("video_list") || it.has("fallback_api") }
+                } ?: continue
+                out[key] = model
+            }
+        }
+        data.optJSONObject("video_model_data")?.let(::harvest)
+        data.optJSONObject("1004")?.let(::harvest)
+        if (out.isEmpty()) harvest(data)
+        return out
     }
 
     /**

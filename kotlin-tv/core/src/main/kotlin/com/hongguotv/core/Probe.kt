@@ -20,6 +20,8 @@ fun main(args: Array<String>) {
     // --batch-probe：批量取址矩阵探针——key(1/1004) × 签名(有/无) 四组合各发一次，
     // 定位批量空响应的真实原因（2026-11-21 调研：key 应为内容类型、路由配方可能要无签名）。
     if(args.contains("--batch-probe")) { mainBatchProbe(args); return }
+    // --batch5：现行协议一发批量取址验证（预取生效前提）。
+    if(args.contains("--batch5")) { mainBatch5(args); return }
     // --diagnose：直接打官方取址接口，原样打印 HTTP 码/响应头/响应体，用于定位返空到底空在哪一层。
     if(args.contains("--diagnose")) { mainDiagnose(args); return }
     if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
@@ -402,6 +404,52 @@ private fun diagnoseV5(
 /** --batch-probe [seriesId] [--force]：批量取址 2×2 矩阵探测。
  *  key=1(短剧)/1004(漫剧) × 签名(有/无) 各发一次（共 4 个请求，间隔 2s），
  *  定位批量预热空响应的真实原因。冷却期内默认拒绝执行（--force 越过）。 */
+/** --batch5 <seriesId> [--count 15]：现行协议的一发批量取址验证（preload/v1 + v5 四头 + F21=312）。
+ *  用途：确认「1 发喂满一窗」在当前服务端是否成立——这是预取能不能真正生效的前提。
+ *  单发一次，不换身份、不重试。 */
+private fun mainBatch5(args: Array<String>) {
+    if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
+    fun arg(name: String): String? { val i=args.indexOf(name); return if(i>=0) args.getOrNull(i+1) else null }
+    val http=okhttp3.OkHttpClient.Builder()
+        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+    val repository=ContentRepository(http)
+    val seriesArg=arg("--batch5")?.takeIf { it.matches(Regex("[0-9]{1,30}")) }
+    val count=(arg("--count")?.toIntOrNull() ?: 15).coerceIn(1,20)
+    val ids=try {
+        val detail=repository.detail(seriesArg ?: repository.home().items.first().id)
+        detail.episodes.take(count).also { println("剧=${detail.series.title} 集数=${detail.episodes.size} 请求=${it.size}") }
+    } catch(e:Exception) { throw IllegalStateException("取剧集列表失败: ${e.message}",e) }
+    val identity=PlaybackDeviceSession().profile(http)
+    val started=System.currentTimeMillis()
+    try {
+        val models=MobilePlayback.batch(ids,identity,http,Signer())
+        println("RESULT 请求=${ids.size} 返回=${models.size} ms=${System.currentTimeMillis()-started}")
+        models.entries.take(20).forEach { (id,model) ->
+            val list=model.optJSONObject("video_list")
+            val array=model.optJSONArray("video_list")
+            val tiers=array?.length() ?: list?.length() ?: 0
+            val first=array?.optJSONObject(0) ?: list?.let { obj -> obj.keys().asSequence().mapNotNull { obj.optJSONObject(it) }.firstOrNull() }
+            val meta=first?.optJSONObject("video_meta")
+            println("  ${ids.indexOf(id)+1}集 $id tiers=$tiers codec=${meta?.optString("codec_type")} def=${meta?.optString("definition")}")
+        }
+        val missing=ids.filter { it !in models }
+        if(missing.isNotEmpty()) println("  未返回 ${missing.size} 集：${missing.take(5).joinToString(",")}")
+        arg("--dump")?.let { path ->
+            models.values.firstOrNull()?.let { model ->
+                java.io.File(path).writeText(model.toString())
+                val row=model.optJSONArray("video_list")?.optJSONObject(0)
+                val enc=row?.optJSONObject("encrypt_info")
+                println("  dump=$path spade_a=${if(enc?.optString("spade_a").orEmpty().isNotEmpty()) "有" else "无"}")
+            }
+        }
+    } catch(e:Exception) {
+        println("RESULT 失败 ${e.javaClass.simpleName}: ${e.message} ms=${System.currentTimeMillis()-started}")
+    }
+    http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown()
+}
+
 private fun mainBatchProbe(args: Array<String>) {
     if(args.contains("--verbose")) ContentRepository.probeLog={ println("probe: $it") }
     val http=okhttp3.OkHttpClient.Builder()
