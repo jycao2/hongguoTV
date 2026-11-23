@@ -631,13 +631,15 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     /** 取一集的直链播放地址。
      *  正常情况只要 1 个请求（v5 签名链）；站方空响应（HTTP 200 + 0 字节）会立刻转成
      *  [PlaybackThrottledException] 并进入全局冷却，冷却期内本方法不发任何请求。 */
-    fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
+    fun stream(id: String, maxQuality: Int = 1080, quiet: Boolean = false): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
         // 风控冷却期内连一次请求都不发：继续打只会把冷却期成倍拉长。
         guardPlaybackCooldown()
         try {
-            return streamFromModel(videoModel(id),maxQuality)
+            return streamFromModel(videoModel(id,quiet=quiet),maxQuality)
         } catch (unplayable: UnplayableVideoException) {
+            // 静默模式（后台预取）不做多轮重试：预取只是优化，失败交给下次触发，别为它白花请求。
+            if(quiet) throw unplayable
             // 站方对同一集会间歇性下发降级模型（video_list 全是 bytevc2 加密 blob）。
             // 换身份实测不影响下发内容，所以只剔缓存 + 退避重取，不再白花一次设备注册请求。
             var failure=unplayable
@@ -669,12 +671,12 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  普通档从高到低在前，bytevc2 档按从低到高垫底（最低档 = 最后兜底）；
      *  某一档解密失败/直链为空就跳过该档；全部档位都拿不到时抛 [UnplayableVideoException]。
      *  结果缓存到 url_expire，期间切清晰度/重播/自动降档全部零请求。 */
-    @Synchronized fun ladder(id: String): List<StreamInfo> {
+    @Synchronized fun ladder(id: String,quiet: Boolean=false): List<StreamInfo> {
         require(id.matches(Regex("[0-9]{1,30}")))
         val now=System.currentTimeMillis()/1000
         ladderCache[id]?.takeIf { it.expireAt>now && it.tiers.isNotEmpty() }?.let { return it.tiers }
         guardPlaybackCooldown()
-        val model=videoModel(id)
+        val model=videoModel(id,quiet=quiet)
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -996,10 +998,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  2026-11-20 下午 `multi_video_model/player/v1` 对所有身份/版本/参数组合一律返 200+0，
      *  取址改回同族旧端点后恢复正常（实测 1080P、ftyp 校验通过）；v5 签名流程完全没变。
      *  空响应仍然是站方行为风控信号：立即停手并进入全局冷却，不扫旧路由、不换匿名设备。 */
-    internal fun videoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
+    internal fun videoModel(id: String, level: Int = 1, preferAlt: Boolean = false, quiet: Boolean = false): JSONObject {
         modelCache.get(id,clock())?.let { return it }
         guardPlaybackCooldown()
-        val model=fetchVideoModel(id,level,preferAlt).put(LEVEL_KEY,level)
+        val model=fetchVideoModel(id,level,preferAlt,quiet).put(LEVEL_KEY,level)
         modelCache.put(id,model,clock())
         return model
     }
@@ -1016,13 +1018,16 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val route=model.optString(ROUTE_KEY)
         if(route.isNotEmpty()) goodRoute=route to clock()
     }
-    private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false): JSONObject {
+    private fun fetchVideoModel(id: String, level: Int = 1, preferAlt: Boolean = false, quiet: Boolean = false): JSONObject {
         val identity=playbackSession.profile(http)
         // 2026-11-20 对齐上游 0.1.33：GET video_tab（真签名）是首选，POST v1 只是兜底——
         // 官方对 v5 占位头的 POST 一律静默丢弃，先打它只会白白触发冷却。
+        // quiet（后台预取）：空响应不 trip 全局冷却——预取只是优化，不能替用户把冷却等级抬上去
+        //（2026-11-23 实测：刷剧时下一集预取被拒，冷却 20→60→120 连跳，用户看片中途被锁）。
         val tab=try {
             tabVideoModel(id,identity,level,preferAlt)
         } catch(blank: EmptyPlaybackResponseException) {
+            if(quiet) throw IOException("空响应（预取静默跳过）")
             throw tripPlaybackCooldown()
         }
         if(tab!=null) {
@@ -1034,6 +1039,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val model=try {
             MobilePlayback.model(id,identity,http,signer,clock())
         } catch(blank: EmptyPlaybackResponseException) {
+            if(quiet) throw IOException("空响应（预取静默跳过）")
             throw tripPlaybackCooldown()
         }
         if(model!=null) {

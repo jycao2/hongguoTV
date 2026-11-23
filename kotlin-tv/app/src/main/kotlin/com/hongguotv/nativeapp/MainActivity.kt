@@ -2595,7 +2595,7 @@ class MainActivity: Activity() {
                 val episode=detail.episodes.firstOrNull { it==wantedEpisode } ?: detail.episodes.firstOrNull() ?: continue
                 val now=android.os.SystemClock.elapsedRealtime()
                 val info=recommendStreams[episode]?.takeIf { now-it.first<10*60*1000L }?.second
-                    ?: runCatching { repository.stream(episode,library.maxQuality) }.getOrNull()
+                    ?: runCatching { repository.stream(episode,library.maxQuality,quiet=true) }.getOrNull()
                         ?.also { recommendStreams[episode]=now to it } ?: continue
                 // 只给「紧邻的下一部」预读首块：换剧时 RemoteVideo 已经能直接用，省掉现场 prepare 的 0.5~1 秒。
                 // 再往后那部只备地址——慢网下每部多下 2MB 会跟正在播的抢带宽。
@@ -4755,12 +4755,12 @@ class MainActivity: Activity() {
             var prepared: RemoteVideo?=null
             try {
                 prepared=scope.run {
-                    // 取址内部已经在首轮空体时立刻换匿名设备自愈（fetchVideoModel），
-                    // 这里不必再套一层 try/catch 重试——否则会连续注册两台设备，
-                    // 浪费且可能撞站方限流。失败就让 maybePrefetch 的退避机制兜底。
+                    // 空响应不 trip 全局冷却（quiet）：预取只是优化，不能替用户把冷却等级抬上去
+                    //（2026-11-23 实测：刷剧时下一集预取被拒，冷却 20→60→120 连跳，看片中途被锁）。
+                    // 失败就让 maybePrefetch 的退避机制兜底，用户真点到下一集时再正式取址。
                     // 预取与正式播放共用同一套清晰度阶梯（core 缓存 ~1h，取址通常 0 次），
                     // 普通 403 档会自动换下一档；track=false 不写降级状态，别污染正在播的这集。
-                    prepareFromLadder(source,id,quality,http=http,track=false)
+                    prepareFromLadder(source,id,quality,http=http,track=false,quiet=true)
                     // 只 prepare（解析头部 + 常驻首块），不 warm 整个 8MB 前读窗口：
                     // 提前预取发生在正片还在播的时候，一口气抢 8MB 会让慢网直接卡顿。
                     // 真的到片尾要续播时，handOffPrefetched 再补 warm。
@@ -4827,8 +4827,8 @@ class MainActivity: Activity() {
      *  track=false 用于预取线程：不写 activeTier/activeTiers，别污染正在播的这集的降级状态。 */
     private fun prepareFromLadder(repo: ContentRepository,id: String,cap: Int,
                                   http: okhttp3.OkHttpClient=repository.http,track: Boolean=true,
-                                  skipFailed: Boolean=false): RemoteVideo {
-        val tiers=repo.ladder(id)
+                                  skipFailed: Boolean=false,quiet: Boolean=false): RemoteVideo {
+        val tiers=repo.ladder(id,quiet)
         // skipFailed：同集降档/上爬重放时跳过硬解已失败的档（level 标错类死档），别重复撞；
         // 预取走 track=false 且默认 false——预取的是下一集，死档名单是本集的，不能跨集套用。
         val dead={ t: StreamInfo -> skipFailed && tierKey(t) in failedTiers }
