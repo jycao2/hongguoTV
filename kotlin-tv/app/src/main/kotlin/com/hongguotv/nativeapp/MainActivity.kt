@@ -57,6 +57,7 @@ import com.hongguotv.core.ThirdCms
 private const val TYPE_CARD=0
 private const val TYPE_FOOTER=1
 private const val TYPE_HEADER=2
+private const val TYPE_MORE=3
 private const val FOOTER_NONE=0
 private const val FOOTER_LOADING=1
 private const val FOOTER_END=2
@@ -512,6 +513,8 @@ class MainActivity: Activity() {
     private var keyboardKeys=emptyMap<String,TextView>()
     private var keyboardRows=emptyList<List<TextView>>()
     private var historyFirst: TextView?=null
+    /** 最近观看页本机记录是否已展开全部：默认折叠两行+「查看全部」卡（用户 2026-11-24），切页签后回到折叠。 */
+    private var historyShowAll=false
     private var historyItems=emptyList<TextView>()
     private var suggestScrollRef: ScrollView?=null
     private var fullSearchColumns=6
@@ -1130,6 +1133,8 @@ class MainActivity: Activity() {
             tabState.remove(1); tabFocus.remove(1)
         }
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
+        // 重新进最近观看页回到默认折叠形态，云端记录始终两屏内可达
+        if(next==4) historyShowAll=false
         rankBoard=saved?.board ?: rankBoard; genre=saved?.genre ?: genre
         aiCatalog=saved?.aiCatalog ?: false; aiGenre=saved?.aiGenre
         newRelease=saved?.newRelease ?: false; newReleaseWindow=saved?.newReleaseWindow ?: newReleaseWindow
@@ -1836,6 +1841,16 @@ class MainActivity: Activity() {
         // 云端收藏的续播角标来自云端观看记录：没拉到同样顺手补拉，拉到后经签名变化重建
         if(tab==3 && !favoriteManage && collection==null && accountManager.signedIn &&
             !accountManager.cloudHistoryLoaded && !accountManager.isBusy) accountManager.refreshHistory()
+        val cols=if(tab==1 && !advancedSearch) searchColumns else gridColumns
+        // 最近观看页本机记录默认折叠成两行：第二行末格是「查看全部」卡（与首页货架尾卡同款），
+        // 点开展开全部。不折叠时本机记录一长，要往下翻很久才到云端区（用户 2026-11-24）。
+        // 云端记录/云端收藏区不受影响，始终跟在折叠后的本机区后面。
+        var historyMore=false
+        val localTotal=displayed.size
+        if(tab==4 && collection==null && !historyShowAll && displayed.size>2*cols) {
+            while(displayed.size>2*cols-1) displayed.removeAt(displayed.size-1)
+            historyMore=true
+        }
         val localCount=displayed.size
         if(cloudRows.isNotEmpty()) displayed+=cloudRows.map { it.series }
         if(cloudFavs.isNotEmpty()) displayed+=cloudFavs.map { it.series }
@@ -1845,14 +1860,15 @@ class MainActivity: Activity() {
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusFilter && favoriteFilterButtons.isNotEmpty()) favoriteFilterButtons[favoriteFilterFocus.coerceIn(0,favoriteFilterButtons.size-1)].requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else nav[tab].requestFocus()
             return
         }
-        val cols=if(tab==1 && !advancedSearch) searchColumns else gridColumns
         val adapter=CatalogAdapter(displayed,cols)
+        if(historyMore) { adapter.morePos=localCount+(if(localCount>0) 1 else 0); adapter.moreTotal=localTotal }
         if(cloudRows.isNotEmpty()) {
             adapter.cloudRows=cloudRows
             adapter.cloudStart=localCount
             adapter.headers=buildMap {
                 if(localCount>0) put(0,"本机记录")
-                put(localCount+if(localCount>0) 1 else 0,"云端记录")
+                // 「查看全部」卡占一格：云端区标题的 adapter 位置要再让一位
+                put(localCount+(if(localCount>0) 1 else 0)+(if(historyMore) 1 else 0),"云端记录")
             }
         }
         if(cloudFavs.isNotEmpty()) {
@@ -2000,7 +2016,7 @@ class MainActivity: Activity() {
                 val focused=recycler.focusedChild
                 var pos=if(focused!=null) recycler.getChildAdapterPosition(focused) else RecyclerView.NO_POSITION
                 if(pos==RecyclerView.NO_POSITION) pos=catalogFocusPos
-                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
+                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos) && !adapter.isMore(pos)) {
                     val index=adapter.displayedIndex(pos)
                     if(index in 0 until adapter.displayed.size) {
                         val target=adapter.gridNeighbor(index,1)
@@ -2029,7 +2045,7 @@ class MainActivity: Activity() {
                 val focused=recycler.focusedChild
                 var pos=if(focused!=null) recycler.getChildAdapterPosition(focused) else RecyclerView.NO_POSITION
                 if(pos==RecyclerView.NO_POSITION) pos=catalogFocusPos
-                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos)) {
+                if(pos!=RecyclerView.NO_POSITION && !adapter.isHeader(pos) && !adapter.isFooter(pos) && !adapter.isMore(pos)) {
                     val index=adapter.displayedIndex(pos)
                     if(index in 0 until adapter.displayed.size) {
                         val target=adapter.gridNeighbor(index,-1)
@@ -2220,18 +2236,25 @@ class MainActivity: Activity() {
         /** 收藏页云端区：只读展示，卡片可带云端进度角标。 */
         var cloudFavs: List<CloudFavorite> = emptyList()
         var cloudFavStart=Int.MAX_VALUE
+        /** 「查看全部」卡（最近观看本机区折叠尾卡）的 adapter 位置；-1=无。该卡不对应 displayed 条目。 */
+        var morePos=-1
+        /** 折叠前的本机记录总数：更多卡副标「共 N 部」用。 */
+        var moreTotal=-1
         fun isHeader(position: Int)=headers.containsKey(position)
-        fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size+headers.size
-        /** adapter 位置 → displayed 下标（前面每有一个分节标题就减一）。 */
+        fun isMore(position: Int)=morePos>=0 && position==morePos
+        fun isFooter(position: Int)=footer!=FOOTER_NONE && position==displayed.size+headers.size+(if(morePos>=0) 1 else 0)
+        /** adapter 位置 → displayed 下标（前面每有一个分节标题或「查看全部」卡就减一）。 */
         fun displayedIndex(position: Int): Int {
             var index=position
             for(key in headers.keys) if(key<position) index--
+            if(morePos>=0 && morePos<position) index--
             return index
         }
         /** displayed 下标 → adapter 位置。 */
         fun adapterPosition(index: Int): Int {
             var position=index
             for(key in headers.keys.sorted()) if(key<=position) position++
+            if(morePos>=0 && morePos<=position) position++
             return position
         }
         /** displayed 下标 i 前面是否紧贴一个分节标题（标题独占一行，网格行计算要跳过）。 */
@@ -2242,10 +2265,10 @@ class MainActivity: Activity() {
         /** 同列上/下一视觉行的卡片下标：跨「本机/云端」分节标题无缝移动，没有则 -1。 */
         fun gridNeighbor(index: Int, dir: Int): Int =
             GridNav.neighbor(GridNav.coordinates(displayed.size,cols,::sectionStart),index,dir)
-        override fun getItemCount()=displayed.size+headers.size+if(footer!=FOOTER_NONE) 1 else 0
-        override fun getItemViewType(position: Int)=if(isHeader(position)) TYPE_HEADER else if(isFooter(position)) TYPE_FOOTER else TYPE_CARD
+        override fun getItemCount()=displayed.size+headers.size+(if(morePos>=0) 1 else 0)+if(footer!=FOOTER_NONE) 1 else 0
+        override fun getItemViewType(position: Int)=if(isHeader(position)) TYPE_HEADER else if(isFooter(position)) TYPE_FOOTER else if(isMore(position)) TYPE_MORE else TYPE_CARD
         fun updateFooter(next: Int) {
-            val footerPos=displayed.size+headers.size
+            val footerPos=displayed.size+headers.size+(if(morePos>=0) 1 else 0)
             if(footer==next) { if(next!=FOOTER_NONE) notifyItemChanged(footerPos); return }
             val had=footer!=FOOTER_NONE; footer=next
             if(next==FOOTER_NONE) notifyItemRemoved(footerPos)
@@ -2262,6 +2285,23 @@ class MainActivity: Activity() {
                 val frame=FrameLayout(this@MainActivity)
                 frame.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
                 return object: RecyclerView.ViewHolder(frame) {}
+            }
+            if(viewType==TYPE_MORE) {
+                // 与首页货架尾卡同款：大「›」占海报位 +「查看全部」标题 + 分区名副标
+                val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card)
+                val art=object: FrameLayout(this@MainActivity) {
+                    override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
+                        val w=MeasureSpec.getSize(widthMeasureSpec)
+                        super.onMeasure(widthMeasureSpec,MeasureSpec.makeMeasureSpec((w/TvStyle.POSTER_ASPECT).toInt(),MeasureSpec.EXACTLY))
+                    }
+                }
+                art.addView(TextView(this@MainActivity).apply { text="›"; textSize=34f; gravity=Gravity.CENTER },FrameLayout.LayoutParams(-1,-1))
+                val title=text("查看全部",14f).apply { gravity=Gravity.TOP; includeFontPadding=true; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) }
+                title.measure(View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+                val badge=text("",12f,muted).apply { minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
+                card.addView(art,lp(-1,-2)); card.addView(title,lp(-1,title.measuredHeight)); card.addView(badge,lp(-1,-2))
+                card.layoutParams=RecyclerView.LayoutParams(-1,-2).apply { rightMargin=dp(14); bottomMargin=dp(10) }
+                return object: RecyclerView.ViewHolder(card) {}
             }
             val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card)
             // 海报容器按自身实际测量宽度定高，回收复用、列宽变化都不会出现同屏高低不一
@@ -2292,6 +2332,19 @@ class MainActivity: Activity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder,position: Int) {
             if(getItemViewType(position)==TYPE_HEADER) { (holder.itemView as TextView).text=headers[position]; return }
             if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
+            if(getItemViewType(position)==TYPE_MORE) {
+                val card=holder.itemView as LinearLayout
+                (card.getChildAt(1) as TextView).text="查看全部"
+                (card.getChildAt(2) as TextView).text="本机记录"+if(moreTotal>0) " · 共 $moreTotal 部" else ""
+                card.contentDescription="查看全部本机记录"
+                card.setOnClickListener {
+                    // 展开：焦点落在折叠时看不到的第一张卡上，视觉连续
+                    historyShowAll=true
+                    catalogFocus=displayed.getOrNull(2*cols-1)?.id ?: ""
+                    showCatalog()
+                }
+                return
+            }
             holder as CardHolder
             val di=displayedIndex(position)
             val item=displayed[di]; holder.boundId=item.id
