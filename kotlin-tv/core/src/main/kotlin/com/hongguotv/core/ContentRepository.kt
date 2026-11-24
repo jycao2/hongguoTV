@@ -3,6 +3,7 @@ package com.hongguotv.core
 
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
@@ -639,7 +640,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         // 风控冷却期内连一次请求都不发：继续打只会把冷却期成倍拉长。
         guardPlaybackCooldown()
         try {
-            return streamFromModel(videoModel(id,quiet=quiet),maxQuality)
+            return streamFromModel(id,videoModel(id,quiet=quiet),maxQuality)
         } catch (unplayable: UnplayableVideoException) {
             // 静默模式（后台预取）不做多轮重试：预取只是优化，失败交给下次触发，别为它白花请求。
             if(quiet) throw unplayable
@@ -654,7 +655,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                 if(round>1) Thread.sleep(RETRY_BACKOFF_MS*(round-1))
                 try {
                     val (level,preferAlt)=RETRY_PLANS[round-1]
-                    return streamFromModel(videoModel(id,level,preferAlt),maxQuality)
+                    return streamFromModel(id,videoModel(id,level,preferAlt),maxQuality)
                 } catch(next: UnplayableVideoException) {
                     failure=next
                 }
@@ -687,6 +688,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             ladderCache[id]=StreamLadder(id,tiers,expire)
             return tiers
         }
+        // 内联数组全档 bytevc2：兼容模型重取，换出可硬解的 H.265/AVC 档再入缓存。
+        if(inlineOnlyBvc2(model)) {
+            compatLadderTiers(id,1080)?.let { compatTiers ->
+                ladderCache[id]=StreamLadder(id,compatTiers,System.currentTimeMillis()/1000+1800)
+                return ladderCache.getValue(id).tiers
+            }
+        }
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -699,6 +707,16 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             (if(entry.second.str("codec_type").lowercase() in setOf("bytevc2","bvc2")) vc2 else normal)+=Triple(num,entry.first,entry.second)
         }
         normal.sortByDescending { it.first }; vc2.sortBy { it.first }
+        // 对象形态全档 bytevc2：兼容模型重取，换出的档位作普通档（升序）+ 原 bvc2 档垫底。
+        if(normal.isEmpty() && vc2.isNotEmpty()) {
+            compatLadderTiers(id,1080)?.let { compatTiers ->
+                val merged=compatTiers.sortedBy { it.qNum }+
+                    vc2.mapNotNull { runCatching { makeStream(it,data,1080).copy(codec="bytevc2") }.getOrNull() }
+                val mergedExpire=data.optLong("url_expire").takeIf { it>now } ?: (now+1800)
+                ladderCache[id]=StreamLadder(id,merged,mergedExpire)
+                return ladderCache.getValue(id).tiers
+            }
+        }
         val tiers=ArrayList<StreamInfo>(normal.size+vc2.size)
         normal.forEach { runCatching { tiers+=makeStream(it,data,1080) } }
         vc2.forEach { runCatching { tiers+=makeStream(it,data,1080).copy(codec="bytevc2") } }
@@ -725,7 +743,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             ?: tiers.first()
     }
 
-    private fun streamFromModel(model: JSONObject, maxQuality: Int): StreamInfo {
+    private fun streamFromModel(id: String, model: JSONObject, maxQuality: Int, allowCompat: Boolean=true): StreamInfo {
         // 7.4.5.32 现行 App 把全部档位直链内联在模型的 `video_list` 数组里（带 video_meta），
         // 一次请求即可起播，无需再打 fallback_api 那第二发。
         inlineStreams(model, maxQuality)?.let { tiers ->
@@ -733,6 +751,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
                 ?: tiers.lastOrNull { it.qNum>0 }
                 ?: tiers.first()
         }
+        // 内联数组存在但全是 bytevc2（电视无系统解码器）：先试一次兼容模型重取，
+        // 失败再按原逻辑走 fallback_api / 兜底提示，不多花请求。
+        if(allowCompat && inlineOnlyBvc2(model)) compatRescue(id,maxQuality)?.let { return it }
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -747,6 +768,10 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         }
         val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull()
         if(selected!=null) return makeStream(selected,info,maxQuality)
+        // 整集只剩 bytevc2：先试一次兼容模型重取（CI 包没有 vc2 软解，重取是唯一活路；
+        // 带 vc2 的包失败后仍走下面的软解兜底，双保险）。
+        val hasBvc2=all.any { it.third.str("codec_type").lowercase() in setOf("bytevc2","bvc2") && it.third.str("main_url").isNotEmpty() }
+        if(allowCompat && hasBvc2) compatRescue(id,maxQuality)?.let { return it }
         // 整集只剩 bytevc2：把最低档（软解代价最小）的直链 + key 交给上层，
         // 由 Bvc2PlayerActivity 用 NDK 解码器原生播放；解码器不可用时上层仍回退原提示。
         val vc2=all.lastOrNull { it.third.str("codec_type").lowercase() in setOf("bytevc2","bvc2") && it.third.str("main_url").isNotEmpty() }
@@ -757,6 +782,120 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             // 并带上该模型来源路由，定位降级模型由哪条接口下发。
             "route="+model.optString(ROUTE_KEY).ifEmpty { "unknown" }+" lvl="+model.optString(LEVEL_KEY).ifEmpty { "?" }+" video_list="+compactVideoList(videoList),
             bvc2Stream)
+    }
+    /** 兼容模型重取（2026-11-25，参考 tsukiyo-zero/hongguoTV issue #56 的实测实现）：
+     *  站方对部分剧集只下发全 bytevc2 档（电视无系统解码器，CI 包没有软解 →「片源不兼容」）。
+     *  上游实测有效形态：**把 `codec_type=0 & force_codec=h264` 作为 query 参数附加到
+     *  fallback_api 的 URL 上再读一次**，即可换出可硬解的 H.265（hvc1，1254×720）档位；
+     *  注意 force_codec=h264 实际换出的是 H.265——参数名不等于实际编码，仍按实际 codec 过滤。
+     *  边界（照抄上游口径 + 2026-11-24 风险评审）：
+     *  - 仅在全档 bytevc2 时触发一次，不循环重试；
+     *  - 空响应/任何失败一律静默返回 null——**绝不 trip 冷却、不换身份**，
+     *    否则一次无效参数请求会把主播放打进「官方接口限流中」；
+     *  - 失败回落既有 vc2 软解路径（`libbvc2dec.so`），vc2 包行为完全不变；
+     *  - 换到的档位只进候选池参与选档竞争（遵守 maxQuality），不无条件压过 bvc2 原档。 */
+    private fun compatRescue(id: String, maxQuality: Int): StreamInfo? {
+        val tiers=compatLadderTiers(id,maxQuality) ?: return null
+        return tiers.lastOrNull { it.qNum in 1..maxQuality }
+            ?: tiers.lastOrNull { it.qNum>0 }
+            ?: tiers.firstOrNull()
+    }
+    private val compatCache=HashMap<String,StreamLadder>()
+    private fun compatLadderTiers(id: String, maxQuality: Int): List<StreamInfo>? {
+        val now=clock()
+        compatCache[id]?.takeIf { it.expireAt>now && it.tiers.isNotEmpty() }?.let { return it.tiers }
+        // 主模型走缓存（此处在 streamFromModel/ladder 流程内，模型已在 modelCache，零请求）。
+        val model=runCatching { videoModel(id) }.getOrNull() ?: return null
+        // 路径 A（上游实测验证）：fallback_api URL 附加兼容参数重读一次。
+        val tiersA=runCatching { tiersFromModel(model,maxQuality,compat=true) }.getOrNull().orEmpty()
+        if(tiersA.isNotEmpty()) {
+            ContentRepository.probeLog?.invoke("兼容重取(id=$id) 命中 ${tiersA.size} 档（fallback URL 兼容参数）")
+            compatCache[id]=StreamLadder(id,tiersA,now+1800)
+            return tiersA
+        }
+        // 路径 B（实验性）：换发一次带兼容参数的模型请求——preload 先试（真机上活着的通道），
+        // 空响应/未下发再落到 video_tab（空响应环境下唯一确认活着的通道）。PC 实测 video_tab
+        // query 级参数服务端不认（仍回全 bytevc2），真机上 preload biz_param 形态待验证。
+        val tiersB=runCatching {
+            val identity=playbackSession.profile(http)
+            val compat=runCatching {
+                MobilePlayback.model(id,identity,http,signer,now,4,MobilePlayback.PATH,compatCodec=true,currentApp=true)
+            }.getOrNull() ?: runCatching {
+                ContentRepository.probeLog?.invoke("兼容重取 preload 未命中 → 落到 video_tab 通道")
+                MobilePlayback.videoTab(id,identity,http,signer,now,host=MobilePlayback.HOST,compatCodec=true)
+                    ?.put(ROUTE_KEY,"v5|tab-compat")
+            }.getOrNull() ?: return@runCatching emptyList()
+            ContentRepository.probeLog?.invoke("兼容模型重取 id=$id 命中，解析档位 codecs="+compactCodecs(compat))
+            tiersFromModel(compat,maxQuality)
+        }.getOrNull().orEmpty()
+        if(tiersB.isNotEmpty()) {
+            ContentRepository.probeLog?.invoke("兼容重取(id=$id) 命中 ${tiersB.size} 档（模型请求兼容参数）")
+            compatCache[id]=StreamLadder(id,tiersB,now+1800)
+            return tiersB
+        }
+        ContentRepository.probeLog?.invoke("兼容重取(id=$id) 未换出可播档位，回落 vc2 软解/原提示")
+        return null
+    }
+    /** 把一个模型（内联数组形态或 fallback_api 对象形态）解析成完整清晰度阶梯，只含非 bytevc2 档。
+     *  [compat]=true 时给 fallback_api 的 URL 附加 `codec_type=0 & force_codec=h264` 再读一次
+     *  （上游实测：该组合能从全 bytevc2 片源换出 H.265 兼容档；参数名不等于实际编码）。 */
+    private fun tiersFromModel(model: JSONObject, maxQuality: Int, compat: Boolean=false): List<StreamInfo> {
+        inlineStreams(model,maxQuality)?.let { return it }
+        val raw=model.opt("fallback_api")
+        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
+        if(!fallback.startsWith("https://")) return emptyList()
+        var fetchUrl=fallback
+        if(compat) fetchUrl=runCatching {
+            // setQueryParameter 替换语义：fallback URL 自带 codec_type=4，必须替换成 0
+            // （addQueryParameter 会追加重复参数，服务端只认原值——2026-11-25 实测踩中）。
+            fallback.toHttpUrlOrNull()?.newBuilder()
+                ?.setQueryParameter("codec_type","0")
+                ?.setQueryParameter("force_codec","h264")
+                ?.build().toString()
+        }.getOrDefault(fallback)
+        val info=runCatching { JSONObject(text(fetchUrl)).optJSONObject("video_info")?.optJSONObject("data") }.getOrNull()
+            ?: return emptyList()
+        if(compat) {
+            val vl=info.optJSONObject("video_list")
+            val codecs=vl?.keys()?.asSequence()
+                ?.mapNotNull { vl.optJSONObject(it)?.str("codec_type")?.ifEmpty { "?" } }
+                ?.joinToString(",") ?: "no-video_list"
+            ContentRepository.probeLog?.invoke("兼容 fallback 重读响应 codecs=$codecs")
+        }
+        val videoList=info.optJSONObject("video_list") ?: return emptyList()
+        val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }
+            .map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }
+            .filter { it.third.str("main_url").isNotEmpty() && it.third.str("codec_type").lowercase() !in setOf("bytevc2","bvc2") }
+            .sortedByDescending { it.first }.toList()
+        return rows.mapNotNull { runCatching { makeStream(it,info,maxQuality) }.getOrNull() }
+    }
+    /** 内联数组形态的 `video_list` 是否非空且全部为 bytevc2/bvc2（无直链的行忽略，不算证据）。 */
+    private fun inlineOnlyBvc2(model: JSONObject): Boolean {
+        val array=model.optJSONArray("video_list") ?: return false
+        if(array.length()==0) return false
+        var sawAny=false
+        for(i in 0 until array.length()) {
+            val row=array.optJSONObject(i) ?: continue
+            if(!cleanUrl(row.str("main_url")).startsWith("http")) continue
+            sawAny=true
+            val codec=(row.optJSONObject("video_meta")?.str("codec_type") ?: row.str("codec_type")).lowercase()
+            if(codec !in setOf("bytevc2","bvc2")) return false
+        }
+        return sawAny
+    }
+    /** 诊断用：兼容响应里各档位的 codec 摘要（inline 数组或 fallback 对象形态都覆盖）。 */
+    private fun compactCodecs(model: JSONObject): String {
+        val array=model.optJSONArray("video_list")
+        if(array!=null && array.length()>0) {
+            return (0 until array.length()).mapNotNull { i ->
+                array.optJSONObject(i)?.let { row ->
+                    (row.optJSONObject("video_meta")?.str("codec_type") ?: row.str("codec_type")).ifEmpty { "?" }
+                }
+            }.joinToString(",")
+        }
+        val raw=model.opt("fallback_api") ?: return "no-video_list"
+        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> raw.toString() }
+        return "fallback=${if(fallback.startsWith("https://")) "yes" else "no"}"
     }
     /** 模型内联 `video_list`（**数组**形态，7.4.5.32 现行 App 返回）：每项带 `video_meta`
      *  （codec_type / vheight / definition）与 `main_url`，直链可直接下载；

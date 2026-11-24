@@ -4042,7 +4042,7 @@ class MainActivity: Activity() {
             synopsisButton.post { synopsisButton.requestRectangleOnScreen(android.graphics.Rect(0,0,synopsisButton.width,synopsisButton.height),false) }
         }
         lateinit var jump: TextView
-        jump=addButton(actions,"跳转集数") { tvTools.episodePicker(data.episodes.size,episodeIndex,jump) { target -> episodeIndex=target; group=target/20; showDetail(true) } }
+        jump=addButton(actions,"跳转集数") { tvTools.episodePicker(data.episodes.size,episodeIndex,jump) { target -> episodeIndex=target; group=target/20; detailEpisodePage=-1; showDetail(true) } }
         content.addView(hero)
         // 系列剧季导航与集数网格收进海报右侧栏：一屏内完成「看点什么、从哪集看」的决定
         val seasons=(listOf(data.series)+data.sameName).distinctBy { it.id }
@@ -4460,6 +4460,9 @@ class MainActivity: Activity() {
         outroSkipSeconds=skipMark?.outroSeconds ?: 0; outroTriggered=false; ffActive=false
         if(autoplay) sleepStopped=false
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
+        // 播放集变了：详情页选集网格下次重建时重新跟随当前集（-1=按 episodeIndex 重算页码），
+        // 否则从播放页返回详情时网格还停在旧页，当前集高亮不在屏上（跳转/连播/遥控切集同理）。
+        detailEpisodePage=-1
         panel=false; playError=false; playbackReady=false; quality=""; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
         prefetchAttempts=0; prefetchAttemptAt=0
@@ -4694,6 +4697,7 @@ class MainActivity: Activity() {
                     val nextVideo=queuedVideo; val nextHttp=queuedHttp
                     val oldVideo=video; val oldHttp=playbackHttp
                     episodeIndex=queuedIndex.coerceIn(0,data.episodes.lastIndex); group=episodeIndex/20
+                    detailEpisodePage=-1 // 片尾自动续播/SEEK 换集：返回详情页时选集网格跟随新集所在页
                     video=nextVideo; playbackHttp=nextHttp; quality=nextVideo?.info?.quality.orEmpty()
                     // 档位阶梯状态跟着交接：失败自动降档在预挂的下一集上同样有效。
                     activeTier=nextVideo?.info

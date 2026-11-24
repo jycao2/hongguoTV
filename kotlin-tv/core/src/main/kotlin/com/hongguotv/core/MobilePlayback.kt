@@ -119,6 +119,10 @@ internal object MobilePlayback {
         /** true = 走 7.4.5.32 现行 App 协议：`reading.snssdk.com` + `preload/v1` + `dr_scene=preload`
          *  + `device_level=2` + 平台默认 UA（上游 0.16.14 验收形态）。 */
         currentApp: Boolean = false,
+        /** true = 兼容模型重取（2026-11-24，参考 tsukiyo-zero/hongguoTV issue #56）：biz_param 附加
+         *  `codec_type:0 + force_codec:h264`，让全档 bytevc2 的剧集换发可硬解的 H.265（hvc1）档位。
+         *  仅在「模型所有档位均为 bytevc2/bvc2」时由上层触发一次，失败静默回落 vc2 软解，不循环。 */
+        compatCodec: Boolean = false,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         // 7.4.3.32 形态：完整 biz_param + mixed_video_id_map。
@@ -128,7 +132,8 @@ internal object MobilePlayback {
         //     之前照抄 openhongguo 抓包加的 dr_scene="player" 会被判成无效请求。
         val level = if (currentApp) 2 else deviceLevel
         val scene = if (currentApp) ""","dr_scene":"preload"""" else ""
-        val payload = """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}$scene}"""
+        val compat = if (compatCodec) ""","codec_type":0,"force_codec":"h264"""" else ""
+        val payload = """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024$compat},"mixed_video_id_map":{"1004":["$id"]}$scene}"""
         val body = gzip(payload.toByteArray(Charsets.UTF_8))
         val endpoint = if (currentApp) APP_HOST + PRELOAD_PATH else HOST + path
         val signed = signer.signPlaybackV5(endpoint, if (currentApp) appQuery(identity) else query(identity), body)
@@ -277,6 +282,10 @@ internal object MobilePlayback {
         signer: Signer,
         now: Long,
         host: String = HOST,
+        /** true = 兼容模型重取（2026-11-24）：query 附加 `codec_type=0 + force_codec=h264`。
+         *  preload 通道对全 bvc2 剧的兼容重取可能整请求被空响应掉，而 video_tab 是空响应环境下
+         *  唯一确认活着的通道——兼容重取失败后自动落到这里再试一次。 */
+        compatCodec: Boolean = false,
     ): JSONObject? {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         val v = identity.values
@@ -301,6 +310,7 @@ internal object MobilePlayback {
             "use_os_player" to "0", "video_platform" to "1024", "source" to "0",
             "from_video_id" to "",
         )
+        if (compatCodec) { values["codec_type"] = "0"; values["force_codec"] = "h264" }
         val signed = signer.signPlaybackV5("$host$TAB_PATH", values, ByteArray(0))
         val request = Request.Builder().url(signed.url).get()
             .header("User-Agent", TAB_UA)

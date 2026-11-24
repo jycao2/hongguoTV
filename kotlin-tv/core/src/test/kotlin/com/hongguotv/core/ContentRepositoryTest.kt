@@ -15,8 +15,19 @@ import java.io.IOException
 class ContentRepositoryTest {
     // 冷却状态是进程级共享的：一个用例的空响应会毒到下一个，必须逐例清空。
     @Before fun clearPlaybackCooldown() = ContentRepository.resetPlaybackCooldown()
+    /** 解出模型请求的 gzip JSON body（兼容重取请求在 biz_param 里多 `force_codec` 字段，靠它区分）。 */
+    private fun gzBody(request: Request): String = runCatching {
+        val buffer=okio.Buffer()
+        request.body!!.writeTo(buffer)
+        java.util.zip.GZIPInputStream(buffer.readByteArray().inputStream()).readBytes().decodeToString()
+    }.getOrDefault("")
+    private fun isCompatRequest(request: Request) =
+        request.url.queryParameter("force_codec")=="h264" || gzBody(request).contains("\"force_codec\":\"h264\"")
     private fun streamRepository(vararg variants: Triple<Int,String,String>) = repository { request ->
-        if(request.url.host=="example.com") {
+        // 兼容重取请求（fallback URL 带 force_codec / 模型请求 biz_param 带 force_codec）一律拒绝：
+        // 让不涉及兼容逻辑的用例保持旧行为，避免路径 A/B 抢跑。
+        if(isCompatRequest(request)) """{"code":100103,"message":"compat rejected"}"""
+        else if(request.url.host=="example.com") {
             val rows=JSONObject()
             variants.forEachIndexed { index,(height,codec,url) -> rows.put("video_$index",JSONObject().put("vheight",height).put("codec_type",codec).put("main_url",url)) }
             JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
@@ -79,13 +90,17 @@ class ContentRepositoryTest {
     @Test fun degradedModelIsEvictedAndRefetchedWithRenewedIdentity() {
         var streamFetches=0
         val repo=repository { request ->
-            if(request.url.host=="example.com") {
+            // 兼容重取给错误码（换不出档位）：本用例验证的是降级模型的退避重取链路，别让兼容重取抢跑。
+            // 注意路径 A 也打 example.com，必须拦在 host 判断之前。
+            if(isCompatRequest(request)) """{"code":100103,"message":"invalid param"}"""
+            else if(request.url.host=="example.com") {
                 streamFetches++
                 val rows=JSONObject()
                 if(streamFetches==1) rows.put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","https://example.com/unsupported"))
                 else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+            else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         // 第一次取到降级模型，剔缓存换身份重取后拿到正常片源，而不是直接报不兼容。
         assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
@@ -97,13 +112,16 @@ class ContentRepositoryTest {
         // 连续两轮降级后第三轮拿到正常模型，应播放成功而不是提前报不兼容。
         var streamFetches=0
         val repo=repository { request ->
-            if(request.url.host=="example.com") {
+            // 兼容重取给错误码：本用例验证的是连续降级模型的三轮重取，别让兼容重取提前救场。
+            if(isCompatRequest(request)) """{"code":100103,"message":"invalid param"}"""
+            else if(request.url.host=="example.com") {
                 streamFetches++
                 val rows=JSONObject()
                 if(streamFetches<3) rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))
                 else rows.put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/recovered"))
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
-            } else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+            else """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
         assertEquals("https://example.com/recovered",repo.stream("123",1080).url)
         assertEquals(3,streamFetches)
@@ -112,6 +130,94 @@ class ContentRepositoryTest {
     @Test fun legacyMissingCodecLabelKeepsQualityLimit() {
         val repo=streamRepository(Triple(720,"","https://example.com/legacy"),Triple(1080,"bytevc1","https://example.com/hevc"))
         assertEquals("720P",repo.stream("123",720).quality)
+    }
+
+    // ---- 兼容重取（2026-11-25，全档 bytevc2 时以 codec_type=0 + force_codec=h264 换出可硬解档）----
+    // 路径 A（上游实测形态）：fallback_api URL 附加 query 参数重读；路径 B（实验）：模型请求带兼容参数。
+
+    @Test fun compatModelRescueReplacesAllByteVc2SourceWithPlayableTrack() {
+        var compatFetches=0
+        val repo=repository { request ->
+            when {
+                // 路径 A：fallback URL 附加 codec_type=0 & force_codec=h264 → 换出 h264 档。
+                request.url.queryParameter("force_codec")=="h264" -> {
+                    compatFetches++
+                    JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                        JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","h264").put("main_url","https://example.com/h264-rescued"))))).toString()
+                }
+                request.url.host=="example.com" ->
+                    JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                        JSONObject().put("video_0",JSONObject().put("vheight",1080).put("codec_type","bytevc2").put("main_url","https://example.com/bvc2-only"))))).toString()
+                else -> """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+        }
+        val stream=repo.stream("123")
+        assertEquals("https://example.com/h264-rescued",stream.url)
+        // 只重取一次：成功后进缓存，失败也不循环。
+        assertEquals(1,compatFetches)
+    }
+
+    @Test fun compatRescueFailureKeepsBvc2StreamForSoftDecoder() {
+        val repo=repository { request ->
+            when {
+                // 路径 A 换出的还是 bytevc2；路径 B（模型请求级）给错误码。
+                request.url.queryParameter("force_codec")=="h264" ->
+                    JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                        JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","https://example.com/bvc2-720"))))).toString()
+                isCompatRequest(request) -> """{"code":100103,"message":"compat rejected"}"""
+                request.url.host=="example.com" ->
+                    JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                        JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","https://example.com/bvc2-720"))))).toString()
+                else -> """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+            }
+        }
+        // 兼容重取换不出可播档 → 回落原 bvc2 直链交给 vc2 软解，不能就此报死。
+        val error=assertThrows(UnplayableVideoException::class.java) { repo.stream("123") }
+        assertNotNull(error.bvc2Stream)
+        assertEquals("https://example.com/bvc2-720",error.bvc2Stream!!.url)
+    }
+
+    @Test fun compatBlankResponseDoesNotTripPlaybackCooldown() {
+        // 兼容重取两条路径都吃空响应必须静默：无效参数请求不能把主播放打进「官方接口限流中」。
+        val repo=repository { request ->
+            when {
+                request.url.host=="example.com" ->
+                    if(request.url.encodedPath.contains("stream123"))
+                        JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                            JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","bytevc2").put("main_url","qAABAAAA=="))))).toString()
+                    else
+                        JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                            JSONObject().put("video_0",JSONObject().put("vheight",1080).put("codec_type","h264").put("main_url","https://example.com/ok-456"))))).toString()
+                request.url.queryParameter("force_codec")=="h264" -> ""   // 路径 A / video_tab 兼容请求：空响应
+                gzBody(request).contains("\"force_codec\":\"h264\"") -> "" // 路径 B preload：空响应
+                else -> {
+                    val ep=request.url.queryParameter("video_id") ?: if(gzBody(request).contains("\"123\"")) "123" else "456"
+                    """{"code":0,"data":{"$ep":{"video_model":{"fallback_api":"https://example.com/stream$ep"}}}}"""
+                }
+            }
+        }
+        // 全档 bytevc2 + 兼容重取空响应：报「片源不兼容」而不是「限流中」。
+        assertThrows(UnplayableVideoException::class.java) { repo.stream("123") }
+        // 冷却没被触发：换一集照常取址成功。
+        assertEquals("https://example.com/ok-456",repo.stream("456").url)
+    }
+
+    @Test fun inlineAllByteVc2ArrayIsRescuedByCompatModel() {
+        val expire=System.currentTimeMillis()/1000+3600
+        val repo=repository { request ->
+            when {
+                request.url.host=="example.com" ->
+                    JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",
+                        JSONObject().put("video_0",JSONObject().put("vheight",720).put("codec_type","h264").put("main_url","https://example.com/h264-rescued"))))).toString()
+                isCompatRequest(request) ->
+                    """{"code":0,"data":{"123":{"video_model":{"url_expire":$expire,"fallback_api":"https://example.com/stream"}}}}"""
+                else ->
+                    """{"code":0,"data":{"123":{"video_model":{"url_expire":$expire,"video_list":""" +
+                        """[{"main_url":"https://example.com/bvc2.mp4","video_meta":{"codec_type":"bytevc2","vheight":1080,"definition":"1080p"}}]}}}}"""
+            }
+        }
+        // 7.4.5.32 内联数组形态全档 bytevc2：同样走兼容重取，不再掉进「播放地址格式异常」。
+        assertEquals("https://example.com/h264-rescued",repo.stream("123").url)
     }
 
     private fun videoInfo() =
