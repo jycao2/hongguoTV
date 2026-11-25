@@ -223,14 +223,15 @@ class ContentRepositoryTest {
     private fun videoInfo() =
         """{"video_info":{"data":{"video_list":{"video_0":{"vheight":1080,"codec_type":"h264","main_url":"https://example.com/a.mp4"}}}}}"""
     private val tabPath="/reading/bookapi/video_tab/multi_video_model/v1/"
-    // 2026-11-23 23:00 起首选现行 App 协议（上游 0.16.14）：reading.snssdk.com + preload/v1
-    // + dr_scene=preload + device_level=2 + Medusa F21=312，实网已验可取到内联 5 档直链。
+    // 2026-11-25 对齐上游 0.1.40：单集 video_model/v1 是官方 7.4.5.32 现行端点（11-24 放行），首选。
+    private val currentPath="/novel/player/video_model/v1/"
+    // 现行批量协议（上游 0.16.14）：reading.snssdk.com + preload/v1 + F21=312，退居第二形态。
     private val preloadPath="/novel/player/multi_video_model/preload/v1"
     // 老的 7.4.3.32 形态：现行协议给了非空失败才回退到它。
     private val v5Path="/novel/player/multi_video_model/player/v1"
     private val flatPath="/novel/player/multi_video_model/v1"
 
-    @Test fun preloadRouteSuppliesPlaybackModelWithASingleRequest() {
+    @Test fun currentModelRouteSuppliesPlaybackModelWithASingleRequest() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             if(request.url.host=="example.com") videoInfo()
@@ -240,17 +241,17 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // 一次就够：现行协议命中后不再打 video_tab，也不回退老路径。
-        assertEquals(listOf(preloadPath),paths)
+        // 一次就够：现行单集接口命中后不再打 preload / video_tab，也不回退老路径。
+        assertEquals(listOf(currentPath),paths)
     }
 
-    @Test fun nonEmptyFailureOnPreloadFallsBackToLegacyPostRoute() {
+    @Test fun nonEmptyFailureFallsBackToLegacyPostRoute() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             when {
                 request.url.host=="example.com" -> videoInfo()
-                request.url.encodedPath==preloadPath -> {
-                    paths += preloadPath
+                request.url.encodedPath in listOf(currentPath,preloadPath,v5Path) -> {
+                    paths += request.url.encodedPath
                     // 现行协议非空失败（有错误码、没有模型）：不算额度用尽，允许回退老形态一发。
                     """{"code":100001}"""
                 }
@@ -266,8 +267,8 @@ class ContentRepositoryTest {
             }
         }
         assertEquals("1080P",repo.stream("123").quality)
-        // preload 错误码 → 老 player/v1 一发 → 仍无模型 → video_tab 兜底命中。
-        assertEquals(listOf(preloadPath,v5Path,tabPath),paths)
+        // 单集错误码 → preload 错误码 → 老 player/v1 一发 → 仍无模型 → video_tab 兜底命中。
+        assertEquals(listOf(currentPath,preloadPath,v5Path,tabPath),paths)
     }
 
     @Test fun inlineVideoListArrayServesStreamWithoutFallbackRequest() {
@@ -285,11 +286,11 @@ class ContentRepositoryTest {
         val stream=repo.stream("123")
         assertEquals("1080P",stream.quality)
         assertTrue(stream.url.endsWith("1080.mp4"))
-        assertEquals(listOf(preloadPath),paths)
+        assertEquals(listOf(currentPath),paths)
         // 切清晰度走缓存阶梯（升序，低 → 高），0 请求。
         val tiers=repo.ladder("123")
         assertEquals(listOf("720P","1080P"),tiers.map{it.quality})
-        assertEquals(listOf(preloadPath),paths)
+        assertEquals(listOf(currentPath),paths)
     }
 
     @Test fun videoModelCanBeStringEncodedJson() {
@@ -332,25 +333,25 @@ class ContentRepositoryTest {
         }
         val first=assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
         assertTrue(first.remainingMs>0)
-        // 2026-11-23 23:00：现行协议空响应后，video_tab（v5 签名）是备用通道，
-        // 每台身份「preload 1 发 + tab 1 发」；2 台身份共 4 发（仍远低于压缩前的 12 发）。
-        val expected=listOf(preloadPath,tabPath,preloadPath,tabPath)
+        // 空响应后 video_tab（v5 签名）是备用通道：每台身份「单集 + preload + tab」3 发，
+        // 2 台身份共 6 发（仍远低于压缩前的 12 发）。
+        val expected=listOf(currentPath,preloadPath,tabPath,currentPath,preloadPath,tabPath)
         assertEquals(expected,paths)
         // 冷却期内换一集：一个请求都不发，立刻失败。
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("456") }
         assertEquals(expected,paths)
     }
 
-    @Test fun nonEmptyFailureIsCappedAtFiveRequests() {
-        // 非空失败（服务端回错误码）才允许换路径：首台身份 preload → 老 player/v1 → video_tab 共 3 发，
-        // 第二台身份「preload 1 发 + tab 1 发」，合计封顶 5 发（压缩前是 3 台 × 4 发 = 12 发）。
+    @Test fun nonEmptyFailureIsCappedAtSevenRequests() {
+        // 非空失败（服务端回错误码）才允许换路径：首台身份单集 → preload → 老 player/v1 → video_tab 共 4 发，
+        // 第二台身份「单集 + preload + tab」3 发（不再扫老路径），合计封顶 7 发（旧链路是 12 发）。
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths += request.url.encodedPath
             if(request.url.host=="example.com") videoInfo() else """{"code":100103,"message":"invalid param"}"""
         }
         assertThrows(PlaybackThrottledException::class.java) { repo.stream("123") }
-        assertEquals(listOf(preloadPath,v5Path,tabPath,preloadPath,tabPath),paths)
+        assertEquals(listOf(currentPath,preloadPath,v5Path,tabPath,currentPath,preloadPath,tabPath),paths)
     }
 
     @Test fun blankResponseSucceedsOnVideoTabWithoutRotatingIdentity() {
@@ -361,14 +362,14 @@ class ContentRepositoryTest {
             requests += request
             when {
                 request.url.host=="example.com" -> videoInfo()
-                request.url.encodedPath==preloadPath -> ""
+                request.url.encodedPath in listOf(currentPath,preloadPath) -> ""
                 else -> """{"code":0,"data":{"video_model_data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}}"""
             }
         }
         val stream=repo.stream("123")
         assertTrue(stream.url.isNotBlank())
-        assertEquals(listOf(preloadPath,tabPath),requests.map{it.url.encodedPath}.take(2))
-        val tab=requests[1]
+        assertEquals(listOf(currentPath,preloadPath,tabPath),requests.map{it.url.encodedPath}.take(3))
+        val tab=requests[2]
         // GET + v5 三头；空字节只是签名输入，不该出现 POST 专用的 stub / Content-Encoding。
         assertEquals("GET",tab.method)
         assertTrue(tab.header("x-khronos").orEmpty().isNotBlank())
@@ -389,17 +390,16 @@ class ContentRepositoryTest {
             calls++
             paths += request.url.encodedPath
             when {
-                calls<=2 -> ""            // 首台设备：主路与 tab 都空 = 额度用尽
+                calls<=3 -> ""            // 首台设备：单集/preload/tab 全空 = 额度用尽
                 request.url.host=="example.com" -> videoInfo()
                 else -> """{"code":0,"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
             }
         }
         val stream=repo.stream("123")
         assertTrue(stream.url.isNotBlank())
-        // 换身份后仍在同一条首选路由上重试，不是改打别的路由。
-        assertEquals(preloadPath,paths[0])
-        assertEquals(tabPath,paths[1])
-        assertEquals(preloadPath,paths[2])
+        // 换身份后仍在同一条首选路由（单集 video_model/v1）上重试，不是改打别的路由。
+        // （末尾的 /stream 是命中后 fallback_api 的取流请求，不属取址预算）
+        assertEquals(listOf(currentPath,preloadPath,tabPath,currentPath),paths.take(4))
     }
 
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(

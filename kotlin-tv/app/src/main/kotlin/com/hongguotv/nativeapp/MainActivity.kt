@@ -273,7 +273,7 @@ class MainActivity: Activity() {
     private var homeContentLogged=false
     private lateinit var library: Library
     private lateinit var accountManager: AccountManager
-    private var accountButton: TextView?=null
+    private var accountButton: SettingRow?=null
     private lateinit var tvTools: TvTools
     private lateinit var extras: PlaybackExtras
     private lateinit var thirdStore: ThirdStore
@@ -491,6 +491,11 @@ class MainActivity: Activity() {
     private val tabState=mutableMapOf<Int,CatalogState>()
     private val tabFocus=mutableMapOf<Int,String>()
     private val nav=mutableListOf<View>()
+    /** 设置页左栏排序模式（用户 2026-11-25）：>=0 表示有分类被长按抓起（当前位置）；
+     *  move/end 回调由 settings() 注入、dispatchKeyEvent 在排序模式下触发（上下移动、确认/返回放下）。 */
+    private var railReorderPos=-1
+    private var railReorderMove: ((Int)->Unit)?=null
+    private var railReorderEnd: ((Boolean)->Unit)?=null
     // 二级分段首项：导航 ↓ 先落到分段，再进内容
     private var segmentFirst: View?=null
     // 我的模块（最近观看/收藏）各分段按钮：切进我的时焦点先落当前页对应的分段，方便上下切区
@@ -655,6 +660,8 @@ class MainActivity: Activity() {
     private fun widthDp()=resources.displayMetrics.widthPixels/resources.displayMetrics.density
     private fun heightDp()=resources.displayMetrics.heightPixels/resources.displayMetrics.density
     private fun lp(w: Int=LinearLayout.LayoutParams.MATCH_PARENT,h: Int=LinearLayout.LayoutParams.WRAP_CONTENT)=LinearLayout.LayoutParams(w,h)
+    /** 「名称  ·  值」整串刷新：SettingRow 拆到左右两侧，HUD 按钮（TextView）保持整串原样（规范 §6.1）。 */
+    private fun View?.setValueLabel(label: String) = SettingRow.setValueLabel(this,label)
     private fun rounded(color: Int,border: Int=Color.TRANSPARENT)=TvStyle.shape(this,color,border)
     private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
     /** 顶栏纯文字 tab：无按钮背景，选中/聚焦用强调色 */
@@ -681,7 +688,7 @@ class MainActivity: Activity() {
         paint(false); view.setOnFocusChangeListener { _,focused -> paint(focused) }
     }
     private fun button(label: String,selected: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
-        gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); focusStyle(this,selected); setOnClickListener { onClick() }
+        gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(44); focusStyle(this,selected); setOnClickListener { onClick() }
     }
     /** 顶栏文字导航：icon + label，选中态粗体 accent 色，焦点态 raised 底+accent 边框，默认态 muted。
      *  iconRes 传 0 表示只显示文字（极窄宽度下省掉图标的宽度，见 showCatalog 的 bareNav）。 */
@@ -746,7 +753,7 @@ class MainActivity: Activity() {
         // 必须给完整凭证（Cookie + 账号设备身份），只给 Cookie 会因 did/iid 不配套被服务端当匿名。
         repository.loginCookieProvider={ accountManager.account }
         accountManager.onAccountChanged={
-            accountButton?.text=accountManager.accountLabel
+            accountButton?.value=accountManager.accountLabel
             // 账号事件只在云端数据实际变化时才重建列表页：读取过程的每条状态文本
             // （正在读取/已读取 N 部/读取失败）都会触发 changed()，若全部重建，
             // 用户在最近观看/收藏页往下滚的几秒内会被整页弹回顶部 2~3 次（issue #19.2）。
@@ -772,12 +779,13 @@ class MainActivity: Activity() {
         library.extrasProvider={
             mapOf("autoSkip" to extras.autoSkipUnplayable,"seekStep" to extras.seekStepSeconds,"fastSpeed" to extras.longPressSpeed,
                 "menuKeyAction" to extras.menuKeyAction,"dpadUpDownAction" to extras.dpadUpDownAction,
-                "mouseRightAction" to extras.mouseRightAction,"favoriteSort" to library.favoriteSort)
+                "mouseRightAction" to extras.mouseRightAction,"favoriteSort" to library.favoriteSort,
+                "railOrder" to library.railOrder)
         }
         library.extrasRestore={ s ->
             extras.autoSkipUnplayable=s.autoSkip; extras.seekStepSeconds=s.seekStep; extras.longPressSpeed=s.fastSpeed
             extras.menuKeyAction=s.menuKeyAction; extras.dpadUpDownAction=s.dpadUpDownAction; extras.mouseRightAction=s.mouseRightAction
-            library.favoriteSort=s.favoriteSort
+            library.favoriteSort=s.favoriteSort; library.railOrder=s.railOrder
         }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -856,7 +864,7 @@ class MainActivity: Activity() {
         if(storage.needsPermission) return "本地备份与恢复  ·  待授权"
         return "本地备份与恢复  ·  已开启"
     }
-    private fun showLocalBackupDialog(anchor: TextView) {
+    private fun showLocalBackupDialog(anchor: View) {
         val storage=library.localBackup()
         if(!storage.supported) {
             TvDialog.info(this,"本地备份与恢复","当前设备没有可用的公共存储，无法自动备份；可使用「手机备份与恢复」迁移记录。").show()
@@ -864,7 +872,7 @@ class MainActivity: Activity() {
         }
         if(!library.localBackupEnabled) {
             TvDialog.confirm(this,"本地备份与恢复","开启后，收藏、观看记录与播放设置会备份到本机公共目录，卸载重装后可自动恢复。备份是明文文件，可随时关闭。云端观看记录不会随本地备份迁移，登录同一账号后会自动拉取。") {
-                library.localBackupEnabled=true; anchor.text=localBackupLabel()
+                library.localBackupEnabled=true; anchor.setValueLabel(localBackupLabel())
                 if(storage.needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
             }.show()
             return
@@ -875,31 +883,31 @@ class MainActivity: Activity() {
             if(which==0) {
                 if(needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
             } else {
-                library.localBackupEnabled=false; anchor.text=localBackupLabel()
+                library.localBackupEnabled=false; anchor.setValueLabel(localBackupLabel())
                 Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
             }
         }).show()
     }
     /** Empty library with an existing backup must restore instead of overwriting it with nothing. */
-    private fun localBackupAction(anchor: TextView) {
+    private fun localBackupAction(anchor: View) {
         if(library.isEmptyForRestore() && library.hasLocalBackup()) {
-            restoreLocalBackup { anchor.text=localBackupLabel() }
+            restoreLocalBackup { anchor.setValueLabel(localBackupLabel()) }
         } else backupWithToast(anchor)
     }
-    private fun requestLocalBackupPermission(anchor: TextView) {
+    private fun requestLocalBackupPermission(anchor: View) {
         localPermissionContinuation={
-            anchor.text=localBackupLabel()
+            anchor.setValueLabel(localBackupLabel())
             if(library.localBackup().backupAllowed) localBackupAction(anchor)
         }
         if(!library.localBackup().request(this)) {
             localPermissionContinuation=null
-            anchor.text=localBackupLabel()
+            anchor.setValueLabel(localBackupLabel())
             Toast.makeText(this,"当前设备无法授予存储权限，请使用手机备份迁移",Toast.LENGTH_LONG).show()
         }
     }
-    private fun backupWithToast(anchor: TextView) {
+    private fun backupWithToast(anchor: View) {
         library.backupNow { ok ->
-            anchor.text=localBackupLabel()
+            anchor.setValueLabel(localBackupLabel())
             Toast.makeText(this,if(ok) "本机备份已更新" else "备份失败，请检查存储权限",Toast.LENGTH_SHORT).show()
         }
     }
@@ -2929,9 +2937,22 @@ class MainActivity: Activity() {
         PageRestore.tab=tab; PageRestore.focusKey=focusKey
         recreate()
     }
+    /** 三栏右栏的选项注册：labels/selectedIndex 绑定时现取（值可能刚被改过），onPick 写偏好并刷新中间行 */
+    private class RowOptions(val labels: ()->List<String>, val selectedIndex: ()->Int, val onPick: (Int)->Unit,
+                             val multi: Boolean=false, val checked: (()->Set<Int>)? = null, val onToggle: ((Int)->Unit)? = null)
     private fun settings(parent: LinearLayout, footerHost: LinearLayout) {
         parent.addView(text("设置",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,dp(5)) })
         parent.addView(text("按类别调整，偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(12)) })
+        // 左中右三栏（宽屏 ≥840dp）：左分类导航 / 中设置列表 / 右选项面板（当前项的可选项，可操作，
+        // 取代弹窗选择器）；窄屏自动退回原来的左右两栏（选择走弹窗）。
+        // 焦点语义：中栏行 →(右)→ 选项 →(左)→ 中栏行；开关行与动作行右栏只放占位图标，不可聚焦。
+        val threePane=resources.configuration.screenWidthDp>=840
+        // 实验室功能 / 关于红果（6-7）全是弹窗动作与长文说明，右栏没内容价值：
+        // 这两个分类隐藏第三栏，退回两栏形态，右键不响应（用户 2026-11-26）
+        fun panelOn(index: Int) = threePane && index<6
+        val optionPanel=SettingOptionPanel(this)
+        /** 已注册可选项的设置行：labels/selectedIndex 绑定时现取（值可能刚被改过） */
+        val rowOptions=linkedMapOf<SettingRow,RowOptions>()
         // 左右分栏：左侧类别与常用入口，右侧只渲染当前类别；页脚仍在滚动区之外
         val shell=row().apply { gravity=Gravity.TOP }
         parent.addView(shell,lp(-1,0).apply { weight=1f })
@@ -2941,31 +2962,50 @@ class MainActivity: Activity() {
         }
         val rail=column()
         railScroll.addView(rail)
-        val rightScroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
-        val rightPane=column()
+        // 中栏卡片：标题区固定在顶部，只有下方内容区滚动（用户 2026-11-26）；
+        // 卡片高度包住内容，上限为中栏可用高度，超出就内部滚动（用户 2026-11-25）
+        val middleCard=column().apply { background=rounded(surface) }
+        val middleHeader=column().apply { setPadding(dp(18),dp(6),dp(18),0) }
+        // 滚动区高度=内容高度；首帧拿不到 shell 高度时 post 一帧再量
+        val rightScroll=object : ScrollView(this) {
+            override fun onMeasure(widthSpec: Int,heightSpec: Int) {
+                super.onMeasure(widthSpec,heightSpec)
+                val max=shell.height-middleHeader.height
+                if(max>0 && measuredHeight>max) setMeasuredDimension(measuredWidth,max)
+                else if(shell.height==0) post { requestLayout() }
+            }
+        }.apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
+        val rightPane=column().apply { setPadding(dp(18),dp(2),dp(18),dp(18)) }
         rightScroll.addView(rightPane)
-        shell.addView(railScroll,lp(dp(236),-1))
-        shell.addView(rightScroll,lp(0,-1).apply { weight=1f; leftMargin=dp(14) })
+        middleCard.addView(middleHeader,lp(-1,-2))
+        middleCard.addView(rightScroll,lp(-1,-2))
+        shell.addView(railScroll,lp(dp(if(threePane) 188 else 236),-1))
+        shell.addView(middleCard,lp(0,-2).apply { weight=1f; leftMargin=dp(14) })
+        if(threePane) shell.addView(optionPanel,lp(dp(268),-1).apply { leftMargin=dp(14) })
 
         // 每个侧边栏分类一个 column：屏保从「外观与界面」拆出来独立成类，弹幕从「播放与观看」拆出来，
         // 避免单个分类堆十几项（用户 2026-11-19）。
-        val groupColumn= { column().apply { setPadding(dp(18),dp(6),dp(18),dp(18)); background=rounded(surface) } }
+        // 分组容器只装设置行（放进滚动区）；标题移入中栏固定头（groupHeaders 按 group 存放）
+        val groupHeaders=linkedMapOf<LinearLayout,LinearLayout>()
+        val groupColumn= { column().apply { setPadding(dp(18),dp(2),dp(18),dp(18)) } }
         val playback=groupColumn()
+        val keys=groupColumn()
         val danmaku=groupColumn()
         val look=groupColumn()
         val saver=groupColumn()
         val device=groupColumn()
         val lab=groupColumn()
-        val guide=groupColumn()
         val about=groupColumn()
-        val settingRows=mutableListOf<TextView>()
-        val groupRows=linkedMapOf<LinearLayout,MutableList<TextView>>()
+        val settingRows=mutableListOf<SettingRow>()
+        val groupRows=linkedMapOf<LinearLayout,MutableList<SettingRow>>()
 
         fun heading(group: LinearLayout,title: String,subtitle: String) {
-            group.addView(text(title,18f).apply {
-                typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,0)
-            })
-            group.addView(text(subtitle,12f,muted).apply { setPadding(0,dp(5),0,dp(15)) })
+            groupHeaders[group]=column().apply {
+                addView(text(title,18f).apply {
+                    typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(10),0,0)
+                })
+                addView(text(subtitle,12f,muted).apply { setPadding(0,dp(5),0,dp(15)) })
+            }
         }
         /** 分类内的小分组标题：一个分类条目多时用它分段，不参与焦点链 */
         fun subHeading(group: LinearLayout,title: String) {
@@ -2974,134 +3014,317 @@ class MainActivity: Activity() {
                 setPadding(0,dp(8),0,dp(8))
             })
         }
-        fun setting(group: LinearLayout,label: String,action: ()->Unit): TextView {
-            val view=button(label,onClick=action).apply {
-                gravity=Gravity.CENTER_VERTICAL; setPadding(dp(13),dp(11),dp(13),dp(11))
-                background=rounded(bg)
-                setOnFocusChangeListener { _,focused -> background=rounded(if(focused) TvStyle.raised else bg,if(focused) accent else Color.TRANSPARENT) }
+        /** 设置行（规范 §6.1）：名称在左、值在右。label 里的「名称  ·  值」自动拆到两侧。
+         *  desc/hint 供右栏面板回显；两栏窄屏布局下仅用于弹窗说明，不挂面板。 */
+        /** 按当前焦点行重绑右栏：有选项 → 选项列表；开关 → 状态卡片；动作 → 说明+提示。面板隐藏时跳过 */
+        fun bindPane(view: SettingRow) {
+            if(optionPanel.visibility!=View.VISIBLE) return
+            val spec=rowOptions[view]
+            when {
+                spec!=null -> optionPanel.bindOptions(view.title,view.desc,spec.labels(),spec.selectedIndex(),view.id,
+                    spec.multi,spec.checked?.invoke() ?: emptySet()) { i ->
+                    if(spec.multi) {
+                        spec.onToggle?.invoke(i)
+                        optionPanel.setChecked(spec.checked?.invoke() ?: emptySet())
+                    } else {
+                        spec.onPick(i)
+                        optionPanel.repaintOptions(spec.selectedIndex())
+                    }
+                }
+                view.toggleMode -> optionPanel.bindPlaceholder(view.title,view.desc,"在中间列表按确认键切换",view.checked)
+                else -> optionPanel.bindPlaceholder(view.title,view.desc,view.hint.ifEmpty { "按确认键打开" },null)
+            }
+        }
+        /** 注册某行的可选项（仅三栏；两栏走原弹窗 action） */
+        fun withOptions(row: SettingRow,labels: ()->List<String>,selectedIndex: ()->Int,onPick: (Int)->Unit) {
+            if(threePane) rowOptions[row]=RowOptions(labels,selectedIndex,onPick)
+        }
+        /** 注册多选行：勾选即改（onToggle 收到被点下标，写偏好后由 bindPane 刷新勾选态） */
+        fun withMultiOptions(row: SettingRow,labels: ()->List<String>,checked: ()->Set<Int>,onToggle: (Int)->Unit) {
+            if(threePane) rowOptions[row]=RowOptions(labels,{-1},{},multi=true,checked=checked,onToggle=onToggle)
+        }
+        fun hookDetail(view: SettingRow,desc: String,hint: String) {
+            if(!threePane) return
+            view.desc=desc; view.hint=hint
+            view.onFocus={ focused -> if(focused) bindPane(view) }
+            view.onValueChanged={ if(view.hasFocus()) bindPane(view) }
+        }
+        fun setting(group: LinearLayout,label: String,action: ()->Unit,desc: String="",hint: String=""): SettingRow {
+            val view=SettingRow(this).apply {
+                val i=label.indexOf("  ·  ")
+                if(i>=0) { title=label.substring(0,i); value=label.substring(i+5) } else title=label
+                setOnClickListener {
+                    // 三栏下带选项的行按确认=进右栏选项（不再弹窗）；两栏或动作行维持原行为
+                    if(threePane && rowOptions.containsKey(this)) { if(!optionPanel.requestLandingFocus()) action() }
+                    else action()
+                }
             }
             group.addView(view,lp(-1,-2).apply { bottomMargin=dp(8) })
             settingRows+=view
             groupRows.getOrPut(group){mutableListOf()}+=view
+            hookDetail(view,desc,hint)
             return view
         }
+        /** 开关行（规范 §6.1/6.3）：名称 + 右侧 TvSwitch，整行点击=拨开关并回调。 */
+        fun toggleSetting(group: LinearLayout,label: String,initial: Boolean,onChange: (Boolean)->Unit,desc: String="",hint: String=""): SettingRow =
+            setting(group,label,{},desc,hint).asToggle(initial,onChange)
         /** 侧栏里的小号动作按钮（常用：手机快传 / 备份与恢复），比设置行更矮更小 */
         fun railAction(label: String,action: ()->Unit)=button(label,onClick=action).apply {
             gravity=Gravity.CENTER_VERTICAL; textSize=13f; minHeight=dp(42); maxLines=2
             setPadding(dp(10),dp(6),dp(10),dp(6))
         }
 
-        val categories=listOf(
-            Triple("播放与观看","清晰度、倍速与连播行为",playback),
-            Triple("弹幕与显示","显示开关、样式与屏蔽词",danmaku),
-            Triple("外观与界面","主题、缩放与首页导航",look),
-            Triple("待机屏保","空闲后自动盖屏：挑自带画面，或用手机传自己的",saver),
-            Triple("设备与数据","账号、本机记录与快传文件",device),
-            Triple("实验室功能","外部遥控、语音与自动化接口",lab),
-            Triple("使用说明","整套系统的介绍与用法：键位、功能、常见问题",guide),
-            Triple("关于红果","版本更新、接口自检与许可",about))
+        // 左栏分类（用户 2026-11-25：长按确认抓起、上下键移动排序，顺序存 railOrder 随本地/扫码备份迁移）
+        val categoryDefs=linkedMapOf(
+            "device" to Triple("设备与数据","账号与隐私、传输备份、本机记录与诊断",device),
+            "playback" to Triple("播放与观看","清晰度、倍速与连播行为",playback),
+            "keys" to Triple("按键与遥控","快进步长、菜单键与鼠标右键行为",keys),
+            "danmaku" to Triple("弹幕与显示","显示开关、样式与屏蔽词",danmaku),
+            "look" to Triple("外观与界面","主题、缩放与首页导航",look),
+            "saver" to Triple("待机屏保","空闲后自动盖屏：挑自带画面，或用手机传自己的",saver),
+            "lab" to Triple("实验室功能","外部遥控、语音与自动化接口",lab),
+            "about" to Triple("关于红果","版本更新、接口自检与许可",about))
+        // railOrder 里只认已知 key；未知 key 忽略、缺失 key 按默认顺序补齐
+        fun orderedKeys(): List<String> {
+            val stored=library.railOrder.split(',').map { it.trim() }.filter { it in categoryDefs }
+            return (stored+categoryDefs.keys.filter { it !in stored }).distinct()
+        }
+        var categoryKeys=orderedKeys().toMutableList()
+        var categories=categoryKeys.map { categoryDefs.getValue(it) }
+        var activeKey=categoryKeys.first()
         var active=0
-        val railButtons=categories.map { entry ->
+        val railButtons=categoryDefs.mapValues { (_,entry) ->
             button(entry.first,onClick={}).apply {
                 gravity=Gravity.CENTER_VERTICAL; textSize=15f; minHeight=dp(38); maxLines=1
                 setPadding(dp(12),dp(6),dp(12),dp(6))
             }
         }
-        railButtons.forEachIndexed { i,item -> rail.addView(item,lp(-1,-2).apply { bottomMargin=dp(3) }) }
-        nav[5].nextFocusDownId=railButtons.first().id
+        /** 按当前顺序把按钮重新挂回左栏（排序动画的前置步骤）。
+         *  注意：removeAllViews 会把常用区块和当前焦点一起冲掉——
+         *  常用区块必须在这里一并补回；焦点丢失后由调用方 requestFocus 收回（用户 2026-11-25） */
+        var commonLabel: TextView? = null
+        var quickSendView: TextView? = null
+        var backupView: TextView? = null
+        fun syncRailViews() {
+            rail.removeAllViews()
+            categoryKeys.forEach { key -> rail.addView(railButtons.getValue(key),lp(-1,-2).apply { bottomMargin=dp(3) }) }
+            commonLabel?.let { rail.addView(it,lp(-1,-2)) }
+            quickSendView?.let { rail.addView(it,lp(-1,-2).apply { bottomMargin=dp(6) }) }
+            backupView?.let { rail.addView(it,lp(-1,-2).apply { bottomMargin=dp(6) }) }
+        }
+        syncRailViews()
+        nav[5].nextFocusDownId=railButtons.getValue(categoryKeys.first()).id
         var showCategory: (Int,Boolean)->Unit = { _,_-> }
         var rechainSettings: ()->Unit = {}
         fun paintRail(index: Int,focused: Boolean) {
-            val item=railButtons[index]
+            val item=railButtons.getValue(categoryKeys[index])
             item.setTextColor(if(focused) white else if(index==active) accent else muted)
             item.background=rounded(if(focused) TvStyle.raised else if(index==active) TvStyle.selectedSurface else Color.TRANSPARENT,if(focused||index==active) accent else Color.TRANSPARENT)
             item.setTypeface(null,if(focused || index==active) Typeface.BOLD else Typeface.NORMAL)
         }
 
-        heading(playback,"播放与观看",categories[0].second)
-        lateinit var qualityButton: TextView
-        qualityButton=setting(playback,"默认清晰度  ·  ${library.maxQuality}P") { showQualityPicker(qualityButton,false) }
-        lateinit var softQualityButton: TextView
-        softQualityButton=setting(playback,"软解清晰度  ·  ${library.softQuality}P") { showSoftQualityPicker(softQualityButton) }
-        lateinit var defaultSpeed: TextView
-        defaultSpeed=setting(playback,"默认倍速  ·  ${PlaybackSpeed.label(library.playbackSpeed)}") { showSpeedPicker(defaultSpeed,false) }
-        lateinit var frame: TextView
-        frame=setting(playback,"画面模式  ·  ${library.frameMode.label}") { showFramePicker(frame,false) }
-        lateinit var autoNextButton: TextView
-        autoNextButton=setting(playback,"自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}") {
-            library.autoNext=!library.autoNext
-            autoNextButton.text="自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}"
-        }
-        lateinit var autoSeasonButton: TextView
-        autoSeasonButton=setting(playback,"系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}") {
-            library.autoSeason=!library.autoSeason
-            autoSeasonButton.text="系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}"
-        }
+        heading(playback,"播放与观看",categoryDefs.getValue("playback").second)
+        lateinit var qualityButton: SettingRow
+        qualityButton=setting(playback,"默认清晰度  ·  ${library.maxQuality}P",{ showQualityPicker(qualityButton,false) },
+            desc="全局默认档位。片源没有该档时自动降到最高可用档，只影响新开播的剧，不改当前正在播的这集。")
+        withOptions(qualityButton,
+            labels={ PlaybackQuality.options.map { "${it}P" } },
+            selectedIndex={ PlaybackQuality.options.indexOf(library.maxQuality).coerceAtLeast(0) },
+            onPick={ i -> val q=PlaybackQuality.options[i]; library.maxQuality=q; sessionQuality=null
+                downgradeEpisode=""; downgradeCount=0; decodeRetried=false
+                qualityButton.value="${q}P" })
+        lateinit var softQualityButton: SettingRow
+        softQualityButton=setting(playback,"软解清晰度  ·  ${library.softQuality}P",{ showSoftQualityPicker(softQualityButton) },
+            desc="bytevc2 软解档位的画质，默认 360P。老电视流畅优先，调高更清晰但更吃解码性能。")
+        withOptions(softQualityButton,
+            labels={ PlaybackQuality.softOptions.map { "${it}P" } },
+            selectedIndex={ PlaybackQuality.softOptions.indexOf(library.softQuality).coerceAtLeast(0) },
+            onPick={ i -> val q=PlaybackQuality.softOptions[i]; library.softQuality=q; softQualityButton.value="${q}P" })
+        lateinit var defaultSpeed: SettingRow
+        defaultSpeed=setting(playback,"默认倍速  ·  ${PlaybackSpeed.label(library.playbackSpeed)}",{ showSpeedPicker(defaultSpeed,false) },
+            desc="全局默认播放速度。播放页里可以临时调速，只对当前这部剧生效。")
+        withOptions(defaultSpeed,
+            labels={ PlaybackSpeed.options.map { PlaybackSpeed.label(it) } },
+            selectedIndex={ PlaybackSpeed.options.indexOf(library.playbackSpeed).coerceAtLeast(0) },
+            onPick={ i -> val s=PlaybackSpeed.options[i]; library.playbackSpeed=s; defaultSpeed.value=PlaybackSpeed.label(s) })
+        lateinit var frame: SettingRow
+        frame=setting(playback,"画面模式  ·  ${library.frameMode.label}",{ showFramePicker(frame,false) },
+            desc="画面填充方式：适应保持比例留黑边，裁剪铺满会切掉边缘。改的是全局默认，播放页可临时切换。")
+        withOptions(frame,
+            labels={ listOf("完整画面 · 保留比例与全部内容","等比铺满 · 会裁掉部分画面与字幕","拉伸铺满 · 画面比例会改变") },
+            selectedIndex={ VideoFrameMode.entries.indexOf(library.frameMode) },
+            onPick={ i -> library.frameMode=VideoFrameMode.entries[i]; frame.value=library.frameMode.label })
+        lateinit var autoNextButton: SettingRow
+        autoNextButton=toggleSetting(playback,"自动连播",library.autoNext,{ library.autoNext=it },
+            desc="一集播完自动播放下一集。关闭后播完停在片尾，等你按确认键。")
+        lateinit var autoSeasonButton: SettingRow
+        autoSeasonButton=toggleSetting(playback,"系列剧连播",library.autoSeason,{ library.autoSeason=it },
+            desc="同一系列的多部剧按顺序自动接续播放，第一部播完接着播第二部。")
         // 自由刷剧节奏（用户 2026-11-18）：默认把当前剧连播完；开着则一集播完就自动下滑换新剧
-        lateinit var feedSwipeButton: TextView
-        feedSwipeButton=setting(playback,"自由刷剧自动下滑  ·  ${if(library.feedAutoSwipe) "开启" else "关闭"}") {
-            library.feedAutoSwipe=!library.feedAutoSwipe
-            feedSwipeButton.text="自由刷剧自动下滑  ·  ${if(library.feedAutoSwipe) "开启" else "关闭"}"
+        lateinit var feedSwipeButton: SettingRow
+        feedSwipeButton=toggleSetting(playback,"自由刷剧自动下滑",library.feedAutoSwipe,{
+            library.feedAutoSwipe=it
             if(recommendMode) keyHints?.text=keyHintText()
+        },desc="开启后一集播完自动下滑换一部新的热门剧；关闭则把当前剧连播完。")
+        lateinit var autoSkipButton: SettingRow
+        autoSkipButton=toggleSetting(playback,"不兼容片源自动跳过",extras.autoSkipUnplayable,{ extras.autoSkipUnplayable=it },
+            desc="片源打不开时自动换下一集或下一部，不弹提示打断观看。")
+        // 「遥控器按键」升级为一级目录「按键与遥控」（用户 2026-11-26）：五项全部直选，不再循环切换
+        heading(keys,"按键与遥控",categoryDefs.getValue("keys").second)
+        fun keyDesc(text: String,extra: String="改完立即生效。")="$text$extra"
+        lateinit var stepRow: SettingRow
+        stepRow=setting(keys,"快进步长  ·  ${extras.seekStepSeconds} 秒",{
+            val options=PlaybackExtras.SEEK_STEPS
+            extras.seekStepSeconds=options[(options.indexOf(extras.seekStepSeconds)+1)%options.size]
+            stepRow.value="${extras.seekStepSeconds} 秒"
+        },desc="按一次左右键快进/快退多少秒。")
+        withOptions(stepRow,
+            labels={ PlaybackExtras.SEEK_STEPS.map { "$it 秒" } },
+            selectedIndex={ PlaybackExtras.SEEK_STEPS.indexOf(extras.seekStepSeconds).coerceAtLeast(0) },
+            onPick={ i -> extras.seekStepSeconds=PlaybackExtras.SEEK_STEPS[i]; stepRow.value="${extras.seekStepSeconds} 秒" })
+        lateinit var speedRow: SettingRow
+        speedRow=setting(keys,"长按快进  ·  ${PlaybackExtras.FAST_SPEEDS.first { it==extras.longPressSpeed }.toInt()}×",{
+            val options=PlaybackExtras.FAST_SPEEDS
+            extras.longPressSpeed=options[(options.indexOf(extras.longPressSpeed)+1)%options.size]
+            speedRow.value="${extras.longPressSpeed.toInt()}×"
+        },desc="按住左右键不放时的加速倍数。")
+        withOptions(speedRow,
+            labels={ PlaybackExtras.FAST_SPEEDS.map { "${it.toInt()}×" } },
+            selectedIndex={ PlaybackExtras.FAST_SPEEDS.indexOf(extras.longPressSpeed).coerceAtLeast(0) },
+            onPick={ i -> extras.longPressSpeed=PlaybackExtras.FAST_SPEEDS[i]; speedRow.value="${extras.longPressSpeed.toInt()}×" })
+        fun menuLabel(action: String)=when(action) {
+            PlaybackExtras.MENU_EPISODES -> "选集"
+            PlaybackExtras.MENU_DANMAKU -> "弹幕开关"
+            else -> "播放设置"
         }
-        lateinit var autoSkipButton: TextView
-        autoSkipButton=setting(playback,"不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}") {
-            extras.autoSkipUnplayable=!extras.autoSkipUnplayable
-            autoSkipButton.text="不兼容片源自动跳过  ·  ${if(extras.autoSkipUnplayable) "开启" else "关闭"}"
+        lateinit var menuRow: SettingRow
+        menuRow=setting(keys,"菜单键  ·  ${menuLabel(extras.menuKeyAction)}",{
+            extras.menuKeyAction=when(extras.menuKeyAction) {
+                PlaybackExtras.MENU_EPISODES -> PlaybackExtras.MENU_DANMAKU
+                PlaybackExtras.MENU_DANMAKU -> PlaybackExtras.MENU_PANEL
+                else -> PlaybackExtras.MENU_EPISODES
+            }
+            menuRow.value=menuLabel(extras.menuKeyAction)
+        },desc="播放页菜单键（遥控上的菜单/列表键）按下去打开哪个面板。")
+        withOptions(menuRow,
+            labels={ listOf("选集","弹幕开关","播放设置") },
+            selectedIndex={ listOf(PlaybackExtras.MENU_EPISODES,PlaybackExtras.MENU_DANMAKU,PlaybackExtras.MENU_PANEL).indexOf(extras.menuKeyAction).coerceAtLeast(0) },
+            onPick={ i -> extras.menuKeyAction=listOf(PlaybackExtras.MENU_EPISODES,PlaybackExtras.MENU_DANMAKU,PlaybackExtras.MENU_PANEL)[i]; menuRow.value=menuLabel(extras.menuKeyAction) })
+        fun upDownLabel(action: String)=if(action==PlaybackExtras.UPDOWN_SWITCH) "切换集数" else "选集面板"
+        lateinit var upDownRow: SettingRow
+        upDownRow=setting(keys,"遥控上下键  ·  ${upDownLabel(extras.dpadUpDownAction)}",{
+            extras.dpadUpDownAction=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) PlaybackExtras.UPDOWN_PANEL else PlaybackExtras.UPDOWN_SWITCH
+            upDownRow.value=upDownLabel(extras.dpadUpDownAction); keyHints?.text=keyHintText()
+        },desc="播放页上下键的行为：直接切上一集/下一集，或打开选集面板。改完底部按键提示同步更新。")
+        withOptions(upDownRow,
+            labels={ listOf("切换集数","选集面板") },
+            selectedIndex={ if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) 0 else 1 },
+            onPick={ i -> extras.dpadUpDownAction=if(i==0) PlaybackExtras.UPDOWN_SWITCH else PlaybackExtras.UPDOWN_PANEL; upDownRow.value=upDownLabel(extras.dpadUpDownAction); keyHints?.text=keyHintText() })
+        if(TvPointer.hasMouse(this)) {
+            fun mouseLabel(action: String)=when(action) {
+                PlaybackExtras.MOUSE_PLAY -> "暂停/播放"
+                PlaybackExtras.MOUSE_EPISODES -> "打开选集"
+                PlaybackExtras.MOUSE_HUD -> "显隐控制条"
+                PlaybackExtras.MOUSE_PANEL -> "播放设置"
+                else -> "退出播放"
+            }
+            lateinit var mouseRow: SettingRow
+            mouseRow=setting(keys,"鼠标右键  ·  ${mouseLabel(extras.mouseRightAction)}",{
+                val actions=PlaybackExtras.MOUSE_ACTIONS
+                extras.mouseRightAction=actions[(actions.indexOf(extras.mouseRightAction)+1)%actions.size]
+                mouseRow.value=mouseLabel(extras.mouseRightAction); keyHints?.text=keyHintText()
+            },desc="播放页里鼠标右键的行为；只接了鼠标时才会出现这一项。")
+            withOptions(mouseRow,
+                labels={ PlaybackExtras.MOUSE_ACTIONS.map { mouseLabel(it) } },
+                selectedIndex={ PlaybackExtras.MOUSE_ACTIONS.indexOf(extras.mouseRightAction).coerceAtLeast(0) },
+                onPick={ i -> extras.mouseRightAction=PlaybackExtras.MOUSE_ACTIONS[i]; mouseRow.value=mouseLabel(extras.mouseRightAction); keyHints?.text=keyHintText() })
         }
-        lateinit var keySettings: TextView
-        keySettings=setting(playback,"遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒") { showKeySettings(keySettings) }
         // 弹幕从「播放与观看」拆出来独立成类（用户 2026-11-19）：开关 + 样式 + 屏蔽词共 8 项，混在播放里太长
-        heading(danmaku,"弹幕与显示",categories[1].second)
-        val danmakuPrefRows=mutableListOf<TextView>()
+        heading(danmaku,"弹幕与显示",categoryDefs.getValue("danmaku").second)
+        val danmakuPrefRows=mutableListOf<SettingRow>()
         var danmakuExpanded=false
-        lateinit var danmakuToggle: TextView
+        lateinit var danmakuToggle: SettingRow
         fun syncDanmakuRows() {
             val show=library.danmaku
             danmakuToggle.visibility=if(show) View.VISIBLE else View.GONE
             danmakuPrefRows.forEach { it.visibility=if(show && danmakuExpanded) View.VISIBLE else View.GONE }
-            danmakuToggle.text="弹幕设置  ·  ${if(danmakuExpanded) "收起" else "展开"}"
+            danmakuToggle.value=if(danmakuExpanded) "收起" else "展开"
             rechainSettings()
         }
-        lateinit var danmakuButton: TextView
-        danmakuButton=setting(danmaku,"官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}") {
-            library.danmaku=!library.danmaku
-            danmakuButton.text="官方弹幕  ·  ${if(library.danmaku) "开启" else "关闭"}"
+        lateinit var danmakuButton: SettingRow
+        danmakuButton=toggleSetting(danmaku,"官方弹幕",library.danmaku,{
+            library.danmaku=it
             if(!library.danmaku) danmakuExpanded=false
             syncDanmakuRows()
-        }
-        danmakuToggle=setting(danmaku,"弹幕设置  ·  展开") {
+        },desc="官方弹幕总开关。关闭后所有剧不再拉取与显示弹幕，样式设置保留。")
+        danmakuToggle=setting(danmaku,"弹幕设置  ·  展开",{
             danmakuExpanded=!danmakuExpanded
             syncDanmakuRows()
-        }
-        lateinit var danmakuOpacity: TextView
-        danmakuOpacity=setting(danmaku,"弹幕不透明度  ·  ${library.danmakuOpacity}%") { showDanmakuOpacityPicker(danmakuOpacity) }
-        lateinit var danmakuFont: TextView
-        danmakuFont=setting(danmaku,"弹幕字体大小  ·  ${DanmakuPrefs.fontLabel(library.danmakuFont)}") { showDanmakuFontPicker(danmakuFont) }
-        lateinit var danmakuSpeed: TextView
-        danmakuSpeed=setting(danmaku,"弹幕移动速度  ·  ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}") { showDanmakuSpeedPicker(danmakuSpeed) }
-        lateinit var danmakuRows: TextView
-        danmakuRows=setting(danmaku,"弹幕展示行数  ·  ${library.danmakuRows} 行") { showDanmakuRowsPicker(danmakuRows) }
-        lateinit var danmakuReset: TextView
-        danmakuReset=setting(danmaku,"恢复弹幕默认设置") {
+        },desc="展开字号、速度、行数等样式细节。",hint="按确认键展开/收起")
+        lateinit var danmakuOpacity: SettingRow
+        danmakuOpacity=setting(danmaku,"弹幕不透明度  ·  ${library.danmakuOpacity}%",{ showDanmakuOpacityPicker(danmakuOpacity) },
+            desc="弹幕文字的透明程度，调低更不挡画面。")
+        withOptions(danmakuOpacity,
+            labels={ listOf(100,90,80,70,60,50,40,30,21).map { "$it%" } },
+            selectedIndex={ listOf(100,90,80,70,60,50,40,30,21).indexOf(library.danmakuOpacity).coerceAtLeast(0) },
+            onPick={ i -> val v=listOf(100,90,80,70,60,50,40,30,21)[i]; library.danmakuOpacity=v; applyDanmakuPrefs(); danmakuOpacity.value="$v%" })
+        lateinit var danmakuFont: SettingRow
+        danmakuFont=setting(danmaku,"弹幕字体大小  ·  ${DanmakuPrefs.fontLabel(library.danmakuFont)}",{ showDanmakuFontPicker(danmakuFont) },
+            desc="弹幕文字的大小。")
+        withOptions(danmakuFont,
+            labels={ DanmakuPrefs.FONT_LABELS.toList() },
+            selectedIndex={ library.danmakuFont.coerceIn(0,DanmakuPrefs.FONT_LABELS.lastIndex) },
+            onPick={ i -> library.danmakuFont=i; applyDanmakuPrefs(); danmakuFont.value=DanmakuPrefs.fontLabel(i) })
+        lateinit var danmakuSpeed: SettingRow
+        danmakuSpeed=setting(danmaku,"弹幕移动速度  ·  ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}",{ showDanmakuSpeedPicker(danmakuSpeed) },
+            desc="弹幕横穿屏幕的快慢。")
+        withOptions(danmakuSpeed,
+            labels={ DanmakuPrefs.SPEED_LABELS.toList() },
+            selectedIndex={ library.danmakuSpeed.coerceIn(0,DanmakuPrefs.SPEED_LABELS.lastIndex) },
+            onPick={ i -> library.danmakuSpeed=i; applyDanmakuPrefs(); danmakuSpeed.value=DanmakuPrefs.speedLabel(i) })
+        lateinit var danmakuRows: SettingRow
+        danmakuRows=setting(danmaku,"弹幕展示行数  ·  ${library.danmakuRows} 行",{ showDanmakuRowsPicker(danmakuRows) },
+            desc="屏幕上同时出现的弹幕行数上限。")
+        withOptions(danmakuRows,
+            labels={ (DanmakuPrefs.ROWS_MIN..DanmakuPrefs.ROWS_MAX).map { "$it 行" } },
+            selectedIndex={ (library.danmakuRows-DanmakuPrefs.ROWS_MIN).coerceIn(0,DanmakuPrefs.ROWS_MAX-DanmakuPrefs.ROWS_MIN) },
+            onPick={ i -> val v=i+DanmakuPrefs.ROWS_MIN; library.danmakuRows=v; applyDanmakuPrefs(); danmakuRows.value="$v 行" })
+        lateinit var danmakuReset: SettingRow
+        danmakuReset=setting(danmaku,"恢复弹幕默认设置",{
             resetDanmakuPrefs()
-            danmakuOpacity.text="弹幕不透明度  ·  ${library.danmakuOpacity}%"
-            danmakuFont.text="弹幕字体大小  ·  ${DanmakuPrefs.fontLabel(library.danmakuFont)}"
-            danmakuSpeed.text="弹幕移动速度  ·  ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}"
-            danmakuRows.text="弹幕展示行数  ·  ${library.danmakuRows} 行"
+            danmakuOpacity.value="${library.danmakuOpacity}%"
+            danmakuFont.value=DanmakuPrefs.fontLabel(library.danmakuFont)
+            danmakuSpeed.value=DanmakuPrefs.speedLabel(library.danmakuSpeed)
+            danmakuRows.value="${library.danmakuRows} 行"
             Toast.makeText(this,"弹幕设置已恢复默认",Toast.LENGTH_SHORT).show()
-        }
+        },desc="一键还原上面全部弹幕样式设置，不影响弹幕开关与屏蔽词。",hint="按确认键恢复")
         danmakuPrefRows.addAll(listOf(danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,danmakuReset))
-        lateinit var blockedWords: TextView
-        blockedWords=setting(danmaku,"弹幕屏蔽词  ·  ${extras.blockedWords.size} 个") { showBlockedWordDialog(blockedWords) }
-        heading(look,"外观与界面",categories[2].second)
-        lateinit var themeButton: TextView
-        themeButton=setting(look,"系统风格  ·  ${TvStyle.theme.label}") {
+        lateinit var blockedWords: SettingRow
+        // 屏蔽词改第三栏多选（用户 2026-11-26）：勾选即屏蔽、取消即恢复，不需要清空/保存按钮
+        fun blockedWordList()=listOf("加群","微信","公众号","QQ群","QQ","广告","私聊","代看","抖音","快手")+extras.blockedWords.filterNot { w -> listOf("加群","微信","公众号","QQ群","QQ","广告","私聊","代看","抖音","快手").any { it==w } }
+        blockedWords=setting(danmaku,"弹幕屏蔽词  ·  ${extras.blockedWords.size} 个",{ showBlockedWordDialog(blockedWords) },
+            desc="包含勾选词的弹幕直接不显示，勾选即改、立即生效。")
+        withMultiOptions(blockedWords,
+            labels={ blockedWordList() },
+            checked={ blockedWordList().mapIndexedNotNull { i,w -> if(w in extras.blockedWords) i else null }.toSet() },
+            onToggle={ i ->
+                val w=blockedWordList()[i]
+                extras.blockedWords=if(w in extras.blockedWords) extras.blockedWords-w else extras.blockedWords+w
+                applyBlockedWords()
+                blockedWords.value="${extras.blockedWords.size} 个"
+            })
+        heading(look,"外观与界面",categoryDefs.getValue("look").second)
+        lateinit var themeButton: SettingRow
+        themeButton=setting(look,"系统风格  ·  ${TvStyle.theme.label}",{
             library.theme=TvStyle.toggle().name
             recreateKeepingPage("系统风格")
-        }
-        lateinit var scaleButton: TextView
-        scaleButton=setting(look,"界面缩放  ·  ${UiScale.label(this)}") {
+        },desc="深夜影院（深色）与暖玉白（浅色）两套全局配色。切换会整页重建，完成后回到这里。")
+        withOptions(themeButton,
+            labels={ TvStyle.Theme.entries.map { it.label } },
+            selectedIndex={ TvStyle.Theme.entries.indexOf(TvStyle.theme) },
+            onPick={ i -> val t=TvStyle.Theme.entries[i]; if(t!=TvStyle.theme) { library.theme=t.name; recreateKeepingPage("系统风格") } })
+        lateinit var scaleButton: SettingRow
+        scaleButton=setting(look,"界面缩放  ·  ${UiScale.label(this)}",{
             // 档位多了之后循环切换体验差（要按好几次才知道自己到哪一档），改成弹窗直接选
             val current=UiScale.index(this)
             tvTools.choose("界面缩放",UiScale.LEVELS.mapIndexed { index,level ->
@@ -3109,33 +3332,43 @@ class MainActivity: Activity() {
             },scaleButton,{ choice ->
                 if(choice!=current) { UiScale.set(this,choice); recreateKeepingPage("界面缩放") }
             },focusIndex=current)
-        }
-        lateinit var clockButton: TextView
-        clockButton=setting(look,"显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}") {
-            library.showClock=!library.showClock
-            clockButton.text="显示系统时间  ·  ${if(library.showClock) "开启" else "关闭"}"
+        },desc="整体界面元素的大小档位，屏幕大或看得吃力就调大。切换会整页重建。")
+        withOptions(scaleButton,
+            labels={ UiScale.LEVELS.map { it.first } },
+            selectedIndex={ UiScale.index(this) },
+            onPick={ i -> if(i!=UiScale.index(this)) { UiScale.set(this,i); recreateKeepingPage("界面缩放") } })
+        lateinit var clockButton: SettingRow
+        clockButton=toggleSetting(look,"显示系统时间",library.showClock,{
+            library.showClock=it
             applyClock()
-        }
+        },desc="在界面角落常显当前时间。")
         // 待机屏保（用户 2026-11-19 重做）：表面只有两条线——
         //   ① 屏保画面：内置 4 种风格，跑马灯里挑；
         //   ② 我的素材：自己传图/视频，选中哪一条就立刻预览。
         // 填充/间隔/声音只在选了「我的素材」后才出现，内置风格下不显示，避免新用户面对一堆无关开关。
-        heading(saver,"待机屏保",categories[3].second)
-        lateinit var screensaverButton: TextView
+        heading(saver,"待机屏保",categoryDefs.getValue("saver").second)
+        lateinit var screensaverButton: SettingRow
         fun screensaverLabel()="待机屏保  ·  ${ScreenSaverPrefs.label(library.screensaverMinutes)}"
-        screensaverButton=setting(saver,screensaverLabel()) {
+        screensaverButton=setting(saver,screensaverLabel(),{
             library.screensaverMinutes=if(library.screensaverMinutes==0) ScreenSaverPrefs.LEVELS.first()
                 else ScreenSaverPrefs.LEVELS.getOrNull(ScreenSaverPrefs.LEVELS.indexOf(library.screensaverMinutes)+1) ?: 0
-            screensaverButton.text=screensaverLabel()
+            screensaverButton.value=screensaverLabel().substringAfter("  ·  ")
             resetIdleTimer()
-        }
+        },desc="空闲多久后自动进入屏保，第一档为关闭。")
+        withOptions(screensaverButton,
+            labels={ listOf("关闭")+ScreenSaverPrefs.LEVELS.map { "$it 分钟" } },
+            selectedIndex={ if(library.screensaverMinutes==0) 0 else ScreenSaverPrefs.LEVELS.indexOf(library.screensaverMinutes).let { if(it<0) 0 else it+1 } },
+            onPick={ i -> library.screensaverMinutes=if(i==0) 0 else ScreenSaverPrefs.LEVELS.getOrNull(i-1) ?: ScreenSaverPrefs.LEVELS.first()
+                screensaverButton.value=if(library.screensaverMinutes==0) "关闭" else "${library.screensaverMinutes} 分钟"; resetIdleTimer() })
         // 屏保画面 = 选哪一种屏保（内置 4 种 + 我的素材），点开是跑马灯式样例筛选
-        lateinit var saverStyleButton: TextView
+        lateinit var saverStyleButton: SettingRow
         fun saverStyleLabel()="屏保画面  ·  ${ScreenSaverPrefs.styleName(library.screensaverStyle)}"
-        saverStyleButton=setting(saver,saverStyleLabel()) { showSaverStylePicker(saverStyleButton) }
+        saverStyleButton=setting(saver,saverStyleLabel(),{ showSaverStylePicker(saverStyleButton) },
+            desc="内置四种风格，或用自己传的图片/视频做屏保。选「我的素材」后会多出填充、间隔等设置。",hint="按确认键打开")
+        // 不注册右栏选项：弹窗是跑马灯式样例预览（每档带动画演示），通用 radio 列表表达不了，保持原弹窗
         // 以下四行只在「我的素材」下出现
-        val saverCustomRows=mutableListOf<TextView>()
-        lateinit var saverMediaButton: TextView
+        val saverCustomRows=mutableListOf<SettingRow>()
+        lateinit var saverMediaButton: SettingRow
         fun saverMediaLabel(): String {
             val files=saverMediaFiles()
             if(files.isEmpty()) return "我的素材  ·  还没有素材"
@@ -3144,126 +3377,231 @@ class MainActivity: Activity() {
             else if(picked.size==1) "我的素材  ·  只播 ${shortName(picked[0])}"
             else "我的素材  ·  轮播 ${picked.size}/${files.size} 个"
         }
-        saverMediaButton=setting(saver,saverMediaLabel()) { showSaverMediaManager(saverMediaButton) }
-        lateinit var saverFitButton: TextView
+        saverMediaButton=setting(saver,saverMediaLabel(),{ showSaverMediaManager(saverMediaButton) },
+            desc="管理手机快传来的图片与视频，勾选哪些参与轮播。",hint="按确认键管理")
+        lateinit var saverFitButton: SettingRow
         fun saverFitLabel()="画面填充  ·  ${ScreenSaverPrefs.fitName(library.screensaverFit)}"
-        saverFitButton=setting(saver,saverFitLabel()) {
+        saverFitButton=setting(saver,saverFitLabel(),{
             library.screensaverFit=if(library.screensaverFit=="fit") "fill" else "fit"
-            saverFitButton.text=saverFitLabel()
-        }
-        lateinit var saverIntervalButton: TextView
+            saverFitButton.value=ScreenSaverPrefs.fitName(library.screensaverFit)
+        },desc="适应=完整显示留边；填充=铺满裁切；拉伸=强行铺满会变形；平铺=图片原尺寸重复铺满（视频与动图回落填充）。")
+        withOptions(saverFitButton,
+            labels={ ScreenSaverPrefs.FITS.map { it.second } },
+            selectedIndex={ ScreenSaverPrefs.FITS.indexOfFirst { it.first==library.screensaverFit }.coerceAtLeast(0) },
+            onPick={ i -> val key=ScreenSaverPrefs.FITS.getOrNull(i)?.first ?: return@withOptions
+                library.screensaverFit=key; saverFitButton.value=ScreenSaverPrefs.fitName(key) })
+        lateinit var saverIntervalButton: SettingRow
         fun saverIntervalLabel()="轮播间隔  ·  ${ScreenSaverPrefs.intervalLabel(library.screensaverInterval)}"
-        saverIntervalButton=setting(saver,saverIntervalLabel()) {
+        saverIntervalButton=setting(saver,saverIntervalLabel(),{
             val idx=ScreenSaverPrefs.INTERVALS.indexOf(library.screensaverInterval).coerceAtLeast(0)
             library.screensaverInterval=ScreenSaverPrefs.INTERVALS[(idx+1)%ScreenSaverPrefs.INTERVALS.size]
-            saverIntervalButton.text=saverIntervalLabel()
-        }
-        lateinit var saverSoundButton: TextView
-        fun saverSoundLabel()="视频声音  ·  ${if(library.screensaverMuted) "静音" else "开启"}"
-        saverSoundButton=setting(saver,saverSoundLabel()) {
-            library.screensaverMuted=!library.screensaverMuted
-            saverSoundButton.text=saverSoundLabel()
-        }
+            saverIntervalButton.value=ScreenSaverPrefs.intervalLabel(library.screensaverInterval)
+        },desc="多张素材之间切换的间隔；视频例外，播完才换下一张。")
+        withOptions(saverIntervalButton,
+            labels={ ScreenSaverPrefs.INTERVALS.map { ScreenSaverPrefs.intervalLabel(it) } },
+            selectedIndex={ ScreenSaverPrefs.INTERVALS.indexOf(library.screensaverInterval).coerceAtLeast(0) },
+            onPick={ i -> val v=ScreenSaverPrefs.INTERVALS.getOrNull(i) ?: return@withOptions
+                library.screensaverInterval=v; saverIntervalButton.value=ScreenSaverPrefs.intervalLabel(v) })
+        lateinit var saverSoundButton: SettingRow
+        saverSoundButton=toggleSetting(saver,"视频声音",!library.screensaverMuted,{
+            library.screensaverMuted=!it
+        },desc="素材视频屏保时是否带声音播放。")
         saverCustomRows.addAll(listOf(saverMediaButton,saverFitButton,saverIntervalButton,saverSoundButton))
         // 角标时钟位置：右上 / 左下 / 右下 / 不显示（内置风格是屏幕中央大时钟，不受影响）
-        lateinit var saverClockButton: TextView
+        lateinit var saverClockButton: SettingRow
         fun saverClockLabel()="时钟位置  ·  ${ScreenSaverPrefs.clockPosName(library.screensaverClockPos)}"
-        saverClockButton=setting(saver,saverClockLabel()) {
+        saverClockButton=setting(saver,saverClockLabel(),{
             val idx=ScreenSaverPrefs.CLOCK_POSITIONS.indexOfFirst { it.first==library.screensaverClockPos }.coerceAtLeast(0)
             library.screensaverClockPos=ScreenSaverPrefs.CLOCK_POSITIONS[(idx+1)%ScreenSaverPrefs.CLOCK_POSITIONS.size].first
-            saverClockButton.text=saverClockLabel()
-        }
-        setting(saver,"立即预览  ·  按确认查看") { previewScreensaver() }
+            saverClockButton.value=ScreenSaverPrefs.clockPosName(library.screensaverClockPos)
+        },desc="屏保角标时钟的位置。内置大时钟风格本身就是时钟，这项对它不生效。")
+        withOptions(saverClockButton,
+            labels={ ScreenSaverPrefs.CLOCK_POSITIONS.map { it.second } },
+            selectedIndex={ ScreenSaverPrefs.CLOCK_POSITIONS.indexOfFirst { it.first==library.screensaverClockPos }.coerceAtLeast(0) },
+            onPick={ i -> val key=ScreenSaverPrefs.CLOCK_POSITIONS.getOrNull(i)?.first ?: return@withOptions
+                library.screensaverClockPos=key; saverClockButton.value=ScreenSaverPrefs.clockPosName(key) })
+        setting(saver,"立即预览  ·  按确认查看",{ previewScreensaver() },
+            desc="跳过空闲计时，按当前配置立刻全屏预览屏保，任意按键退出。",hint="按确认键预览")
         fun syncSaverRows() {
             val custom=library.screensaverStyle=="custom"
             saverCustomRows.forEach { it.visibility=if(custom) View.VISIBLE else View.GONE }
             rechainSettings()
         }
-        refreshSaverStyleSetting={ saverStyleButton.text=saverStyleLabel(); syncSaverRows() }
-        refreshSaverMediaSetting={ saverMediaButton.text=saverMediaLabel() }
+        refreshSaverStyleSetting={ saverStyleButton.value=saverStyleLabel().substringAfter("  ·  "); syncSaverRows() }
+        refreshSaverMediaSetting={ saverMediaButton.value=saverMediaLabel().substringAfter("  ·  ") }
         syncSaverRows()
-        lateinit var netSpeedButton: TextView
-        netSpeedButton=setting(look,"网速显示  ·  ${if(library.netSpeed) "开启" else "关闭"}") {
-            library.netSpeed=!library.netSpeed
-            netSpeedButton.text="网速显示  ·  ${if(library.netSpeed) "开启" else "关闭"}"
+        lateinit var netSpeedButton: SettingRow
+        netSpeedButton=toggleSetting(look,"网速显示",library.netSpeed,{
+            library.netSpeed=it
             applyNetSpeedOverlay()
-        }
-        lateinit var backdropButton: TextView
+        },desc="右上角悬浮条实时显示当前网速，所有界面常显。")
+        lateinit var backdropButton: SettingRow
         fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
-        backdropButton=setting(look,backdropLabel()) {
+        backdropButton=setting(look,backdropLabel(),{
             tvTools.choose("自定义背景",listOf("手机上传图片","恢复默认背景"),backdropButton,{ choice ->
                 when(choice) {
                     0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext) { refreshBackdropSetting?.invoke() } }
                     1 -> tvTools.choose("恢复默认背景",listOf("强制欣赏","默认风格"),backdropButton,{ style ->
                         resetBackdrop(if(style==0) "forced" else "plain")
-                        backdropButton.text=backdropLabel()
+                        backdropButton.value=backdropLabel().substringAfter("  ·  ")
                     })
                 }
             })
-        }
-        refreshBackdropSetting={ backdropButton.text=backdropLabel() }
-        lateinit var navModulesButton: TextView
-        navModulesButton=setting(look,navModulesLabel()) { showNavModules(navModulesButton) }
+        },desc="用手机传一张图片作为首页背景；「强制欣赏」是内置的备用背景风格。")
+        withOptions(backdropButton,
+            labels={ listOf("手机上传图片","恢复默认背景") },
+            selectedIndex={ -1 },
+            onPick={ choice ->
+                when(choice) {
+                    0 -> tvTools.backdropTransfer(backdropButton) { bytes,ext -> saveBackdrop(bytes,ext) { refreshBackdropSetting?.invoke() } }
+                    else -> tvTools.choose("恢复默认背景",listOf("强制欣赏","默认风格"),backdropButton,{ style ->
+                        resetBackdrop(if(style==0) "forced" else "plain")
+                        backdropButton.value=backdropLabel().substringAfter("  ·  ")
+                    })
+                }
+            })
+        refreshBackdropSetting={ backdropButton.value=backdropLabel().substringAfter("  ·  ") }
+        lateinit var navModulesButton: SettingRow
+        // 导航模块显隐改第三栏多选（用户 2026-11-26）：勾选即改，不再弹窗；两栏窄屏保留弹窗兜底
+        navModulesButton=setting(look,navModulesLabel(),{ showNavModules(navModulesButton) },
+            desc="勾选=在顶部导航显示，取消勾选=收起入口。首页与设置始终显示，数据不会删除；改动立即生效并刷新本页。")
+        withMultiOptions(navModulesButton,
+            labels={ navModuleNames().map { it.second } },
+            checked={ navModuleNames().mapIndexedNotNull { i,(key,_) -> if(!navModuleHidden(key)) i else null }.toSet() },
+            onToggle={ i ->
+                val (key,_) =navModuleNames()[i]
+                val hide=!navModuleHidden(key)
+                when(key) {
+                    "source" -> library.sourceHidden=hide
+                    "mine" -> { library.setNavHidden("favorite",hide); library.setNavHidden("history",hide) }
+                    else -> library.setNavHidden(key,hide)
+                }
+                settingsFocusKey="导航模块"
+                showCatalog()
+            })
 
-        heading(device,"设备与数据",categories[4].second)
+        heading(device,"设备与数据",categoryDefs.getValue("device").second)
+        subHeading(device,"账号与隐私")
+        val accountRow=setting(device,"账号",{ accountManager.showLoginDialog(this) },
+            desc="登录红果账号后，收藏与观看记录同步到云端，换设备登录即可拉回。").apply { value=accountManager.accountLabel }
+        accountButton=accountRow
+        // 三栏：账号动作进右栏选项（登录方式/云端同步/退出），选中即执行；两栏兜底走原选择弹窗（用户 2026-11-25）
+        withOptions(accountRow,
+            labels={
+                if(accountManager.signedIn) listOf("刷新云端记录","同步本机到云端","退出登录")
+                else listOf("扫码登录","手机号验证码登录")
+            },
+            selectedIndex={-1},
+            onPick={ i ->
+                if(accountManager.isBusy) {
+                    Toast.makeText(this,"账号操作进行中，请稍候",Toast.LENGTH_SHORT).show()
+                } else if(accountManager.signedIn) when(i) {
+                    0 -> accountManager.refreshHistory()
+                    1 -> accountManager.syncLocalToCloud { pushed,skipped,failed ->
+                        Toast.makeText(this,when {
+                            failed>0 -> "同步完成：上传 $pushed 部，失败 $failed 部"
+                            pushed>0 -> "已上传 $pushed 部到云端${if(skipped>0) "，$skipped 部云端已是最新" else ""}"
+                            else -> "云端已是最新，无需上传"
+                        },Toast.LENGTH_SHORT).show()
+                    }
+                    else -> accountManager.signOut()
+                } else when(i) {
+                    0 -> accountManager.showQrLogin(this)
+                    else -> accountManager.showPhoneLogin(this)
+                }
+                accountRow.value=accountManager.accountLabel
+                bindPane(accountRow)
+            })
+        // 上报观看进度 = 官方推荐画像的信号来源；关掉只是「猜你喜欢」不再因你而变，云端历史/收藏照常
+        // 归类到设备与数据（跟账号一起属于「我的数据」），不再夹在播放开关里（用户 2026-11-19）
+        lateinit var reportButton: SettingRow
+        reportButton=toggleSetting(device,"推荐画像上报",accountManager.reportEnabled,{
+            accountManager.reportEnabled=it
+        },desc="向官方上报观看进度作为推荐信号。关闭只是「猜你喜欢」不再因你而变，云端历史与收藏照常。")
         subHeading(device,"传输与备份")
         fun quickFilesLabel(count: Int,bytes: Long)="快传文件  ·  ${if(count<=0) "暂无" else "$count 个 · ${TransferRules.humanBytes(bytes)}"}"
         fun quickFilesDirs()=TransferKind.entries.map { java.io.File(filesDir,TransferRules.directoryName(it)) }.distinct()
-        lateinit var quickFiles: TextView
+        lateinit var quickFiles: SettingRow
         fun refreshQuickFiles() {
             io.execute {
                 val list=runCatching { TransferFiles.list(quickFilesDirs()) }.getOrDefault(emptyList())
-                main.post { if(!isDestroyed) quickFiles.text=quickFilesLabel(list.size,list.sumOf { it.file.length() }) }
+                main.post { if(!isDestroyed) quickFiles.value=quickFilesLabel(list.size,list.sumOf { it.file.length() }).substringAfter("  ·  ") }
             }
         }
-        quickFiles=setting(device,quickFilesLabel(0,0)) {
+        quickFiles=setting(device,quickFilesLabel(0,0),{
             tvTools.quickFiles(quickFiles,{ file,kind -> handleQuickTransfer(file,kind,true,quickFiles) },{
                 tvTools.quickTransfer(quickFiles,{ file,kind -> handleQuickTransfer(file,kind) },{ refreshQuickFiles() })
             },{ refreshQuickFiles() })
-        }
+        },desc="手机快传过来的 APK 与视频文件，可就地打开或管理。",hint="按确认键管理")
         refreshQuickFiles()
-        lateinit var localBackupButton: TextView
-        localBackupButton=setting(device,localBackupLabel()) { showLocalBackupDialog(localBackupButton) }
-        subHeading(device,"账号与隐私")
-        accountButton=setting(device,accountManager.accountLabel) { accountManager.showLoginDialog(this) }
-        // 上报观看进度 = 官方推荐画像的信号来源；关掉只是「猜你喜欢」不再因你而变，云端历史/收藏照常
-        // 归类到设备与数据（跟账号一起属于「我的数据」），不再夹在播放开关里（用户 2026-11-19）
-        lateinit var reportButton: TextView
-        reportButton=setting(device,"推荐画像上报  ·  ${if(accountManager.reportEnabled) "开启" else "关闭"}") {
-            accountManager.reportEnabled=!accountManager.reportEnabled
-            reportButton.text="推荐画像上报  ·  ${if(accountManager.reportEnabled) "开启" else "关闭"}"
-        }
+        lateinit var localBackupButton: SettingRow
+        localBackupButton=setting(device,localBackupLabel(),{ showLocalBackupDialog(localBackupButton) },
+            desc="本地备份收藏、观看记录与播放设置，卸载重装后可自动恢复；也可扫码迁到另一台设备。备份是明文文件，可随时关闭。")
+        // 三栏：备份动作进右栏选项（按当前状态给出可做的事），选中即执行；两栏兜底走原弹窗（用户 2026-11-25）
+        withOptions(localBackupButton,
+            labels={
+                val storage=library.localBackup()
+                when {
+                    !library.localBackupEnabled -> listOf("开启本地自动备份")
+                    !storage.supported -> listOf("自动备份不可用（无公共存储）","关闭本地自动备份")
+                    storage.needsPermission -> listOf("授权存储权限","关闭本地自动备份")
+                    library.isEmptyForRestore() && library.hasLocalBackup() -> listOf("立即恢复","关闭本地自动备份")
+                    else -> listOf("立即备份","关闭本地自动备份")
+                }
+            },
+            selectedIndex={-1},
+            onPick={ i ->
+                val storage=library.localBackup()
+                if(i==1) {
+                    library.localBackupEnabled=false
+                    Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
+                } else when {
+                    !library.localBackupEnabled -> {
+                        library.localBackupEnabled=true
+                        if(storage.needsPermission) requestLocalBackupPermission(localBackupButton) else localBackupAction(localBackupButton)
+                    }
+                    storage.supported && storage.needsPermission -> requestLocalBackupPermission(localBackupButton)
+                    storage.supported -> localBackupAction(localBackupButton)
+                }
+                localBackupButton.setValueLabel(localBackupLabel())
+                bindPane(localBackupButton)
+            })
         subHeading(device,"本机记录")
-        lateinit var hidden: TextView
-        hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
-            library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
-        }
-        lateinit var statsButton: TextView
-        statsButton=setting(device,"观看统计  ·  本机累计") { showWatchStats(statsButton) }
+        lateinit var hidden: SettingRow
+        hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部",{
+            library.unhideAll(); hidden.value="0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
+        },desc="把之前手动隐藏的热门推荐一次性全部恢复显示。",hint="按确认键恢复")
+        lateinit var statsButton: SettingRow
+        statsButton=setting(device,"观看统计  ·  本机累计",{ showWatchStats(statsButton) },
+            desc="查看本机累计观看时长与集数分布。")
         fun cacheBytes()=listOfNotNull(cacheDir,externalCacheDir).sumOf { dir -> dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }
         fun cacheLabel(bytes: Long?)="清理缓存  ·  ${when {
             bytes==null -> "计算中…"
             bytes in 0..1023 -> "$bytes B"; bytes in 1024..1048575 -> "${bytes/1024} KB"; else -> "%.1f MB".format(bytes/1048576f)
         }}"
-        lateinit var clearCache: TextView
-        clearCache=setting(device,cacheLabel(null)) {
-            TvDialog.confirm(this,"清理缓存","清除封面图片和已下载的安装包等缓存数据，不影响收藏和观看记录。") {
-                io.execute {
-                    listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
-                    // 统计同样放后台，避免删完立刻在主线程遍历目录
-                    val remaining=cacheBytes()
-                    main.post {
-                        if(isDestroyed) return@post
-                        clearCache.text=cacheLabel(remaining)
-                        Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
-                    }
+        lateinit var clearCache: SettingRow
+        fun clearCacheNow() {
+            io.execute {
+                listOfNotNull(cacheDir,externalCacheDir).forEach { dir -> dir.listFiles()?.forEach { it.deleteRecursively() } }
+                // 统计同样放后台，避免删完立刻在主线程遍历目录
+                val remaining=cacheBytes()
+                main.post {
+                    if(isDestroyed) return@post
+                    clearCache.value=cacheLabel(remaining).substringAfter("  ·  ")
+                    Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
                 }
-            }.show()
+            }
         }
+        clearCache=setting(device,cacheLabel(null),{
+            TvDialog.confirm(this,"清理缓存","清除封面图片和已下载的安装包等缓存数据，不影响收藏和观看记录。") { clearCacheNow() }.show()
+        },desc="清除封面图片与已下载安装包等缓存，收藏和观看记录不受影响。",hint="按确认键清理")
+        // 三栏：确认动作进右栏选项，不再弹确认框；两栏兜底仍走确认弹窗（用户 2026-11-25）
+        withOptions(clearCache,labels={ listOf("立即清理","暂不清理") },selectedIndex={-1},
+            onPick={ i -> if(i==0) clearCacheNow() })
         // 大小统计会遍历缓存目录，放到后台算完再回填，避免设置页构建时阻塞主线程
         io.execute {
             val bytes=cacheBytes()
-            main.post { if(!isDestroyed) clearCache.text=cacheLabel(bytes) }
+            main.post { if(!isDestroyed) clearCache.value=cacheLabel(bytes).substringAfter("  ·  ") }
         }
         // 崩溃日志（用户 2026-11-21）：默认关闭；文件在 cacheDir/crash，「清理缓存」会自动带走，这里另给单独清理与扫码导出
         subHeading(device,"诊断")
@@ -3273,15 +3611,13 @@ class MainActivity: Activity() {
             bytes==0L -> "无日志"
             bytes in 1..1023 -> "$bytes B"; bytes in 1024..1048575 -> "${bytes/1024} KB"; else -> "%.1f MB".format(bytes/1048576f)
         }}（${CrashLogger.files(this).size} 个文件）"
-        lateinit var crashToggle: TextView
-        crashToggle=setting(device,"崩溃日志记录  ·  ${if(CrashLogger.enabled(this)) "已开启" else "已关闭"}") {
-            val next=!CrashLogger.enabled(this)
+        lateinit var crashToggle: SettingRow
+        crashToggle=toggleSetting(device,"崩溃日志记录",CrashLogger.enabled(this),{ next ->
             CrashLogger.setEnabled(this,next)
-            crashToggle.text="崩溃日志记录  ·  ${if(next) "已开启" else "已关闭"}"
             Toast.makeText(this,if(next) "已开启：发生崩溃时会记录日志" else "已关闭：不再记录新日志（旧日志保留）",Toast.LENGTH_SHORT).show()
-        }
-        lateinit var crashExport: TextView
-        crashExport=setting(device,"导出崩溃日志  ·  手机扫码") {
+        },desc="发生崩溃时在本机记录日志，便于排查问题。默认关闭。")
+        lateinit var crashExport: SettingRow
+        crashExport=setting(device,"导出崩溃日志  ·  手机扫码",{
             if(!CrashLogger.enabled(this) && CrashLogger.sizeBytes(this)==0L) {
                 tvTools.info("导出崩溃日志","当前没有崩溃日志，也没有开启记录。开启后再次遇到崩溃即可回来导出。",crashExport)
             } else {
@@ -3294,19 +3630,23 @@ class MainActivity: Activity() {
                     }
                 }
             }
+        },desc="生成二维码用手机扫码带走崩溃日志，反馈问题时用。")
+        lateinit var crashClear: SettingRow
+        fun clearCrashNow() {
+            io.execute {
+                CrashLogger.clear(this@MainActivity)
+                val remaining=CrashLogger.sizeBytes(this@MainActivity)
+                main.post { if(!isDestroyed) { crashClear.value=crashLabel(remaining).substringAfter("  ·  "); Toast.makeText(this@MainActivity,"崩溃日志已清理",Toast.LENGTH_SHORT).show() } }
+            }
         }
-        lateinit var crashClear: TextView
-        crashClear=setting(device,crashLabel(null)) {
+        crashClear=setting(device,crashLabel(null),{
             if(CrashLogger.sizeBytes(this)==0L) { Toast.makeText(this,"当前没有崩溃日志",Toast.LENGTH_SHORT).show() }
-            else TvDialog.confirm(this,"清理崩溃日志","删除本机保存的全部崩溃日志文件，不影响其他数据。") {
-                io.execute {
-                    CrashLogger.clear(this@MainActivity)
-                    val remaining=CrashLogger.sizeBytes(this@MainActivity)
-                    main.post { if(!isDestroyed) { crashClear.text=crashLabel(remaining); Toast.makeText(this@MainActivity,"崩溃日志已清理",Toast.LENGTH_SHORT).show() } }
-                }
-            }.show()
-        }
-        io.execute { val bytes=crashBytes(); main.post { if(!isDestroyed) crashClear.text=crashLabel(bytes) } }
+            else TvDialog.confirm(this,"清理崩溃日志","删除本机保存的全部崩溃日志文件，不影响其他数据。") { clearCrashNow() }.show()
+        },desc="删除本机保存的全部崩溃日志文件，不影响其他数据。",hint="按确认键清理")
+        // 三栏：确认动作进右栏选项，不再弹确认框；两栏兜底仍走确认弹窗（用户 2026-11-25）
+        withOptions(crashClear,labels={ listOf("立即清理","暂不清理") },selectedIndex={-1},
+            onPick={ i -> if(i==0) clearCrashNow() })
+        io.execute { val bytes=crashBytes(); main.post { if(!isDestroyed) crashClear.value=crashLabel(bytes).substringAfter("  ·  ") } }
         // 侧栏底部「常用」（用户 2026-11-19）：屏幕放不下就跟侧栏一起滚动，不为了塞下它去砍分类
         lateinit var quickSend: TextView
         quickSend=railAction("手机快传  ·  传 APK / 视频") {
@@ -3324,36 +3664,46 @@ class MainActivity: Activity() {
                 }
             }.onFailure { tvTools.info("无法生成备份","本机记录暂时无法导出，请重试。",backup) }
         }
-        rail.addView(text("常用",11f,muted).apply { setPadding(dp(12),dp(10),0,dp(5)) })
-        rail.addView(quickSend,lp(-1,-2).apply { bottomMargin=dp(6) })
-        rail.addView(backup,lp(-1,-2).apply { bottomMargin=dp(6) })
+        rail.addView(TextView(this).also { commonLabel=it }.apply {
+            text="常用"; textSize=11f; setTextColor(muted); setPadding(dp(12),dp(10),0,dp(5))
+        },lp(-1,-2))
+        quickSendView=quickSend
+        backupView=backup
+        syncRailViews()
         val commonButtons=listOf(quickSend,backup)
-        heading(lab,"实验室功能",categories[5].second)
-        lateinit var remoteAddressButton: TextView
-        remoteAddressButton=setting(lab,"遥控地址  ·  自动化 / 语音桥接") { showRemoteAddress(remoteAddressButton) }
-        lateinit var xiaoAiButton: TextView
-        xiaoAiButton=setting(lab,xiaoAiLabel()) { showXiaoAiDialog(xiaoAiButton) }
-        lateinit var proxyButton: TextView
-        proxyButton=setting(lab,proxyLabel()) { showProxyDialog(proxyButton) }
-        heading(guide,"使用说明",categories[6].second)
-        // 每个主题一条说明弹窗：正文包在滚动区里，遥控上下键直接翻页（TvDialog.bindScrollKeys），
-        // 关闭后焦点回到刚才那条，继续往下看下一主题
-        val guideRows=UsageGuide.TOPICS.map { TextView(this) }.toMutableList()
-        UsageGuide.TOPICS.forEachIndexed { index,(name,body) ->
-            guideRows[index]=setting(guide,name) {
-                val dlg=TvDialog.info(this,"使用说明 · $name",body)
-                dlg.setOnDismissListener { runCatching { guideRows[index].requestFocus() } }
-                dlg.show()
+        // 常用入口也回显到右栏：链式挂监听，保留 focusStyle 原有绘制；面板隐藏（无右栏分类）时跳过
+        if(threePane) {
+            commonButtons.forEachIndexed { index,item ->
+                val old=item.onFocusChangeListener
+                item.onFocusChangeListener=View.OnFocusChangeListener { v,focused ->
+                    old?.onFocusChange(v,focused)
+                    if(focused && optionPanel.visibility==View.VISIBLE) {
+                        if(index==0) optionPanel.bindPlaceholder("手机快传","用手机扫码把 APK 或视频直接传到电视，常用于装包与投喂本地视频。","按确认键打开",null)
+                        else optionPanel.bindPlaceholder("备份与恢复","生成二维码把本机收藏与观看记录迁到另一台设备，重装或换机后扫码恢复。","按确认键打开",null)
+                    }
+                }
             }
         }
-        heading(about,"关于红果",categories[7].second)
-        lateinit var updates: TextView
-        updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
-        lateinit var checkButton: TextView
-        checkButton=setting(about,"接口自检  ·  首页 / 搜索 / 播放") { showInterfaceCheck(checkButton) }
-        val license=setting(about,"开源许可") {
+        heading(lab,"实验室功能",categoryDefs.getValue("lab").second)
+        lateinit var remoteAddressButton: SettingRow
+        remoteAddressButton=setting(lab,"遥控地址  ·  自动化 / 语音桥接",{ showRemoteAddress(remoteAddressButton) },
+            desc="手机浏览器或自动化脚本通过 HTTP 控制电视的入口地址，含语音桥接用法说明。")
+        lateinit var xiaoAiButton: SettingRow
+        xiaoAiButton=setting(lab,xiaoAiLabel(),{ showXiaoAiDialog(xiaoAiButton) },
+            desc="绑定小爱同学：喊一句话就能换台、搜剧、调设置。")
+        lateinit var proxyButton: SettingRow
+        proxyButton=setting(lab,proxyLabel(),{ showProxyDialog(proxyButton) },
+            desc="部分片源域名被污染打不开时，填一个代理地址转发这些请求。")
+        heading(about,"关于红果",categoryDefs.getValue("about").second)
+        lateinit var updates: SettingRow
+        updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}",{ updater.show(updates) },
+            desc="查看当前版本号与更新日志，手动检查或直接安装新版本。")
+        lateinit var checkButton: SettingRow
+        checkButton=setting(about,"接口自检  ·  首页 / 搜索 / 播放",{ showInterfaceCheck(checkButton) },
+            desc="逐项探测首页、搜索与播放接口是否可用，看剧异常时先跑一遍它。")
+        val license=setting(about,"开源许可",{
             TvDialog.info(this,"开源许可","本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").show()
-        }
+        },desc="本应用的开源协议、引用项目与致谢。",hint="按确认键查看")
         // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
         val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与本机记录保存在设备 · 登录后可同步到红果账号",12f,muted).apply {
             id=View.generateViewId(); isFocusable=false; setPadding(dp(10),dp(8),dp(10),dp(3))
@@ -3365,54 +3715,136 @@ class MainActivity: Activity() {
             val group=categories[active].third
             val items=groupRows[group].orEmpty().filter { it.visibility==View.VISIBLE }
             items.forEachIndexed { index,view ->
-                view.nextFocusUpId=items.getOrNull(index-1)?.id ?: railButtons[active].id
+                view.nextFocusUpId=items.getOrNull(index-1)?.id ?: railButtons.getValue(categoryKeys[active]).id
                 // 页脚固定在屏幕上，不再作为焦点链末端，最后一项按下不再移动焦点
                 view.nextFocusDownId=items.getOrNull(index+1)?.id ?: View.NO_ID
-                view.nextFocusLeftId=railButtons[active].id
-                view.nextFocusRightId=view.id
+                view.nextFocusLeftId=railButtons.getValue(categoryKeys[active]).id
+                // 有选项的行右键放行给默认焦点搜索（右栏选项列）；其余行自指防掉进默认搜索
+                view.nextFocusRightId=if(panelOn(active) && rowOptions.containsKey(view)) View.NO_ID else view.id
             }
-            railButtons.forEachIndexed { index,item ->
-                item.nextFocusUpId=railButtons.getOrNull(index-1)?.id ?: nav[tab].id
-                item.nextFocusDownId=railButtons.getOrNull(index+1)?.id ?: commonButtons.firstOrNull()?.id ?: View.NO_ID
+            categoryKeys.forEachIndexed { index,key ->
+                val item=railButtons.getValue(key)
+                val up=railButtons.getValue(categoryKeys.getOrNull(index-1) ?: categoryKeys.first())
+                val down=railButtons.getValue(categoryKeys.getOrNull(index+1) ?: categoryKeys.last())
+                item.nextFocusUpId=up.id
+                item.nextFocusDownId=down.id
                 item.nextFocusLeftId=item.id
                 item.nextFocusRightId=if(index==active) items.firstOrNull()?.id ?: item.id else item.id
             }
             commonButtons.forEachIndexed { index,item ->
-                item.nextFocusUpId=if(index==0) railButtons.last().id else commonButtons[index-1].id
+                item.nextFocusUpId=if(index==0) railButtons.getValue(categoryKeys.last()).id else commonButtons[index-1].id
                 item.nextFocusDownId=commonButtons.getOrNull(index+1)?.id ?: View.NO_ID
                 item.nextFocusLeftId=item.id
                 item.nextFocusRightId=items.firstOrNull()?.id ?: item.id
             }
-            nav.forEach { it.nextFocusDownId=railButtons.first().id }
+            nav.forEach { it.nextFocusDownId=railButtons.getValue(categoryKeys.first()).id }
+            // 顶栏「设置」按钮在顶栏链末尾、右键原本自指：首次进设置焦点停在它上面时，
+            // 按右没反应（用户 2026-11-25）。右键改为进入当前分类中栏第一行
+            nav[5].nextFocusRightId=items.firstOrNull()?.id ?: railButtons.getValue(categoryKeys.first()).id
         }
         showCategory={ index,focusFirst ->
             if(index in categories.indices) {
                 val changed=index!=active
                 active=index
+                activeKey=categoryKeys[index]
                 if(changed) {
+                    middleHeader.removeAllViews()
+                    groupHeaders[categories[index].third]?.let { middleHeader.addView(it,lp(-1,-2)) }
                     rightPane.removeAllViews()
                     rightPane.addView(categories[index].third,lp(-1,-2))
                 }
-                railButtons.forEachIndexed { i,item -> paintRail(i,item.hasFocus()) }
+                // 无右栏内容的分类隐藏第三栏，中栏吃满整行宽度
+                optionPanel.visibility=if(panelOn(index)) View.VISIBLE else View.GONE
+                categoryKeys.forEach { key -> paintRail(categoryKeys.indexOf(key),railButtons.getValue(key).hasFocus()) }
                 rechainSettings()
                 if(focusFirst) {
-                    (groupRows[categories[index].third].orEmpty().firstOrNull { it.visibility==View.VISIBLE } ?: railButtons[index]).requestFocus()
+                    (groupRows[categories[index].third].orEmpty().firstOrNull { it.visibility==View.VISIBLE } ?: railButtons.getValue(categoryKeys[index])).requestFocus()
                 }
             }
         }
-        rightPane.addView(playback,lp(-1,-2))
+        middleHeader.addView(groupHeaders[categories[0].third],lp(-1,-2))
+        rightPane.addView(categories[0].third,lp(-1,-2))
         syncDanmakuRows()
-        railButtons.forEachIndexed { i,item ->
-            paintRail(i,false)
-            item.setOnFocusChangeListener { _,focused -> paintRail(i,focused); if(focused) showCategory(i,false) }
-            item.setOnClickListener { showCategory(i,true) }
+        // ---- 左栏排序模式（用户 2026-11-25）：长按确认抓起 → 上下键移动（滑动动画）→ 确认/返回放下并保存 ----
+        fun startRailReorder(pos: Int) {
+            railReorderPos=pos
+            // 冻结上下焦点：排序期间方向键由 dispatchKeyEvent 接管
+            railButtons.values.forEach { b -> b.nextFocusUpId=b.id; b.nextFocusDownId=b.id }
+            railButtons.getValue(categoryKeys[pos]).animate().scaleX(1.08f).scaleY(1.08f).setDuration(140).start()
+            Toast.makeText(this,"上下键移动 · 确认键放下",Toast.LENGTH_SHORT).show()
         }
+        railReorderMove={ delta ->
+            val from=railReorderPos
+            if(from>=0) {
+                val to=from+delta
+                if(to in categoryKeys.indices) {
+                    val oldTop=categoryKeys.associate { it to railButtons.getValue(it).top.toFloat() }
+                    val k=categoryKeys[from]; categoryKeys[from]=categoryKeys[to]; categoryKeys[to]=k
+                    categories=categoryKeys.map { categoryDefs.getValue(it) }
+                    if(from==active) active=to else if(to==active) active=from
+                    activeKey=categoryKeys[active]
+                    syncRailViews()
+                    // removeAllViews 会摘掉焦点按钮，系统兜底会把焦点塞给顶栏——立刻收回被抓按钮，
+                    // 否则高亮飞出左栏、左右键看起来像焦点在容器外乱跑（用户 2026-11-25）
+                    val grabNow=railButtons.getValue(categoryKeys[to])
+                    grabNow.requestFocus()
+                    // 滑动动画：视图已按新顺序挂好，先瞬移回各自旧坐标，再滑回 0
+                    categoryKeys.forEach { key ->
+                        val b=railButtons.getValue(key)
+                        b.translationY=(oldTop[key] ?: 0f)-b.top
+                        b.animate().translationY(0f).setDuration(180).start()
+                    }
+                    railReorderPos=to
+                    val grab=railButtons.getValue(categoryKeys[to])
+                    railScroll.post {
+                        if(grab.top<railScroll.scrollY) railScroll.smoothScrollTo(0,(grab.top-dp(6)).coerceAtLeast(0))
+                        else if(grab.bottom>railScroll.scrollY+railScroll.height) railScroll.smoothScrollTo(0,grab.bottom-railScroll.height+dp(6))
+                    }
+                    rechainSettings()
+                    categoryKeys.forEachIndexed { i,key -> paintRail(i,railButtons.getValue(key).hasFocus()) }
+                }
+            }
+        }
+        railReorderEnd={ save ->
+            val from=railReorderPos
+            railReorderPos=-1; railReorderMove=null
+            if(from>=0) {
+                val pos=from.coerceIn(0,categoryKeys.lastIndex)
+                railButtons.getValue(categoryKeys[pos]).animate().scaleX(1f).scaleY(1f).setDuration(140).start()
+                if(save) {
+                    // 顺序落盘并进备份文件：换设备扫码/本地恢复后分类顺序跟着走
+                    library.railOrder=categoryKeys.joinToString(",")
+                    library.requestBackup()
+                }
+                rechainSettings()
+                categoryKeys.forEachIndexed { i,key -> paintRail(i,railButtons.getValue(key).hasFocus()) }
+                // 放下后焦点稳稳落回该分类（中途 detach 可能已把焦点丢给顶栏）
+                railScroll.post { railButtons.getValue(categoryKeys[pos]).requestFocus() }
+            }
+        }
+        railButtons.forEach { (key,item) ->
+            fun pos()=categoryKeys.indexOf(key)
+            paintRail(pos(),false)
+            item.setOnFocusChangeListener { _,focused ->
+                paintRail(pos(),focused)
+                if(focused) {
+                    showCategory(pos(),false)
+                    if(panelOn(pos())) optionPanel.bindCategory(categories[pos()].first,categories[pos()].second)
+                }
+            }
+            item.setOnClickListener { showCategory(pos(),true) }
+            item.setOnLongClickListener {
+                if(railReorderPos<0) startRailReorder(pos())
+                true
+            }
+        }
+        if(threePane) optionPanel.bindCategory(categories[0].first,categories[0].second)
         rechainSettings()
         footerHost.addView(settingsFooter,lp(-2,-2))
         footerHost.addView(settingsDisclaimer,lp(-2,-2))
         // 页面重建（如切换片源显隐）后按标签恢复焦点，避免跳回顶部导航
         val wanted=settingsFocusKey.also { settingsFocusKey=null }
-        val target=wanted?.let { key -> settingRows.firstOrNull { it.text.toString().startsWith(key) } }
+        val target=wanted?.let { key -> settingRows.firstOrNull { it.title.startsWith(key) } }
         if(target!=null) {
             val index=categories.indexOfFirst { it.third===(target.parent as? View) }
             if(index>=0) showCategory(index,false)
@@ -5485,11 +5917,11 @@ class MainActivity: Activity() {
         showHud(); if(!playError && episodePanel==null) showPanel(); syncMediaSession()
         Toast.makeText(this,"定时停止已生效",Toast.LENGTH_LONG).show()
     }
-    private fun showSleepPicker(anchor: TextView) {
+    private fun showSleepPicker(anchor: View) {
         val labels=listOf("关闭定时停止","15 分钟后","30 分钟后","60 分钟后","90 分钟后","本集播完","再播完 3 集","再播完 5 集")
         tvTools.choose("定时停止 · ${sleepTimer.label()}",labels,anchor,{ choice ->
             when(choice) { 0 -> sleepTimer.cancel(); in 1..4 -> sleepTimer.afterMinutes(listOf(15,30,60,90)[choice-1]); else -> sleepTimer.afterEpisodes(listOf(1,3,5)[choice-5]) }
-            if(anchor.tag!="playback-settings") anchor.text="定时 ${sleepTimer.label()}"; updatePlaybackText(); showHud()
+            if(anchor.tag!="playback-settings") anchor.setValueLabel("定时 ${sleepTimer.label()}"); updatePlaybackText(); showHud()
         })
     }
     private fun frameResizeMode()=when(effectiveFrame()) {
@@ -5497,12 +5929,12 @@ class MainActivity: Activity() {
         VideoFrameMode.ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         VideoFrameMode.FILL -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
-    private fun showFramePicker(anchor: TextView,inPlayer: Boolean) {
+    private fun showFramePicker(anchor: View,inPlayer: Boolean) {
         tvTools.choose(if(inPlayer) "本剧画面模式" else "全局画面模式",listOf("完整画面 · 保留比例与全部内容","等比铺满 · 会裁掉部分画面与字幕","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
             // 播放中只改这一部剧，全局默认留给设置页
             if(inPlayer) sessionFrame=VideoFrameMode.entries[index] else library.frameMode=VideoFrameMode.entries[index]
             playerView?.resizeMode=frameResizeMode()
-            if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "画面 " else "画面模式  ·  ")+effectiveFrame().label
+            if(anchor.tag!="playback-settings") anchor.setValueLabel((if(inPlayer) "画面 " else "画面模式  ·  ")+effectiveFrame().label)
         })
     }
     private fun applyDanmakuPrefs()=danmakuView?.applyPrefs(library.danmakuOpacity,library.danmakuFont,library.danmakuSpeed,library.danmakuRows)
@@ -5511,43 +5943,43 @@ class MainActivity: Activity() {
         library.danmakuSpeed=DanmakuPrefs.SPEED_DEFAULT; library.danmakuRows=DanmakuPrefs.ROWS_DEFAULT
         applyDanmakuPrefs()
     }
-    private fun showDanmakuOpacityPicker(anchor: TextView,done: (()->Unit)?=null) {
+    private fun showDanmakuOpacityPicker(anchor: View,done: (()->Unit)?=null) {
         val options=listOf(100,90,80,70,60,50,40,30,21)
         val current=options.indexOf(library.danmakuOpacity).coerceAtLeast(0)
         // 与清晰度选择器同一样式：当前值行内标注「· 当前」，开窗焦点直接落在它上面
         tvTools.choose("弹幕不透明度",options.map { "$it%"+(if(it==library.danmakuOpacity) "   ·   当前" else "") },anchor,{ choice ->
             library.danmakuOpacity=options[choice]; applyDanmakuPrefs()
-            if(anchor.tag!="playback-settings") anchor.text="弹幕不透明度  ·  ${library.danmakuOpacity}%"
+            if(anchor.tag!="playback-settings") anchor.setValueLabel("弹幕不透明度  ·  ${library.danmakuOpacity}%")
             done?.invoke()
         },focusIndex=current)
     }
-    private fun showDanmakuFontPicker(anchor: TextView,done: (()->Unit)?=null) {
+    private fun showDanmakuFontPicker(anchor: View,done: (()->Unit)?=null) {
         val current=library.danmakuFont.coerceIn(0,DanmakuPrefs.FONT_LABELS.lastIndex)
         tvTools.choose("弹幕字体大小",DanmakuPrefs.FONT_LABELS.mapIndexed { index,label -> label+(if(index==current) "   ·   当前" else "") },anchor,{ choice ->
             library.danmakuFont=choice; applyDanmakuPrefs()
-            if(anchor.tag!="playback-settings") anchor.text="弹幕字体大小  ·  ${DanmakuPrefs.fontLabel(library.danmakuFont)}"
+            if(anchor.tag!="playback-settings") anchor.setValueLabel("弹幕字体大小  ·  ${DanmakuPrefs.fontLabel(library.danmakuFont)}")
             done?.invoke()
         },focusIndex=current)
     }
-    private fun showDanmakuSpeedPicker(anchor: TextView,done: (()->Unit)?=null) {
+    private fun showDanmakuSpeedPicker(anchor: View,done: (()->Unit)?=null) {
         val current=library.danmakuSpeed.coerceIn(0,DanmakuPrefs.SPEED_LABELS.lastIndex)
         tvTools.choose("弹幕移动速度",DanmakuPrefs.SPEED_LABELS.mapIndexed { index,label -> label+(if(index==current) "   ·   当前" else "") },anchor,{ choice ->
             library.danmakuSpeed=choice; applyDanmakuPrefs()
-            if(anchor.tag!="playback-settings") anchor.text="弹幕移动速度  ·  ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}"
+            if(anchor.tag!="playback-settings") anchor.setValueLabel("弹幕移动速度  ·  ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}")
             done?.invoke()
         },focusIndex=current)
     }
-    private fun showDanmakuRowsPicker(anchor: TextView,done: (()->Unit)?=null) {
+    private fun showDanmakuRowsPicker(anchor: View,done: (()->Unit)?=null) {
         val rows=(DanmakuPrefs.ROWS_MIN..DanmakuPrefs.ROWS_MAX).toList()
         val current=(library.danmakuRows-DanmakuPrefs.ROWS_MIN).coerceIn(0,rows.lastIndex)
         tvTools.choose("弹幕展示行数",rows.map { "$it 行"+(if(it==library.danmakuRows) "   ·   当前" else "") },anchor,{ choice ->
             library.danmakuRows=choice+DanmakuPrefs.ROWS_MIN; applyDanmakuPrefs()
-            if(anchor.tag!="playback-settings") anchor.text="弹幕展示行数  ·  ${library.danmakuRows} 行"
+            if(anchor.tag!="playback-settings") anchor.setValueLabel("弹幕展示行数  ·  ${library.danmakuRows} 行")
             done?.invoke()
         },focusIndex=current)
     }
     /** In-player danmaku preferences; reopens itself after each change so several can be tuned in one visit. */
-    private fun showDanmakuPrefsDialog(anchor: TextView) {
+    private fun showDanmakuPrefsDialog(anchor: View) {
         fun labels()=listOf("不透明度 ${library.danmakuOpacity}%","字体大小 ${DanmakuPrefs.fontLabel(library.danmakuFont)}","移动速度 ${DanmakuPrefs.speedLabel(library.danmakuSpeed)}","展示行数 ${library.danmakuRows} 行","恢复默认设置")
         tvTools.choose("弹幕设置",labels(),anchor,{ choice ->
             main.post {
@@ -5563,7 +5995,7 @@ class MainActivity: Activity() {
         })
     }
     /** 弹幕屏蔽词：常用词多选 + 保留用户已添加的自定义词；确认后立即对正在播放的弹幕生效。 */
-    private fun showBlockedWordDialog(anchor: TextView) {
+    private fun showBlockedWordDialog(anchor: View) {
         val presets=listOf("加群","微信","公众号","QQ群","QQ","广告","私聊","代看","抖音","快手")
         val current=extras.blockedWords
         val words=(presets+current.filterNot { it in presets }).distinct()
@@ -5607,13 +6039,13 @@ class MainActivity: Activity() {
         content.addView(scroll,lp(-1,-2))
         val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(14),0,0) }
         val clear=TvDialog.capsuleButton(this,"清空") {
-            extras.blockedWords=emptySet(); applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  0 个"
+            extras.blockedWords=emptySet(); applyBlockedWords(); anchor.setValueLabel("弹幕屏蔽词  ·  0 个")
             for(i in checked.indices) checked[i]=false
             rows.forEachIndexed { i,r -> paint(r,i,r.isFocused) }
         }
         val save=TvDialog.capsuleButton(this,"保存") {
             extras.blockedWords=words.filterIndexed { index,_ -> checked[index] }.toSet()
-            applyBlockedWords(); anchor.text="弹幕屏蔽词  ·  ${extras.blockedWords.size} 个"
+            applyBlockedWords(); anchor.setValueLabel("弹幕屏蔽词  ·  ${extras.blockedWords.size} 个")
             Toast.makeText(this@MainActivity,"屏蔽词已保存，立即生效",Toast.LENGTH_SHORT).show()
         }
         buttons.addView(clear,lp(-2,-2).apply { rightMargin=dp(12) })
@@ -5627,7 +6059,7 @@ class MainActivity: Activity() {
     private fun applyBlockedWords() = danmakuView?.setBlockedFilter { text -> extras.blocks(text) }
 
     /** 本机观看统计：直接按最近观看记录汇总，不额外存储、不产生任何网络请求。 */
-    private fun showWatchStats(anchor: TextView) {
+    private fun showWatchStats(anchor: View) {
         val rows=library.history()
         if(rows.isEmpty()) { tvTools.info("观看统计 · 本机","还没有观看记录，播放几集后再来看。",anchor); return }
         val totalMs=rows.sumOf { it.position.coerceAtLeast(0) }
@@ -5653,7 +6085,7 @@ class MainActivity: Activity() {
 
     /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。
      *  状态圆点内嵌在按钮文字前：灰=未检测，橙=检测中，绿=通，红=不通；3 秒内重复点击直接忽略。 */
-    private fun showInterfaceCheck(anchor: TextView) {
+    private fun showInterfaceCheck(anchor: View) {
         val content=column()
         val status=text("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
         content.addView(status)
@@ -5729,70 +6161,6 @@ class MainActivity: Activity() {
     }
 
     /** 遥控器按键：就地循环切换取值，避免多层弹窗来回跳焦点。 */
-    private fun showKeySettings(anchor: TextView) {
-        val content=column()
-        fun sync(anchorText: TextView) { anchorText.text="遥控器按键  ·  快进 ${extras.seekStepSeconds} 秒" }
-        lateinit var step: TextView
-        step=button("快进步长  ·  ${extras.seekStepSeconds} 秒") {
-            val options=PlaybackExtras.SEEK_STEPS
-            extras.seekStepSeconds=options[(options.indexOf(extras.seekStepSeconds)+1)%options.size]
-            step.text="快进步长  ·  ${extras.seekStepSeconds} 秒"; sync(anchor)
-        }
-        lateinit var speed: TextView
-        speed=button("长按快进  ·  ${PlaybackExtras.FAST_SPEEDS.first { it==extras.longPressSpeed }.toInt()}×") {
-            val options=PlaybackExtras.FAST_SPEEDS
-            extras.longPressSpeed=options[(options.indexOf(extras.longPressSpeed)+1)%options.size]
-            speed.text="长按快进  ·  ${extras.longPressSpeed.toInt()}×"
-        }
-        fun menuLabel()=when(extras.menuKeyAction) {
-            PlaybackExtras.MENU_EPISODES -> "选集"
-            PlaybackExtras.MENU_DANMAKU -> "弹幕开关"
-            else -> "播放设置"
-        }
-        lateinit var menu: TextView
-        menu=button("菜单键  ·  ${menuLabel()}") {
-            extras.menuKeyAction=when(extras.menuKeyAction) {
-                PlaybackExtras.MENU_EPISODES -> PlaybackExtras.MENU_DANMAKU
-                PlaybackExtras.MENU_DANMAKU -> PlaybackExtras.MENU_PANEL
-                else -> PlaybackExtras.MENU_EPISODES
-            }
-            menu.text="菜单键  ·  ${menuLabel()}"
-        }
-        fun upDownLabel()=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "切换集数" else "选集面板"
-        lateinit var upDown: TextView
-        upDown=button("遥控上下键  ·  ${upDownLabel()}") {
-            extras.dpadUpDownAction=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) PlaybackExtras.UPDOWN_PANEL else PlaybackExtras.UPDOWN_SWITCH
-            upDown.text="遥控上下键  ·  ${upDownLabel()}"; keyHints?.text=keyHintText()
-        }
-        fun mouseRightLabel()=when(extras.mouseRightAction) {
-            PlaybackExtras.MOUSE_PLAY -> "暂停/播放"
-            PlaybackExtras.MOUSE_EPISODES -> "打开选集"
-            PlaybackExtras.MOUSE_HUD -> "显隐控制条"
-            PlaybackExtras.MOUSE_PANEL -> "播放设置"
-            else -> "退出播放"
-        }
-        lateinit var mouseRight: TextView
-        mouseRight=button("鼠标右键  ·  ${mouseRightLabel()}") {
-            val actions=PlaybackExtras.MOUSE_ACTIONS
-            extras.mouseRightAction=actions[(actions.indexOf(extras.mouseRightAction)+1)%actions.size]
-            mouseRight.text="鼠标右键  ·  ${mouseRightLabel()}"; keyHints?.text=keyHintText()
-        }
-        // 只有接了鼠标才显示右键设置：遥控器用户看到这一项只会困惑，也无法验证
-        val options=buildList {
-            add(step); add(speed); add(menu); add(upDown)
-            if(TvPointer.hasMouse(this@MainActivity)) add(mouseRight)
-        }
-        options.forEachIndexed { index,view ->
-            view.gravity=Gravity.START or Gravity.CENTER_VERTICAL // 弹窗选项一律左对齐，Button 默认居中
-            content.addView(view,lp(-1,dp(48)).apply { bottomMargin=dp(8) })
-            view.nextFocusDownId=options.getOrNull(index+1)?.id ?: View.NO_ID
-            view.nextFocusUpId=options.getOrNull(index-1)?.id ?: View.NO_ID
-        }
-        val dialog=AlertDialog.Builder(this).setView(TvDialog.card(this,content)).create()
-        TvDialog.styleWindow(this,dialog)
-        dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
-        dialog.show(); step.requestFocus()
-    }
     private fun seek(direction: Int,repeat: Int) {
         val p=player ?: return; if(!playbackReady) return
         val duration=p.duration; if(duration<=0) return
@@ -5976,7 +6344,7 @@ class MainActivity: Activity() {
         line.getChildAt(0)?.requestFocus()
         showHud()
     }
-    private fun showSkipPicker(anchor: TextView,intro: Boolean) {
+    private fun showSkipPicker(anchor: View,intro: Boolean) {
         val data=detail ?: return
         val options=listOf(0,15,30,45,60,90,120)
         val current=library.skipMark(data.series.id)?.let { if(intro) it.introSeconds else it.outroSeconds } ?: 0
@@ -5989,7 +6357,7 @@ class MainActivity: Activity() {
             showHud()
         },"当前 ${if(current>0) "$current 秒" else "关闭"}",onExtra={})
     }
-    private fun showSpeedPicker(anchor: TextView,inPlayer: Boolean=true) {
+    private fun showSpeedPicker(anchor: View,inPlayer: Boolean=true) {
         if(speedDialog!=null) return
         val speeds=PlaybackSpeed.options
         val current=if(inPlayer) effectiveSpeed() else library.playbackSpeed
@@ -6005,7 +6373,7 @@ class MainActivity: Activity() {
                 // 播放中就只改本次会话：用户临时调个倍速，不该改掉明天看别的剧的默认值
                 if(inPlayer) sessionSpeed=speed else library.playbackSpeed=speed
                 if(inPlayer) player?.setPlaybackSpeed(speed)
-                if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "倍速 " else "默认倍速  ·  ")+PlaybackSpeed.label(speed)
+                if(anchor.tag!="playback-settings") anchor.setValueLabel((if(inPlayer) "倍速 " else "默认倍速  ·  ")+PlaybackSpeed.label(speed))
                 if(inPlayer) updatePlaybackText()
                 dialog.dismiss()
             }
@@ -6034,7 +6402,7 @@ class MainActivity: Activity() {
     }
     /** 软解（bvc2）清晰度选择（用户 2026-11-21）：默认 360P 老电视友好。
      *  只影响 bvc2 垫底档的选择；调高后软解跟不上，性能看门狗仍会自动降回来。 */
-    private fun showSoftQualityPicker(anchor: TextView) {
+    private fun showSoftQualityPicker(anchor: View) {
         val options=PlaybackQuality.softOptions
         val current=library.softQuality
         val content=column()
@@ -6046,7 +6414,7 @@ class MainActivity: Activity() {
             val isCurrent=q==current
             val item=button("${q}P"+(if(isCurrent) "   ·   当前" else ""),isCurrent) {
                 library.softQuality=q
-                anchor.text="软解清晰度  ·  ${q}P"
+                anchor.setValueLabel("软解清晰度  ·  ${q}P")
                 dialog.dismiss()
             }
             items+=item
@@ -6064,7 +6432,7 @@ class MainActivity: Activity() {
         dialog.show()
     }
 
-    private fun showQualityPicker(anchor: TextView,inPlayer: Boolean) {
+    private fun showQualityPicker(anchor: View,inPlayer: Boolean) {
         val options=PlaybackQuality.options
         val current=if(inPlayer) effectiveQuality() else library.maxQuality
         val content=column()
@@ -6085,7 +6453,7 @@ class MainActivity: Activity() {
                 }
                 // 用户手动选定档位即视为放弃本轮自动降档，后续失败重新从选定档位起算。
                 downgradeEpisode=""; downgradeCount=0; decodeRetried=false
-                if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "清晰度 " else "默认清晰度  ·  ")+"${quality}P"
+                if(anchor.tag!="playback-settings") anchor.setValueLabel((if(inPlayer) "清晰度 " else "默认清晰度  ·  ")+"${quality}P")
                 // 选完就收窗：播放中它会挡住画面，而用户下一步要看的是「到底能不能播」。
                 dialog.dismiss()
                 if(inPlayer && !isCurrent) playEpisode(episodeIndex,currentPosition(),player?.playWhenReady ?: requestedAutoplay)
@@ -6121,7 +6489,7 @@ class MainActivity: Activity() {
         return "导航模块  ·  ${names.count { !navModuleHidden(it.first) }}/${names.size} 显示"
     }
     /** 导航栏模块显隐：逐项开关，关闭后立即从顶部导航栏移除；首页与设置始终显示，不在此列。 */
-    private fun showNavModules(anchor: TextView) {
+    private fun showNavModules(anchor: View) {
         val content=column()
         content.addView(TvDialog.title(this,"导航模块"))
         content.addView(text("首页与设置始终显示；关闭后会从顶部导航栏移除，收藏与观看记录不会删除。",13f,muted)
@@ -6139,7 +6507,7 @@ class MainActivity: Activity() {
                     "mine" -> { library.setNavHidden("favorite",hide); library.setNavHidden("history",hide) }
                     else -> library.setNavHidden(key,hide)
                 }
-                row.text=rowText(); anchor.text=navModulesLabel()
+                row.text=rowText(); anchor.setValueLabel(navModulesLabel())
             }
             content.addView(row,lp(-1,dp(46)).apply { bottomMargin=dp(8) })
         }
@@ -6448,7 +6816,15 @@ class MainActivity: Activity() {
             // 仿真时钟两档：表盘自己就是时钟（指针实时走动），不再叠数字角标，「时钟位置」设置不参与
             "clockgold" -> layer.addView(AnalogClockView(this,true),FrameLayout.LayoutParams(-1,-1))
             "clockdawn" -> layer.addView(AnalogClockView(this,false),FrameLayout.LayoutParams(-1,-1))
-            "custom" -> screensaverCustom=ScreensaverCustom(layer,onlyFile).also { it.start() }
+            // 选了「我的素材」但本机一个素材都没有（从别的设备恢复了备份/素材被外部清掉）：
+            // 当次直接回落经典墨夜盖屏，非预览时把风格持久退回 classic，
+            // 不让用户每次空闲都对着黑屏提示干瞪眼（用户 2026-11-25）
+            "custom" -> {
+                if(onlyFile==null && saverMediaFiles().isEmpty() && quickTransferMedia().isEmpty()) {
+                    if(!preview) library.screensaverStyle="classic"
+                    addClockOverlay(layer,Color.WHITE,muted)
+                } else screensaverCustom=ScreensaverCustom(layer,onlyFile).also { it.start() }
+            }
             else -> addClockOverlay(layer,Color.WHITE,muted)
         }
         root.addView(layer,FrameLayout.LayoutParams(-1,-1))
@@ -6614,7 +6990,7 @@ class MainActivity: Activity() {
      *  勾选语义：确认键 = 勾上 / 取消，勾一个就是只播这一张，勾多个就是这几个轮流播；
      *  「轮播全部素材」= 全选并启用，配置写成空串（以后新传的素材自动进轮播，不用再回来勾一次）。
      *  文件名可能很长：卡片上单行中间省略，聚焦后跑马灯；其它地方（设置行、toast、样例卡）一律截断。 */
-    private fun showSaverMediaManager(anchor: TextView) {
+    private fun showSaverMediaManager(anchor: View) {
         val own=saverMediaFiles()
         val transfers=quickTransferMedia().filter { f -> own.none { it.name==f.name } }
         if(own.isEmpty() && transfers.isEmpty()) {
@@ -6995,7 +7371,7 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun startSaverUpload(anchor: TextView) {
+    private fun startSaverUpload(anchor: View) {
         tvTools.quickTransfer(anchor,{ file,kind ->
             if(kind==TransferKind.IMAGE || kind==TransferKind.VIDEO) storeSaverMedia(file) { refreshSaverMediaSetting?.invoke() }
         })
@@ -7030,7 +7406,7 @@ class MainActivity: Activity() {
         return frame
     }
     /** 屏保风格跑马灯：横向样例卡聚焦滚动居中，左右键浏览、确认键选用（用户 2026-11-19）。 */
-    private fun showSaverStylePicker(anchor: TextView) {
+    private fun showSaverStylePicker(anchor: View) {
         val content=column()
         content.addView(TvDialog.title(this,"选择屏保画面"))
         content.addView(text("左右键浏览，确认键选用。前六种是自带画面（含两款指针走动的仿真时钟）；「我的素材」放你自己传的图片和视频。",13f,muted).apply { setPadding(0,dp(4),0,dp(10)) })
@@ -7245,7 +7621,13 @@ class MainActivity: Activity() {
         private val isStatic={ f: java.io.File -> f.extension.lowercase(Locale.ROOT) in setOf("jpg","jpeg","png") }
         /** 轮播换图间隔：设置里的 10/30/60 秒（视频例外，播完才换）。 */
         private val intervalMs get() = library.screensaverInterval*1000L
-        private val scaleType get() = if(library.screensaverFit=="fill") ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
+        /** 图片缩放方式：fit 适应 / fill·tile 铺满裁切（动图不支持平铺，回落填充；静态图的平铺在 showStatic 单独做）
+         *  / stretch 拉伸（无视比例强行铺满，用户 2026-11-25 加）。 */
+        private val scaleType get() = when(library.screensaverFit) {
+            "fill","tile" -> ImageView.ScaleType.CENTER_CROP
+            "stretch" -> ImageView.ScaleType.FIT_XY
+            else -> ImageView.ScaleType.FIT_CENTER
+        }
 
         fun start() {
             val singleFile=only
@@ -7317,7 +7699,12 @@ class MainActivity: Activity() {
                         p.setOnCompletionListener { releasePlayer(); if(!single) next() }
                         p.setOnErrorListener { _,_,_ -> releasePlayer(); next(); true }
                         // prepare 是异步的：start 必须等 onPrepared，提前调会报 -38（state 4 调 start）
-                        p.setOnPreparedListener { mp -> if(!stopped) mp.start() }
+                        p.setOnPreparedListener { mp ->
+                            if(stopped) return@setOnPreparedListener
+                            mp.start()
+                            // 视频此前是恒定满屏拉伸：现在跟随「画面填充」设置做适应/填充/拉伸（平铺回落填充，用户 2026-11-25）
+                            applyVideoTransform(tv,mp.videoWidth,mp.videoHeight)
+                        }
                         player=p
                         p.prepareAsync()
                     } catch(_: Exception) { releasePlayer(); next() }
@@ -7330,6 +7717,24 @@ class MainActivity: Activity() {
         private fun releasePlayer() {
             runCatching { player?.stop() }; runCatching { player?.release() }
             player=null
+        }
+        /** 视频「画面填充」：fit 适应（居中留黑边）/ fill·tile 填充（铺满裁切）/ stretch 拉伸满屏（恒等映射）。
+         *  TextureView 默认把整块 buffer 拉到视图大小，不设置时永远是拉伸，fit/fill 需要显式变换矩阵。 */
+        private fun applyVideoTransform(tv: TextureView,vw: Int,vh: Int) {
+            if(vw<=0 || vh<=0) return
+            tv.post {
+                if(stopped || isDestroyed) return@post
+                val w=tv.width.toFloat(); val h=tv.height.toFloat()
+                if(w<=0f || h<=0f) return@post
+                val sx=w/vw; val sy=h/vh
+                val m=android.graphics.Matrix()
+                when(library.screensaverFit) {
+                    "fit" -> { val s=minOf(sx,sy); m.setScale(s,s); m.postTranslate((w-vw*s)/2f,(h-vh*s)/2f) }
+                    "fill","tile" -> { val s=maxOf(sx,sy); m.setScale(s,s); m.postTranslate((w-vw*s)/2f,(h-vh*s)/2f) }
+                    else -> m.setScale(sx,sy)
+                }
+                tv.setTransform(m)
+            }
         }
         /** 静态图：按屏幕宽高采样解码（io 线程），避免大图卡主线程。 */
         private fun showStatic(file: java.io.File) {
@@ -7344,7 +7749,11 @@ class MainActivity: Activity() {
                 main.post {
                     if(stopped || isDestroyed) return@post
                     if(bitmap==null) { next(); return@post }
-                    val iv=ImageView(this@MainActivity).apply { setImageBitmap(bitmap); scaleType=this@ScreensaverCustom.scaleType }
+                    val iv=ImageView(this@MainActivity)
+                    if(library.screensaverFit=="tile") {
+                        // 平铺（用户 2026-11-25）：图片按原尺寸重复铺满屏幕（壁纸语义），不走缩放
+                        iv.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources,bitmap).apply { setTileModeXY(android.graphics.Shader.TileMode.REPEAT,android.graphics.Shader.TileMode.REPEAT) })
+                    } else { iv.setImageBitmap(bitmap); iv.scaleType=this@ScreensaverCustom.scaleType }
                     mediaView=iv
                     layer.addView(iv,FrameLayout.LayoutParams(-1,-1))
                     // 解码是异步的：图加进来时已经压在角标时钟上面，必须再抬一次时钟，否则满幅壁纸会把时间完全盖住
@@ -7376,12 +7785,18 @@ class MainActivity: Activity() {
                         override fun onDraw(canvas: Canvas) {
                             if(stopped) return
                             val w=width.toFloat(); val h=height.toFloat()
-                            // 填充=铺满裁切（取较大比例），适应=整图可见（取较小比例）
-                            val fill=library.screensaverFit=="fill"
-                            val scale=if(fill) Math.max(w/movie.width(),h/movie.height()) else minOf(w/movie.width(),h/movie.height())
-                            val dx=(w-movie.width()*scale)/2f; val dy=(h-movie.height()*scale)/2f
+                            val sx=w/movie.width(); val sy=h/movie.height()
+                            // 拉伸=横竖各按屏幕比例强拉（会变形）；填充/平铺=铺满裁切（取较大比例，动图不支持平铺回落填充）；
+                            // 适应=整图可见（取较小比例）（用户 2026-11-25 加拉伸）
+                            val scaleX: Float; val scaleY: Float
+                            when(library.screensaverFit) {
+                                "stretch" -> { scaleX=sx; scaleY=sy }
+                                "fill","tile" -> { val s=Math.max(sx,sy); scaleX=s; scaleY=s }
+                                else -> { val s=minOf(sx,sy); scaleX=s; scaleY=s }
+                            }
+                            val dx=(w-movie.width()*scaleX)/2f; val dy=(h-movie.height()*scaleY)/2f
                             movie.setTime(((System.currentTimeMillis()%movie.duration().coerceAtLeast(1)).toInt()))
-                            canvas.save(); canvas.translate(dx,dy); canvas.scale(scale,scale)
+                            canvas.save(); canvas.translate(dx,dy); canvas.scale(scaleX,scaleY)
                             movie.draw(canvas,0f,0f)
                             canvas.restore()
                             postInvalidateDelayed(33)
@@ -7759,7 +8174,7 @@ class MainActivity: Activity() {
         }
         fun persist(cfg: AppProxy.Config) {
             AppProxy.save(this,cfg)
-            (anchor as? TextView)?.text=proxyLabel()
+            anchor.setValueLabel(proxyLabel())
             dialog.dismiss()
             Toast.makeText(this,if(cfg.enabled) "网络代理已启用 · ${cfg.host}:${cfg.port}" else "网络代理已停用",Toast.LENGTH_SHORT).show()
         }
@@ -8700,6 +9115,25 @@ class MainActivity: Activity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // 屏保唤醒键只撤屏保不透传：防止「按一下想唤醒却把焦点卡片点开了」（用户 2026-11-19）
         if(screensaverView!=null) return consumeScreensaverInput()
+        // 设置左栏排序模式：上下移动被抓起的分类，左右不动，确认/返回放下并保存（用户 2026-11-25）
+        if(railReorderPos>=0 && tab==5 && screen=="catalog") {
+            if(event.action==KeyEvent.ACTION_DOWN) when(event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { railReorderMove?.invoke(-1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { railReorderMove?.invoke(1); return true }
+                KeyEvent.KEYCODE_DPAD_LEFT,KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> {
+                    // 抓起本身就是长按：松手前系统还在灌 repeat 键，必须只有全新一按（repeat==0）
+                    // 才算放下，否则抓起 50ms 后就被残留重复键自动放下＝功能无效（用户 2026-11-25）
+                    if(event.repeatCount==0) railReorderEnd?.invoke(true)
+                    return true
+                }
+                KeyEvent.KEYCODE_BACK -> { railReorderEnd?.invoke(true); return true }
+                else -> {}
+            }
+            // 抓起那一按的抬起事件（可能带 FLAG_LONG_PRESS）：吞掉，别让它落到按钮上再触发一次点击
+            if(event.action==KeyEvent.ACTION_UP &&
+                (event.keyCode==KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode==KeyEvent.KEYCODE_ENTER)) return true
+        }
         lastInteractionAt=android.os.SystemClock.elapsedRealtime()
         if(event.action==KeyEvent.ACTION_DOWN) pointerInput=false
         // 遥控一按就把鼠标专属的东西收起来：最近一次操作已经换人了

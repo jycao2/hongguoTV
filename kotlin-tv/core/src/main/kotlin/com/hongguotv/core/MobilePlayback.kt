@@ -29,13 +29,18 @@ internal object MobilePlayback {
     const val PATH = "/novel/player/multi_video_model/player/v1"
     /** 平铺路径（上游 `FlatPath`）：与 [PATH] 互为轮换，服务端反向切换时靠它兜住。 */
     const val FLAT_PATH = "/novel/player/multi_video_model/v1"
+    /** 单集现行模型接口（上游 tsukiyo-zero/hongguoTV 0.1.40 d859244 移植）：
+     *  官方 7.4.5.32 客户端真实调用的取址端点（APK `RpcOperation("$POST /novel/player/video_model/v1/")` 确认），
+     *  2026-11-24 起重新放行，实测取到 1080P；请求体是单集 `video_id` + biz_param，**不带 mixed_video_id_map**。 */
+    const val CURRENT_MODEL_PATH = "/novel/player/video_model/v1/"
     /** 备用取址 GET（官方 `GetVideoModelRequest` 形态）。2026-11-22 上游 0.16.12 实网确认：
      *  主 POST 返空时，同一身份用 **v5 签名** 打这条 GET 能拿到模型（4 集跨 2 部剧）。 */
     private const val TAB_PATH = "/reading/bookapi/video_tab/multi_video_model/v1/"
     /** 单发批量最多带多少集：站方上限 20，留出余量取 15（与 [ContentRepository] 的窗口一致）。 */
     private const val MAX_BATCH = 15
-    /** video_tab 是 GET + Cronet 传输，UA 与主 POST 的 tt-ok 形态不同（上游 0.16.12 原样值）。 */
-    private const val TAB_UA = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+    /** video_tab 是 GET + Cronet 传输，UA 与主 POST 的 tt-ok 形态不同。
+     *  2026-11-25 对齐上游 0.1.37（ff4d1d2 实测表）：只有 74532 UA 能通过——版本指纹不齐会被静默丢弃。 */
+    private const val TAB_UA = "com.phoenix.read/74532 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
     // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
     // video_tab GET 才用 Cronet 形态。此前两者混用，UA 也是错的一环。
     const val UA = PassportClient.V5_PLAYBACK_UA
@@ -182,6 +187,56 @@ internal object MobilePlayback {
         return parse(text, id)
     }
 
+    /** 单集现行模型接口（上游 tsukiyo-zero/hongguoTV 0.1.40 d859244 移植，2026-11-25）：
+     *  `POST /novel/player/video_model/v1/` 是官方 7.4.5.32 客户端真实调用的取址端点，11-24 起重新放行
+     * （上游线上复测取到 1080P/720P）。与批量 preload 的差异：请求体是**单集 `video_id` + biz_param**，
+     *  不带 mixed_video_id_map 也不带 dr_scene；query 与 preload 共用同一套 74532 公共参数；
+     *  v5 签名（x-ss-stub 取 gzip body 的 MD5，由签名器内部处理）。
+     *  响应为 `data.video_model`（单集直挂，可能序列化成字符串），由 [parse] 的 directModel 兼容。
+     *  空响应照旧抛 [EmptyPlaybackResponseException]，其余失败返回 null。 */
+    fun videoModelCurrent(
+        id: String,
+        identity: PlaybackDeviceSession.Profile,
+        http: OkHttpClient,
+        signer: Signer,
+        now: Long,
+    ): JSONObject? {
+        if (!id.matches(Regex("[0-9]{1,30}"))) return null
+        val payload = """{"video_id":"$id","biz_param":{"detail_page_version":0,"device_level":2,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}}"""
+        val body = gzip(payload.toByteArray(Charsets.UTF_8))
+        val signed = signer.signPlaybackV5(APP_HOST + CURRENT_MODEL_PATH, appQuery(identity), body)
+        val request = Request.Builder().url(signed.url)
+            .header("User-Agent", System.getProperty("http.agent", "okhttp/4.12.0"))
+            .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+            .header("Content-Encoding", "gzip")
+            .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        val text = try {
+            val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
+            RequestScope.execute(transport.newCall(request)) { response ->
+                if (response.code == 429) throw PlaybackRateLimitedException(ContentRepository.retryAfterMs(response))
+                if (!response.isSuccessful) throw IOException("单集模型请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
+        } catch (problem: java.io.InterruptedIOException) {
+            throw problem
+        } catch (problem: IOException) {
+            ContentRepository.probeLog?.invoke("video_model/v1 请求失败 ${problem.message}")
+            return null
+        } catch (problem: RuntimeException) {
+            ContentRepository.probeLog?.invoke("video_model/v1 请求异常 ${problem.message}")
+            return null
+        }
+        if (text.isBlank()) {
+            ContentRepository.probeLog?.invoke("video_model/v1 空响应（HTTP 200 / 0 字节）")
+            throw EmptyPlaybackResponseException()
+        }
+        return parse(text, id)
+    }
+
     /** 一窗剧集的批量取址：同一发 `preload/v1`，`mixed_video_id_map["1004"]` 放多个 id。
      *
      *  2026-11-23 深夜定位「上下集加载慢」：`ContentRepository.warm()` 的批量路径还在用
@@ -290,18 +345,19 @@ internal object MobilePlayback {
         if (!id.matches(Regex("[0-9]{1,30}"))) return null
         val v = identity.values
         fun value(key: String, fallback: String) = v[key]?.takeIf { it.isNotBlank() } ?: fallback
-        // 设备/版本字段一律取注册画像（同一台设备不能出现两套指纹），其余对齐官方 GetVideoModelRequest。
-        val version = value("version_code", "74332")
+        // 设备字段取注册画像（同一台设备不能出现两套指纹），其余对齐官方 GetVideoModelRequest。
+        // 2026-11-25 版本固定 74532（上游 0.1.37 ff4d1d2 实测）：74332/7.3.9.32 一族会被静默丢弃。
+        val version = "74532"
         val values = linkedMapOf(
             "aid" to value("aid", "8662"),
             "app_name" to value("app_name", "novelread"),
             "version_code" to version,
-            "version_name" to value("version_name", "7.4.3.32"),
+            "version_name" to "7.4.5.32",
             "channel" to value("channel", "vivo_8662_64"),
             "device_platform" to "android",
             "device_type" to value("device_type", "PGT-AN10"),
             "os_version" to value("os_version", "12"),
-            "update_version_code" to value("update_version_code", version),
+            "update_version_code" to "74532",
             "iid" to v.getValue("iid"),
             "cdid" to v.getValue("cdid"),
             "device_id" to v.getValue("device_id"),

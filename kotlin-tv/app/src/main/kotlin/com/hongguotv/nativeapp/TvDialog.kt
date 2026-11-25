@@ -25,6 +25,9 @@ import com.google.zxing.qrcode.QRCodeWriter
  */
 object TvDialog {
 
+    /** 弹窗统一尺寸（docs/UI_STYLE_GUIDE.md §6.5）：S=确认框 / M=信息与单列选择 / L=表单与列表 / XL=双栏。 */
+    enum class Size(val dp: Int) { S(360), M(460), L(560), XL(640) }
+
     private fun dp(activity: Activity, value: Int) = (value * activity.resources.displayMetrics.density).toInt()
 
     /** 弹窗正文滚动区的标记：遥控上下键靠它找到该滚哪一块（见 [dispatchRemoteKey]）。 */
@@ -171,9 +174,10 @@ object TvDialog {
     }
 
     /**
-     * 胶囊按钮：默认 surface 底，焦点 accent 填充 + 深色文字。compact 用于按钮多的弹窗（单行放 6 个）。
-     * [radiusDp] 可单独调小：compact 只有 34dp 高，24dp 圆角会被裁成半高，短按钮看起来就是圆形；
-     * 快传弹窗把按钮拉宽后改用 10dp，做成圆角矩形而不是全胶囊。
+     * 胶囊按钮（回退到 UI 规范化之前的原版样式，用户 2026-11-26 拍板）：
+     * 平时=surface 底+outline 细边+正文字色；焦点=accent 实底+背景色粗体字。
+     * compact 用于按钮多的弹窗（单行放 6 个）。[radiusDp] 可单独调小：compact 只有 34dp 高，
+     * 24dp 圆角会被裁成半高，短按钮看起来就是圆形；快传弹窗把按钮拉宽后改用 10dp。
      */
     fun capsuleButton(activity: Activity, text: String, compact: Boolean = false, radiusDp: Int = 24, onClick: () -> Unit): Button {
         val dp = { v: Int -> dp(activity, v) }
@@ -201,7 +205,7 @@ object TvDialog {
                     cornerRadius = corner
                     setStroke(dp(1), if(focused) TvStyle.accent else TvStyle.outline)
                 }
-                setTextColor(if(focused) TvStyle.background else TvStyle.text)
+                setTextColor(if(focused) Color.WHITE else TvStyle.text)
                 setTypeface(null, if(focused) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
             }
             setOnClickListener { onClick() }
@@ -344,8 +348,8 @@ object TvDialog {
         items.forEachIndexed { index, view ->
             view.nextFocusUpId = items.getOrNull(index - 1)?.id ?: view.id
             view.nextFocusDownId = items.getOrNull(index + 1)?.id ?: view.id
-            // 下限只兜极端短的选项（如「是/否」），宽度主要跟最长文案走
-            itemsHost.addView(view, LinearLayout.LayoutParams(itemWidth.coerceIn(dp(activity, 120), dp(activity, 480)), -2).apply { bottomMargin = dp(activity, 8) })
+            // 下限：非锚点弹窗给 M 档下限（规范 §6.5 尺寸承诺），锚点选择器保持自然窄宽避免遮挡播放画面
+            itemsHost.addView(view, LinearLayout.LayoutParams(itemWidth.coerceIn(dp(activity, if(anchorView==null) 360 else 120), dp(activity, 480)), -2).apply { bottomMargin = dp(activity, 8) })
         }
         val scroll = android.widget.ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         scroll.addView(itemsHost, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -399,7 +403,7 @@ object TvDialog {
         val dialog = AlertDialog.Builder(activity).setView(card(activity, content)).create()
         // 卡片总高封顶约六成屏高：内容多就让正文自己滚，标题和按钮永远在屏内
         val cap = (activity.resources.displayMetrics.heightPixels * 0.65f).toInt()
-        styleWindow(activity, dialog, capPx = cap) {
+        styleWindow(activity, dialog, widthDp = Size.M.dp, capPx = cap) {
             ok.requestFocus()
             bindScrollKeys(dialog, scroll)
         }
@@ -447,7 +451,7 @@ object TvDialog {
         buttons.addView(ok, LinearLayout.LayoutParams(-2, -2))
         content.addView(buttons)
         val dialog = AlertDialog.Builder(activity).setView(card(activity, content)).create()
-        styleWindow(activity, dialog) { cancel.requestFocus() }
+        styleWindow(activity, dialog, widthDp = Size.S.dp) { cancel.requestFocus() }
         cancel.setOnClickListener { dialog.dismiss() }
         ok.setOnClickListener { dialog.dismiss(); action() }
         return dialog

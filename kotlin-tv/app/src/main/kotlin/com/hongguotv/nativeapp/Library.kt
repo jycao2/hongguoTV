@@ -268,6 +268,10 @@ class Library(context: Context) {
     var favoriteSort: String
         get() = prefs.getString("favoriteSort", null)?.takeIf { it in listOf("update", "watch", "name") } ?: "update"
         set(value) { prefs.edit().putString("favoriteSort", value).apply() }
+    /** 设置页左栏分类顺序（逗号分隔分类 key，用户 2026-11-25）：空=默认顺序；未知 key 忽略、缺失 key 按默认补齐。 */
+    var railOrder: String
+        get() = prefs.getString("railOrder", "") ?: ""
+        set(value) { prefs.edit().putString("railOrder", value).apply() }
     /** 排行榜「上新」视图上次用的时间窗：记住偏好，下次进区不用重新选。本机偏好，不进备份。 */
     var newReleaseWindow: String
         get() = prefs.getString("newReleaseWindow", null).orEmpty()
@@ -315,7 +319,8 @@ class Library(context: Context) {
             menuKeyAction = extra["menuKeyAction"] as? String ?: s.menuKeyAction,
             dpadUpDownAction = extra["dpadUpDownAction"] as? String ?: s.dpadUpDownAction,
             mouseRightAction = extra["mouseRightAction"] as? String ?: s.mouseRightAction,
-            favoriteSort = extra["favoriteSort"] as? String ?: s.favoriteSort))
+            favoriteSort = extra["favoriteSort"] as? String ?: s.favoriteSort,
+            railOrder = extra["railOrder"] as? String ?: s.railOrder))
     }
 
     /** 由 MainActivity 注入：播放器键位偏好（playback-extras-v1）与收藏排序随备份写出/恢复。 */

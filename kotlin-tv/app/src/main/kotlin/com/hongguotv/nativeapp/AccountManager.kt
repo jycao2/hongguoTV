@@ -480,6 +480,21 @@ class AccountManager(private val context: Context, private val library: Library)
         ).show()
     }
 
+    /** 设置页三栏直连：扫码登录（不再弹选择框） */
+    fun showQrLogin(activity: android.app.Activity) {
+        if (closed || busy) { toast("账号操作进行中，请稍候"); return }
+        qrLogin(activity)
+    }
+
+    /** 设置页三栏直连：手机号验证码登录（不再弹选择框） */
+    fun showPhoneLogin(activity: android.app.Activity) {
+        if (closed || busy) { toast("账号操作进行中，请稍候"); return }
+        phoneLogin(activity)
+    }
+
+    /** 设置页三栏直连：退出登录 */
+    fun signOut() = logout()
+
     /** 双按钮结果弹窗：主按钮执行 action，次按钮返回账号页（可选）。 */
     private fun actionDialog(
         activity: android.app.Activity,

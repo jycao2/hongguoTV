@@ -1168,19 +1168,31 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             val routeBudget = resets == 0
             try {
                 var blank = false
-                // 2026-11-23 22:45 起首选现行 App 协议（上游 0.16.14 验收）：reading.snssdk.com +
-                // preload/v1 + dr_scene=preload + device_level=2 + Medusa F21=312。这一发就是正常工作的一发。
+                // 2026-11-25 对齐上游 tsukiyo-zero/hongguoTV 0.1.40：单集 video_model/v1 是官方
+                // 7.4.5.32 客户端现行取址端点（11-24 起重新放行，实测 1080P），放最前。
                 var model: JSONObject? = try {
-                    MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH,
-                        currentApp = true)
+                    MobilePlayback.videoModelCurrent(id, identity, http, signer, clock())
                 } catch (blanked: EmptyPlaybackResponseException) {
                     blank = true
-                    probeLog?.invoke("preload/v1 空响应")
+                    probeLog?.invoke("video_model/v1 空响应")
                     null
                 }
-                if (model != null) model = model.put(ROUTE_KEY, "v5|preload")
+                if (model != null) model = model.put(ROUTE_KEY, "v5|video_model")
+                // 2026-11-23 22:45 起的现行 App 批量协议（preload/v1 + F21=312）退居第二形态；
+                // 两个现行形态全空时，video_tab 是确认可用的备用通道（不扫其它旧端点）。
+                if (model == null) {
+                    model = try {
+                        MobilePlayback.model(id, identity, http, signer, clock(), 4, MobilePlayback.PATH,
+                            currentApp = true)
+                    } catch (blanked: EmptyPlaybackResponseException) {
+                        blank = true
+                        probeLog?.invoke("preload/v1 空响应")
+                        null
+                    }
+                    if (model != null) model = model.put(ROUTE_KEY, "v5|preload")
+                }
                 if (blank) {
-                    probeLog?.invoke("preload/v1 空响应 → 转 video_tab 备用通道（不扫其它端点）")
+                    probeLog?.invoke("单集/批量主形态空响应 → 转 video_tab 备用通道（不扫其它端点）")
                 }
                 // 现行协议给了非空失败（错误码/解析不到模型）才值得回退老 7.4.3.32 形态一发。
                 if (!blank && model == null && routeBudget) {

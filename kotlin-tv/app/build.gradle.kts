@@ -15,7 +15,7 @@ android {
         minSdk = 21
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.34.0"
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.35.0"
         // 桌面名称：带 -Pvc2test 的验证包改叫「红果TV·融合」，与正式版「红果TV」可区分，防止点错图标
         resValue("string", "app_name", if (project.hasProperty("vc2test")) "红果TV·融合" else "红果TV")
     }
