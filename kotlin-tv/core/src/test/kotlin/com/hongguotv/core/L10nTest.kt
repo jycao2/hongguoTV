@@ -2,6 +2,7 @@
 package com.hongguotv.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.util.Locale
 
@@ -100,6 +101,18 @@ class L10nTest {
     @Test fun `带插值模板回填 - 未命中回退后仍回填`() {
         L10n.configure(L10n.EN)
         assertEquals("一个测试 12", L10n.trFmt("一个测试 {0}", 12))
+    }
+
+    @Test fun `云端同步模板 - 整条命中不含中文残留`() {
+        // trFmt 模板含 {0}，字典整条收录后按整串命中，不再靠片段替换拼出半中半英
+        L10n.configure(L10n.EN)
+        assertEquals("Read 3 cloud favorites", L10n.trFmt("已读取 {0} 部云端收藏", 3))
+        assertEquals("Favorites synced: uploaded 5, failed 1", L10n.trFmt("收藏同步完成：上传 {0} 部，失败 {1} 部", 5, 1))
+        assertEquals("Signed in as +8613800138000", L10n.trFmt("已登录 {0}", "+8613800138000"))
+        assertFalse(L10n.trFmt("云端历史读取失败：{0}", "boom").contains("云端"))
+        L10n.configure(L10n.TW)
+        assertEquals("已讀取 3 部雲端收藏", L10n.trFmt("已读取 {0} 部云端收藏", 3))
+        assertEquals("雲端歷史讀取失敗：boom", L10n.trFmt("云端历史读取失败：{0}", "boom"))
     }
 
     @Test fun `跟随系统 - 繁中地区`() {

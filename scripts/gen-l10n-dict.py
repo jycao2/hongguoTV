@@ -28,6 +28,8 @@ SRC = ROOT / "kotlin-tv"
 OUT = SRC / "core/src/main/kotlin/com/hongguotv/core/L10nDict.kt"
 
 PAT = re.compile(r'"([^"\n]*[\u4e00-\u9fff][^"\n]*)"')
+# trFmt 整条模板含 {0} 占位符，普通 PAT 会切开；单独抓整条供繁中整串命中
+TFMT = re.compile(r'trFmt\(\s*"((?:[^"\\]|\\.)*)"')
 # 整页 HTML 模板用的是三引号原始字符串，上面的单行正则会把它切碎，这里单独整块取出来
 TRIPLE = re.compile(r'"""(.*?)"""', re.S)
 NOISE = ("//", "/*", "*/", "Log.", "http", "class ", "fun ", "return ", "import ", "package ")
@@ -123,6 +125,14 @@ def runtime_keys():
             continue
         for m in KT_KEY.finditer(path.read_text(encoding="utf-8")):
             out.add(_unescape(m.group(1)))
+    # trFmt 模板整条（含 {0}）也要有繁中：整串命中优先于片段替换，避免半中半英
+    for pattern in ("app/src/main/kotlin/**/*.kt", "core/src/main/kotlin/**/*.kt"):
+        for path in SRC.glob(pattern):
+            if "/test/" in str(path):
+                continue
+            for lit in TFMT.findall(path.read_text(encoding="utf-8")):
+                if any("一" <= c <= "鿿" for c in lit):
+                    out.add(_unescape(lit))
     return out
 
 

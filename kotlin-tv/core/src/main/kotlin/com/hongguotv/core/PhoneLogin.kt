@@ -109,8 +109,12 @@ class PhoneLogin(private val http: OkHttpClient) {
     /**
      * 带官方 App 设备身份签名发一次 passport 请求；`Set-Cookie` 只收不发
      * （把发码阶段的 cookie 回放到登录端点会被判异常会话）。
+     *
+     * 分流：大陆号（`mobile` 为纯数字）走原 branch-0 签名，字节不变；
+     * 境外号（`+区号 号码`）走 [callInternational] 的 mode4 签名，两条路径互不污染。
      */
     private fun call(path: String, params: Map<String, String>, form: Boolean): JSONObject {
+        if (mobile.startsWith("+")) return callInternational(path, params)
         val device =
             LinkedHashMap(VendorConstants.device).apply {
                 put("device_id", DEVICE_ID)
@@ -126,7 +130,50 @@ class PhoneLogin(private val http: OkHttpClient) {
         val request = Request.Builder().url(signed.url)
         signed.headers.forEach { (k, v) -> request.header(k, v) }
         if (payload != null) request.post(payload.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-        return http.newCall(request.build()).execute().use { response ->
+        return executePassport(request)
+    }
+
+    /**
+     * 境外号 passport 请求：mode4 签名（无 Medusa、标准 RC4 Gorgon）+ 号码线格式。
+     * 设备身份、端点、cookie 策略与大陆路径一致，仅签名与号码编码不同。
+     */
+    private fun callInternational(path: String, params: Map<String, String>): JSONObject {
+        val device =
+            LinkedHashMap(VendorConstants.device).apply {
+                put("device_id", DEVICE_ID)
+                put("iid", INSTALL_ID)
+                for (key in listOf("version_code", "manifest_version_code", "update_version_code", "pv_player")) put(key, "73932")
+                put("version_name", "7.3.9.32")
+            }
+        // 号码、验证码、type、票据按官方 v1.2.4 口径逐字节 XOR 5 后 hex；mix_mode=1 告知平台。
+        val wireParams =
+            LinkedHashMap<String, String>().apply {
+                params.forEach { (key, value) ->
+                    if (value.isBlank()) return@forEach
+                    put(
+                        key,
+                        when (key) {
+                            "mobile" -> IntlPhone.xorWire(IntlPhone.wire(value))
+                            "code", "type", "mobile_ticket" -> IntlPhone.xorWire(value)
+                            else -> value
+                        },
+                    )
+                }
+                put("mix_mode", "1")
+            }
+        val passport = mapOf("aid" to "8662", "app_name" to "novelread", "device_platform" to "android") + wireParams
+        val body = Signer.encode(passport).toByteArray()
+        val queryBase = device.filterKeys { it != "device_id" && it != "iid" }
+        val (query, headers) = IntlPhone.signInternational(queryBase, body, System.currentTimeMillis())
+        val request = Request.Builder().url("$PASSPORT$path?$query")
+        headers.forEach { (k, v) -> request.header(k, v) }
+        request.post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+        return executePassport(request)
+    }
+
+    /** 统一的响应处理：只收 Set-Cookie，不外发；解析失败回 http 状态码。 */
+    private fun executePassport(builder: Request.Builder): JSONObject =
+        http.newCall(builder.build()).execute().use { response ->
             response.headers("Set-Cookie").forEach { line ->
                 val pair = line.substringBefore(';')
                 val name = pair.substringBefore('=').trim()
@@ -136,7 +183,6 @@ class PhoneLogin(private val http: OkHttpClient) {
             runCatching { JSONObject(cloudResponse(response)) }
                 .getOrElse { JSONObject().put("http", response.code) }
         }
-    }
 
     private fun needsWebsite(data: JSONObject) =
         data.has("verify_center_decision_conf") || data.optString("captcha").isNotBlank() || data.optInt("error_code", 0) == 1105
@@ -186,11 +232,15 @@ class PhoneLogin(private val http: OkHttpClient) {
          */
         fun format(countryCode: String, number: String): String {
             val cc = countryCode.filter(Char::isDigit)
-            val digits = number.filter(Char::isDigit).removePrefix("0")
+            val rawDigits = number.filter(Char::isDigit)
+            // 大陆号以 1 开头，不会带前导 0；等价于原 writeDigits，行为逐字不变。
             if (cc == "86") {
-                require(digits.matches(Regex("1\\d{10}"))) { "大陆手机号是 1 开头的 11 位数字" }
-                return digits
+                require(rawDigits.matches(Regex("1\\d{10}"))) { "大陆手机号是 1 开头的 11 位数字" }
+                return rawDigits
             }
+            // 日韩号码的 0 是国内长途前缀，官方 v1.2.4 线格式保留（090… / 010…）；
+            // 其它地区（港台新马等）习惯写法的前导 0 不属于 E.164，去掉。
+            val digits = if (cc == "81" || cc == "82") rawDigits else rawDigits.removePrefix("0")
             require(cc.matches(Regex("[1-9]\\d{0,2}"))) { "区号是 1–3 位数字" }
             require(digits.length >= 4 && cc.length + digits.length <= 15) { "号码长度不对：区号加号码最多 15 位" }
             return "+$cc $digits"
