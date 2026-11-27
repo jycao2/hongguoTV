@@ -2545,7 +2545,7 @@ class MainActivity: Activity() {
             // 揭幕后 openDetail 现场拉全量详情快 1-2 秒（用户 2026-11-18：首次进入偏慢）
             var revealed=false
             val revealOnce={ if(!revealed) { revealed=true; revealFreeFeed(startedAt) } }
-            work({ repository.detailLite(series.id) },{ d ->
+            work({ repository.detailFeed(series.id) },{ d ->
                 recommendDetails[series.id]=d
                 // 揭幕前把本部续播集的地址也备好（用户 2026-11-23：首次进入偏慢）：
                 // 过渡动画还剩几百毫秒，正好并行打这一发取址；起播时 playEpisode 命中
@@ -2709,7 +2709,7 @@ class MainActivity: Activity() {
             for((offset,target) in targets) {
                 val (seriesId,wantedEpisode)=target
                 // 详情已经缓存过也要继续往下走：地址/首块可能还没备，跳过就等于白预取
-                val detail=recommendDetails[seriesId] ?: runCatching { repository.detailLite(seriesId) }.getOrNull()
+                val detail=recommendDetails[seriesId] ?: runCatching { repository.detailFeed(seriesId) }.getOrNull()
                     ?.also { recommendDetails[seriesId]=it } ?: continue
                 val episode=detail.episodes.firstOrNull { it==wantedEpisode } ?: detail.episodes.firstOrNull() ?: continue
                 val now=android.os.SystemClock.elapsedRealtime()
@@ -3072,6 +3072,9 @@ class MainActivity: Activity() {
                     } else {
                         spec.onPick(i)
                         optionPanel.repaintOptions(spec.selectedIndex())
+                        // 执行型选项（刷新云端记录 / 同步本机到云端等）常会重建右栏，
+                        // 旧焦点视图已被移除，按执行前下标把焦点放回同一项（2026-11-27）
+                        optionPanel.focusOption(i)
                     }
                 }
                 view.toggleMode -> optionPanel.bindPlaceholder(view.title,view.desc,"在中间列表按确认键切换",view.checked)
@@ -3794,9 +3797,11 @@ class MainActivity: Activity() {
             categoryKeys.forEachIndexed { index,key ->
                 val item=railButtons.getValue(key)
                 val up=railButtons.getValue(categoryKeys.getOrNull(index-1) ?: categoryKeys.first())
-                val down=railButtons.getValue(categoryKeys.getOrNull(index+1) ?: categoryKeys.last())
+                // 最后一个分类下面还有「常用」区块：此前 down 自指，遥控器永远到不了手机快传/备份（2026-11-27）
+                val downId=if(index==categoryKeys.lastIndex) commonButtons.firstOrNull()?.id ?: item.id
+                    else railButtons.getValue(categoryKeys[index+1]).id
                 item.nextFocusUpId=up.id
-                item.nextFocusDownId=down.id
+                item.nextFocusDownId=downId
                 item.nextFocusLeftId=item.id
                 item.nextFocusRightId=if(index==active) items.firstOrNull()?.id ?: item.id else item.id
             }
@@ -4491,7 +4496,7 @@ class MainActivity: Activity() {
         }
         android.util.Log.i("HongguoTV","Detail open preloaded=${preloaded!=null} keepPlayer=$keepPlayer resume=$resume")
         if(preloaded!=null) apply(preloaded)
-        else work({ if(recommendMode) repository.detailLite(series.id) else repository.detail(series.id) }, apply, { problem ->
+        else work({ if(recommendMode) repository.detailFeed(series.id) else repository.detail(series.id) }, apply, { problem ->
             // 详情都没取到：过渡层留着只会一直转圈盖住错误页
             releaseFreeze()
             val host=body ?: base(series.title)
@@ -7476,10 +7481,10 @@ class MainActivity: Activity() {
                 val all=saverMediaFiles()
                 val picked=saverPickedNames(all)
                 val note=when {
-                    all.isEmpty() -> "手机传自己的\n图片 / 动图 / 视频"
-                    picked.isEmpty() -> "我的素材\n共 ${all.size} 个 · 全部轮播"
-                    picked.size==1 -> "我的素材\n只播 ${shortName(picked[0],12)}"
-                    else -> "我的素材\n轮播 ${picked.size}/${all.size} 个"
+                    all.isEmpty() -> L10n.tr("手机传自己的\n图片 / 动图 / 视频")
+                    picked.isEmpty() -> L10n.trFmt("我的素材\n共 {0} 个 · 全部轮播",all.size)
+                    picked.size==1 -> L10n.trFmt("我的素材\n只播 {0}",shortName(picked[0],12))
+                    else -> L10n.trFmt("我的素材\n轮播 {0}/{1} 个",picked.size,all.size)
                 }
                 frame.addView(text(note,12f,muted).apply {
                     gravity=Gravity.CENTER; maxLines=3; ellipsize=TextUtils.TruncateAt.END
@@ -7522,7 +7527,7 @@ class MainActivity: Activity() {
                     library.screensaverStyle=key
                     refreshSaverStyleSetting?.invoke()
                     (it.tag as? AlertDialog)?.dismiss()
-                    Toast.makeText(this@MainActivity, L10n.tr("屏保画面：$name"),Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, L10n.trFmt("屏保画面：{0}",L10n.tr(name)),Toast.LENGTH_SHORT).show()
                     // 选了「我的素材」却一个素材都没有：直接把上传入口摆出来，别让用户对着提示干瞪眼
                     if(key=="custom" && saverMediaFiles().isEmpty() && quickTransferMedia().isEmpty()) {
                         main.postDelayed({ if(!isDestroyed) showSaverMediaManager(anchor) },450)

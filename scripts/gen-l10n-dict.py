@@ -110,7 +110,13 @@ def kt(s: str) -> str:
 
 EN = SRC / "core/src/main/kotlin/com/hongguotv/core/L10nEnglish.kt"
 PHRASES = SRC / "core/src/main/kotlin/com/hongguotv/core/L10nPhrases.kt"
-KT_KEY = re.compile(r'^\s*"((?:[^"\\]|\\.)*)"\s*(?:to|,)\s*$', re.M)
+# 既要匹配片段表的 `"key",`，也要匹配英文字典的 `"key" to "value",`。
+# 旧版只认前者，英文字典里人工维护的词条（如 "5 分钟"、许可说明逐行文案）永远进不了繁中字典。
+KT_KEY = re.compile(
+    r'^\s*"((?:[^"\\]|\\.)*)"\s*to\s+"(?:[^"\\]|\\.)*"\s*,?\s*$'
+    r'|^\s*"((?:[^"\\]|\\.)*)"\s*,\s*$',
+    re.M,
+)
 
 
 def runtime_keys():
@@ -124,7 +130,8 @@ def runtime_keys():
         if not path.exists():
             continue
         for m in KT_KEY.finditer(path.read_text(encoding="utf-8")):
-            out.add(_unescape(m.group(1)))
+            key = m.group(1) if m.group(1) is not None else m.group(2)
+            out.add(_unescape(key))
     # trFmt 模板整条（含 {0}）也要有繁中：整串命中优先于片段替换，避免半中半英
     for pattern in ("app/src/main/kotlin/**/*.kt", "core/src/main/kotlin/**/*.kt"):
         for path in SRC.glob(pattern):

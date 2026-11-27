@@ -728,7 +728,7 @@ class ContentRepositoryTest {
     }
 
     @Test fun feedDetailLiteKeepsSiteEpisodesAndSkipsOfficialDetailApi() {
-        // feed 换剧不需要全量，不能为每部剧白打一发官方详情接口。
+        // detailLite 是纯轻量详情：只要起播第一集，不打官方详情接口。
         val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("episode_cnt",60)
             .put("vid_list",JSONArray().put("v1_a").put("v1_b").put("v1_c"))
         val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script>"""
@@ -736,6 +736,37 @@ class ContentRepositoryTest {
         val repo=repository { calls++; html }
         assertEquals(listOf("v1_a","v1_b","v1_c"),repo.detailLite("123").episodes)
         assertEquals(1,calls)
+    }
+
+    @Test fun feedDetailFillsFullEpisodesForBinge() {
+        // 自由刷剧按 ←/→ 转本剧连播：官网匿名页只给 3 集，必须补齐全量才够得到后面的集数。
+        val ids=(1..60).map { "900$it" }
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("episode_cnt",60)
+            .put("vid_list",JSONArray().put("v1_a").put("v1_b").put("v1_c"))
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script>"""
+        var detailApiCalls=0
+        val repo=repository { request ->
+            if(request.url.encodedPath=="/novel/player/video_detail/v1/") {
+                detailApiCalls++
+                val rows=JSONArray()
+                ids.forEach { rows.put(JSONObject().put("vid",it)) }
+                JSONObject().put("code",0)
+                    .put("data",JSONObject().put("video_data",JSONObject().put("video_list",rows))).toString()
+            } else html
+        }
+        assertEquals(ids,repo.detailFeed("123").episodes)
+        assertEquals(1,detailApiCalls)
+    }
+
+    @Test fun feedDetailKeepsSiteEpisodesWhenOfficialDetailFails() {
+        // 官方接口空/失败不能把 feed 打成「分集数据异常」：保留官网那 3 集照样能起播。
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("episode_cnt",60)
+            .put("vid_list",JSONArray().put("v1_a").put("v1_b").put("v1_c"))
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script>"""
+        val repo=repository { request ->
+            if(request.url.encodedPath=="/novel/player/video_detail/v1/") """{"code":-1}""" else html
+        }
+        assertEquals(listOf("v1_a","v1_b","v1_c"),repo.detailFeed("123").episodes)
     }
 
     @Test fun v1EpisodeUsesOfficialSiteFallbackPlayInfoInsteadOfSignedPlayback() {

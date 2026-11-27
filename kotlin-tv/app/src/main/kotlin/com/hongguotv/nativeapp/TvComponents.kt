@@ -347,6 +347,13 @@ class SettingOptionPanel(context: Context) : LinearLayout(context) {
         return target.requestFocus()
     }
 
+    /**
+     * 操作型选项执行后把焦点放回同一行的新视图。
+     * 绑定回调里常会重建面板（如登录态变化刷新 labels），旧焦点视图被 removeAllViews 摘掉，
+     * 不显式回填就会失焦；这里按执行前的下标找回重建后的对应项。
+     */
+    fun focusOption(index: Int): Boolean = optionViews.getOrNull(index)?.requestFocus() ?: false
+
     /** 复选行：勾选集变化后重画（不重建视图，焦点保持） */
     fun setChecked(checked: Set<Int>) {
         checkedSet = checked

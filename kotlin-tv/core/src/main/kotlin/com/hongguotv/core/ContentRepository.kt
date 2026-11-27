@@ -587,6 +587,11 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
     /** Feed 起播用的轻量详情：只要剧集列表和社交数，跳过 related/sameName 的补季扫描
      *  （sameName 会并发连发多次网站搜索，feed 滑动换剧完全用不到，白耗 1-2 秒）。 */
     open fun detailLite(id: String): Detail = detailCommon(id).first
+    /** 自由刷剧详情：和 [detailLite] 一样跳过 related/sameName 的补季扫描，但用官方 detail
+     *  接口补齐全量分集。2026-11-27 起官网匿名页只发前 3 集，feed 里第 3 集就会被当成最后一集，
+     *  连播/换集都够不到后面；补全失败时保留官网这 3 集，不影响起播。
+     *  预取在后台线程做，10 分钟缓存，同一部剧不会重复打接口。 */
+    open fun detailFeed(id: String): Detail = detailCommon(id, withFullEpisodes = true).first
     fun detail(id: String): Detail {
         val (base,html,o)=detailCommon(id,true)
         // 相关推荐双层：官方 plan/v1（from=select_panel_recommend，show_type=160）为主；

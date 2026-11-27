@@ -115,6 +115,23 @@ class L10nTest {
         assertEquals("雲端歷史讀取失敗：boom", L10n.trFmt("云端历史读取失败：{0}", "boom"))
     }
 
+    @Test fun `屏保选项与许可弹窗 - 英文无中文残留`() {
+        // 2026-11-27 用户截图：屏保时长/间隔、素材卡与开源许可弹窗在英文界面仍是中文
+        L10n.configure(L10n.EN)
+        assertEquals("5 min", L10n.tr("5 分钟"))
+        assertEquals("10 sec", L10n.tr("10 秒"))
+        assertEquals("Upload from phone\nImages / GIFs / videos", L10n.tr("手机传自己的\n图片 / 动图 / 视频"))
+        assertEquals("Backdrop: My media", L10n.trFmt("屏保画面：{0}", L10n.tr("我的素材")))
+        val license = "本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。"
+        val en = L10n.tr(license)
+        assertFalse(en.contains("发布"))
+        assertFalse(en.contains("移植自"))
+        assertFalse(en.contains("完整源码"))
+        L10n.configure(L10n.TW)
+        assertEquals("5 分鐘", L10n.tr("5 分钟"))
+        assertFalse(L10n.tr(license).contains("发布"))
+    }
+
     @Test fun `跟随系统 - 繁中地区`() {
         L10n.configure(L10n.FOLLOW_SYSTEM) { L10n.localeToLanguage(Locale("zh", "TW")) }
         assertEquals(L10n.TW, L10n.current())
