@@ -132,6 +132,15 @@ class L10nTest {
         assertFalse(L10n.tr(license).contains("发布"))
     }
 
+    @Test fun `取址档案拉取中 - 英文有译且简繁同形回退原文`() {
+        // 设置行后缀在拉取期间常驻显示，英文界面不能是中文；简繁同形时回退原文即可
+        L10n.configure(L10n.EN)
+        assertEquals("Fetching…", L10n.tr("拉取中…"))
+        assertEquals("Checking profile…", L10n.tr("正在检查协议档案…"))
+        L10n.configure(L10n.TW)
+        assertEquals("拉取中…", L10n.tr("拉取中…"))
+    }
+
     @Test fun `跟随系统 - 繁中地区`() {
         L10n.configure(L10n.FOLLOW_SYSTEM) { L10n.localeToLanguage(Locale("zh", "TW")) }
         assertEquals(L10n.TW, L10n.current())

@@ -2548,5 +2548,6 @@ internal object L10nEnglish {
         "播放 UA：" to "Playback UA: ",
         "签名常量：" to "Signing constants: ",
         "门地址：" to "Gates: ",
+        "拉取中…" to "Fetching…",
     )
 }
