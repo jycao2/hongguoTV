@@ -1106,7 +1106,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val request=if(signed) playerRequest(path,body,identity) else run {
             val query=(identity.values+mapOf("_rticket" to System.currentTimeMillis().toString()))
                 .entries.joinToString("&") { (k,v)-> java.net.URLEncoder.encode(k,"UTF-8")+"="+java.net.URLEncoder.encode(v,"UTF-8") }
-            Request.Builder().url("https://api5-normal-sinfonlinea.fqnovel.com$path?$query").apply {
+            Request.Builder().url("${MobilePlayback.HOST}$path?$query").apply {
                 if(identity.cookie.isNotBlank()) header("Cookie",identity.cookie)
                 header("User-Agent",MobilePlayback.UA)
                 header("Accept","application/json")
@@ -1157,7 +1157,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
             "cdid" to identity.values.getValue("cdid"),
             "device_id" to identity.values.getValue("device_id"),
         )
-        val signed=signer.signPlaybackV5("https://api5-normal-sinfonlinea.fqnovel.com$path",values,body)
+        val signed=signer.signPlaybackV5("${MobilePlayback.HOST}$path",values,body)
         return signedRealBuilder(signed,body,identity)
             .header("User-Agent",MobilePlayback.UA)
             .header("Accept","application/json")

@@ -2438,6 +2438,7 @@ internal object L10nEnglish {
         " · 失败 · " to " · failed · ",
         "正在检测 " to "Checking ",
         " 请稍候再试" to " — try again shortly",
+        "请稍候再试" to "Try again shortly",
         "手机想发送：" to "Phone wants to send:",
         "文件已保存到电视：" to "File saved to TV: ",
         "视频已保存到电视：" to "Video saved to TV: ",
@@ -2519,5 +2520,33 @@ internal object L10nEnglish {
         "Kotlin：Apache-2.0" to "Kotlin: Apache-2.0",
         "Bouncy Castle：MIT" to "Bouncy Castle: MIT",
         "完整源码和许可证见 GitHub：jycao2/hongguoTV。" to "Full source and licenses on GitHub: jycao2/hongguoTV.",
+
+        // 取址协议档案（0.37.0）
+        "取址协议档案" to "Playback profile",
+        "查看当前档案" to "View current profile",
+        "立即检查更新" to "Check for updates",
+        "恢复内置默认" to "Restore built-in",
+        "正在检查协议档案…" to "Checking profile…",
+        "已恢复内置默认档案" to "Built-in profile restored",
+        "清掉已下发的协议档案，播放取址回到随包默认值。下次启动会重新检查远端档案。" to
+            "Deletes the downloaded profile and falls back to the built-in defaults. The remote profile is checked again on next launch.",
+        "播放取址用的签名常量与门地址，支持远程下发；出问题时一键恢复内置默认。" to
+            "Signing constants and gate addresses used for playback; downloadable remotely, restore the built-in defaults if playback breaks.",
+        "当前：" to "Current: ",
+        "内置默认" to "Built-in",
+        "远端档案" to "Remote profile",
+        "内置默认（随包发布）" to "Built-in (shipped in the APK)",
+        "远端下发（已缓存）" to "Downloaded (cached)",
+        "上次检查还没结束" to "Previous check is still running",
+        "已是最新档案" to "Already up to date",
+        "已更新到 rev{0}" to "Updated to rev{0}",
+        "已是最新 rev{0}" to "Already at rev{0}",
+        "档案被总开关拒绝" to "Rejected: remote profile is disabled",
+        "拉取失败" to "Fetch failed",
+        "来源：" to "Source: ",
+        "版本：" to "Revision: ",
+        "播放 UA：" to "Playback UA: ",
+        "签名常量：" to "Signing constants: ",
+        "门地址：" to "Gates: ",
     )
 }

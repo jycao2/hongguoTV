@@ -24,6 +24,9 @@ __pycache__/
 *.keystore
 keystore.properties
 
+# 协议档案签名私钥：只在本机保留，丢了就用下一版 APK 换新公钥（绝不入库）
+/kotlin-tv/tools/profile-key.pem
+
 # Local captures and downloaded media
 /captures/
 /downloads/
