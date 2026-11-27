@@ -491,7 +491,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.36.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
+# 输出：outputs/hongguotv-kotlin-0.37.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
 # 文件名沿用 -android8.apk 只为兼容既有下载链接与客户端解析，它同时支持 Android 5-7。
 ```
 
