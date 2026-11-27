@@ -14,7 +14,7 @@ data class GateProfile(val hosts: List<String>, val path: String, val userAgent:
 /** 各链路的 UA。站方改版本指纹时，靠档案换，不用发版。 */
 data class UaProfile(val app: String, val video: String, val playback: String, val tab: String)
 
-/** v5（v04.10.03）签名常量。 */
+/** v5（v04.10.03）签名常量与 Medusa 报文明文。 */
 data class V5Profile(
     val magic: ByteArray,
     val license: String,
@@ -24,7 +24,38 @@ data class V5Profile(
     val envVersion: String,
     val messageVersion: String,
     val numericVersion: Int,
+    /** Medusa 报文里的 aid（设备 proto 与 message 各出现一次）。 */
+    val aid: String,
+    /** 设备 proto f6：权限占位串。 */
+    val perm: String,
+    /** 设备 proto f12：时区串。 */
+    val tz: String,
+    /** 设备 proto f13：语言串。 */
+    val lang: String,
+    /** 设备 proto f31/f34：厂商串。 */
+    val deviceMake: String,
+    /** message f24：播放器指标 JSON（原样进报文）。 */
+    val metricsJson: String,
+    /** message f20：媒体标签。 */
+    val mediaTag: String,
 )
+
+/**
+ * 旧六头链路（搜索/评论/发现/推荐/计划等）查询串的设备档案字段表。
+ *
+ * 值支持运行时占位符（见 [PLACEHOLDERS]），取用时由 [PlaybackProfiles.deviceTable]
+ * 以当前安装身份解析。键集合必须与内置完全一致：多一键、少一键都整份拒收 ——
+ * 站方按字段全集校验指纹，静默少一个字段就是 200 + 0。
+ */
+data class DeviceProfile(val fields: Map<String, String>) {
+    fun resolve(bindings: Map<String, String>): Map<String, String> = linkedMapOf<String, String>().apply {
+        for ((key, value) in fields) {
+            var resolved = value
+            for ((name, binding) in bindings) resolved = resolved.replace("{$name}", binding)
+            put(key, resolved)
+        }
+    }
+}
 
 /**
  * 取址协议档案：把「站方会改的那部分数据」从代码里搬出来，端上可远程覆盖。
@@ -42,6 +73,7 @@ class PlaybackProfile(
     val note: String,
     val ua: UaProfile,
     val v5: V5Profile,
+    val device: DeviceProfile,
     val gates: Map<String, GateProfile>,
 ) {
     fun gate(name: String): GateProfile =
@@ -68,7 +100,21 @@ class PlaybackProfile(
         append("    \"field21\": ").append(v5.field21).append(",\n")
         append("    \"envVersion\": ").append(quote(v5.envVersion)).append(",\n")
         append("    \"messageVersion\": ").append(quote(v5.messageVersion)).append(",\n")
-        append("    \"numericVersion\": ").append(v5.numericVersion).append("\n")
+        append("    \"numericVersion\": ").append(v5.numericVersion).append(",\n")
+        append("    \"aid\": ").append(quote(v5.aid)).append(",\n")
+        append("    \"perm\": ").append(quote(v5.perm)).append(",\n")
+        append("    \"tz\": ").append(quote(v5.tz)).append(",\n")
+        append("    \"lang\": ").append(quote(v5.lang)).append(",\n")
+        append("    \"deviceMake\": ").append(quote(v5.deviceMake)).append(",\n")
+        append("    \"metricsJson\": ").append(quote(v5.metricsJson)).append(",\n")
+        append("    \"mediaTag\": ").append(quote(v5.mediaTag)).append("\n")
+        append("  },\n")
+        append("  \"device\": {\n")
+        device.fields.entries.forEachIndexed { index, entry ->
+            append("    ").append(quote(entry.key)).append(": ").append(quote(entry.value))
+            if (index != device.fields.size - 1) append(",")
+            append("\n")
+        }
         append("  },\n")
         append("  \"gates\": {\n")
         val names = GATE_KEYS.filter { gates.containsKey(it) } + gates.keys.filter { it !in GATE_KEYS }.sorted()
@@ -101,9 +147,23 @@ class PlaybackProfile(
 
         val GATE_KEYS = listOf("model", "flat", "preload", "current", "detail", "tab")
 
+        /** 设备档案允许的运行时占位符。 */
+        val PLACEHOLDERS = listOf("iid", "device_id", "version_code", "version_name")
+
+        /** 设备档案字段表：键序固定（= 官方客户端抓包序），键集合必须与内置完全一致。 */
+        val DEVICE_KEYS = listOf(
+            "iid", "device_id", "ac", "channel", "aid", "app_name", "version_code", "version_name",
+            "device_platform", "os", "ssmix", "device_type", "device_brand", "language", "os_api",
+            "os_version", "manifest_version_code", "resolution", "dpi", "update_version_code",
+            "host_abi", "dragon_device_type", "pv_player", "compliance_status",
+            "need_personal_recommend", "player_so_load", "is_android_pad_screen",
+        )
+
         private val HOST_PATTERN = Regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
         private val DATE_PATTERN = Regex("^\\d{4}-\\d{2}-\\d{2}$")
         private val VERSION_PATTERN = Regex("^[A-Za-z0-9._-]{1,40}$")
+        private val TZ_PATTERN = Regex("^[A-Za-z0-9/_,+-]{1,40}$")
+        private val LANG_PATTERN = Regex("^[a-z]{2}(_[A-Za-z]+)?$")
 
         /**
          * 解析并校验。任何一处不合法都抛异常，调用方据此整份丢弃 ——
@@ -143,7 +203,19 @@ class PlaybackProfile(
                 messageVersion = v5.requireText("messageVersion", 1, 40) { VERSION_PATTERN.matches(it) },
                 numericVersion = v5.optInt("numericVersion", -1)
                     .also { require(it in 1..Int.MAX_VALUE) { "v5.numericVersion 非法：$it" } },
+                aid = v5.requireText("aid", 1, 10) { it.all { c -> c in '0'..'9' } },
+                perm = v5.requireText("perm", 1, 20) { it.all { c -> c.code in 33..126 } },
+                tz = v5.requireText("tz", 1, 40) { TZ_PATTERN.matches(it) },
+                lang = v5.requireText("lang", 1, 20) { LANG_PATTERN.matches(it) },
+                deviceMake = v5.requireText("deviceMake", 1, 20) { it.all { c -> c.code in 33..126 } },
+                metricsJson = v5.requireText("metricsJson", 2, 300) {
+                    it.startsWith("{") && it.endsWith("}") && it.all { c -> c.code in 32..126 }
+                },
+                mediaTag = v5.requireText("mediaTag", 1, 20) { it.all { c -> c.code in 33..126 } },
             )
+
+            val deviceJson = root.optJSONObject("device") ?: throw IllegalArgumentException("协议档案缺 device")
+            val device = parseDevice(deviceJson)
 
             val gatesJson = root.optJSONObject("gates") ?: throw IllegalArgumentException("协议档案缺 gates")
             val gates = linkedMapOf<String, GateProfile>()
@@ -153,7 +225,27 @@ class PlaybackProfile(
                 gates[key] = parseGate(key, gate)
             }
 
-            return PlaybackProfile(revision, updatedAt, note, uaProfile, v5Profile, gates)
+            return PlaybackProfile(revision, updatedAt, note, uaProfile, v5Profile, device, gates)
+        }
+
+        private fun parseDevice(json: JSONObject): DeviceProfile {
+            val keys = json.keys().asSequence().toList()
+            require(keys.toSet() == DEVICE_KEYS.toSet()) {
+                val unknown = keys.filter { it !in DEVICE_KEYS }
+                val missing = DEVICE_KEYS.filter { it !in keys }
+                "device 字段表键集合不一致（多 $unknown / 缺 $missing）"
+            }
+            val fields = linkedMapOf<String, String>()
+            for (key in DEVICE_KEYS) {
+                val value = json.optString(key, "")
+                require(value.isNotEmpty() && value.length <= 80) { "device.$key 长度非法" }
+                require(value.all { it.code in 32..126 }) { "device.$key 含非 ASCII 字符" }
+                // 占位符只允许已知身份字段，防止把未知 {xxx} 原样发出去当指纹。
+                val placeholders = Regex("\\{([a-z_]+)\\}").findAll(value).map { it.groupValues[1] }.toList()
+                require(placeholders.all { it in PLACEHOLDERS }) { "device.$key 含未知占位符：$placeholders" }
+                fields[key] = value
+            }
+            return DeviceProfile(fields)
         }
 
         private fun parseGate(name: String, json: JSONObject): GateProfile {
@@ -204,9 +296,9 @@ class PlaybackProfile(
 
         /** 内置默认：当前实测形态。档案改坏了也退回到这里，行为与上一版完全一致。 */
         fun builtin(): PlaybackProfile = PlaybackProfile(
-            revision = 1,
+            revision = 2,
             updatedAt = "2026-11-27",
-            note = "内置默认：2026-11-27 实网形态（v5 三头 + reading.snssdk.com 四门）",
+            note = "内置默认：2026-11-27 实网形态（v5 三头 + reading.snssdk.com 四门 + 27 字段设备档案）",
             ua = UaProfile(
                 app = "com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)",
                 video = "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)",
@@ -222,7 +314,43 @@ class PlaybackProfile(
                 envVersion = "v04.10.03.04-bugfix",
                 messageVersion = "v04.10.03-ml-android",
                 numericVersion = 0x040a0300,
+                aid = "8662",
+                perm = "!noperm!",
+                tz = "Asia/Shanghai,8",
+                lang = "zh_CN",
+                deviceMake = "HONOR",
+                metricsJson = """{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}""",
+                mediaTag = "none",
             ),
+            device = DeviceProfile(linkedMapOf(
+                "iid" to "{iid}",
+                "device_id" to "{device_id}",
+                "ac" to "wifi",
+                "channel" to "xiaomi_8662_64",
+                "aid" to "8662",
+                "app_name" to "novelread",
+                "version_code" to "{version_code}",
+                "version_name" to "{version_name}",
+                "device_platform" to "android",
+                "os" to "android",
+                "ssmix" to "a",
+                "device_type" to "23127PN0CC",
+                "device_brand" to "Xiaomi",
+                "language" to "zh",
+                "os_api" to "34",
+                "os_version" to "14",
+                "manifest_version_code" to "{version_code}",
+                "resolution" to "1200*2670",
+                "dpi" to "460",
+                "update_version_code" to "{version_code}",
+                "host_abi" to "arm64-v8a",
+                "dragon_device_type" to "phone",
+                "pv_player" to "{version_code}",
+                "compliance_status" to "0",
+                "need_personal_recommend" to "1",
+                "player_so_load" to "1",
+                "is_android_pad_screen" to "0",
+            )),
             gates = linkedMapOf(
                 "model" to GateProfile(
                     listOf("api5-normal-sinfonlinea.fqnovel.com"),

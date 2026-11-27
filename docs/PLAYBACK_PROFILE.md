@@ -14,8 +14,10 @@
 |---|---|
 | `v5.magic` / `license` / `signKey` / `sbox` / `field21` | AesV3 / sm3 / xmxor / hashF13 的表与位序 |
 | `v5.envVersion` / `messageVersion` / `numericVersion` | 随机量的取法与顺序 |
-| `ua.app` / `ua.video` / `ua.playback` / `ua.tab` | 路由降级顺序、换号与冷却 |
-| `gates.*` 的 host / path / UA | protobuf varint 编码规则 |
+| `v5.aid` / `perm` / `tz` / `lang` / `deviceMake` / `metricsJson` / `mediaTag` | 路由降级顺序、换号与冷却 |
+| `ua.app` / `ua.video` / `ua.playback` / `ua.tab` | 报文字段号与顺序 |
+| `device.*`（27 项查询串设备档案，`{iid}` 等占位符取运行时身份） | protobuf varint 编码规则 |
+| `gates.*` 的 host / path / UA | `playbackValues/appQuery/playerRequest` 等各调用点自己覆盖的版本口径 |
 
 外置算法等于给签名多加一个出错的地方：出错时的表现是 HTTP 200 + 0 字节，端上没有任何报错可看。
 
@@ -66,15 +68,17 @@
 |---|---|
 | `SignerGoldenTest` | 改造前后的 x-medusa / x-helios / 旧六头**逐字节一致**（固定时钟与随机序列） |
 | `PlaybackProfileConsistencyTest` | 仓库两份档案与 `builtin()` 一致；签名档案能验签；篡改 payload 必被拒收 |
-| `PlaybackProfileTest` | schema/revision/十六进制长度/host 形态/path/UA/缺门 等 13 组拒收边界；revision 只增；总开关 |
+| `PlaybackProfileTest` | schema/revision/十六进制长度/host 形态/path/UA/缺门/Medusa 明文/设备表键集合与占位符 等拒收边界；revision 只增；总开关 |
 | `PlaybackProfileStoreTest` | 原子写入、坏档与截断当没有缓存、不残留 `.part` |
 | `PlaybackProfileRepositoryTest` | 镜像链顺序与全失败的异常信息 |
+| `PlaybackProfileWiringTest` | 改 Medusa 明文 → 报文变；改设备表 → `VendorConstants.device` 变；占位符按身份解析；重置回内置 |
 
 改档案格式时，这五个测试必须先过，再谈上真机。
 
 ## 已知限制
 
-- 只覆盖 **v5 播放取址链路**（单集门 / 平铺 / preload / 分集详情 / video_tab）。评论、搜索、
-  清单等走旧六头或官网接口的链路仍是代码里的字面量，尚未外置。
-- 查询串里的设备档案字段表（29 项顺序）仍在代码里，属下一步。
+- 「说什么」已覆盖 v5 取址门、Medusa 明文与旧六头链路共用的设备档案表；但**各调用点自己覆盖的
+  版本口径**（`playbackValues` 的 73932、`appQuery/playerRequest` 的 74532、`TAB_UA` 等）仍在代码里。
+  这些口径都是抓包逐端点验证的产物，改一个必须重测对应端点，暂不外置。
+- 外网 SEO 页与官网 `fallback-play-info` 链路不在协议档案覆盖范围。
 - 档案缓存不随本地备份迁移（它是缓存，不是用户数据）；换设备后由远端重新拉取。

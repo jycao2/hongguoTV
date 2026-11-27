@@ -106,4 +106,39 @@ class PlaybackProfileWiringTest {
         assertEquals(baseline, medusa())
         assertEquals("https://api5-normal-sinfonlinea.fqnovel.com", MobilePlayback.HOST)
     }
+
+    @Test
+    fun `改 Medusa 明文字段会改变报文`() {
+        val baseline = medusa()
+        PlaybackProfiles.apply(profile {
+            it.getJSONObject("v5").put("deviceMake", "Xiaomi")
+            it.getJSONObject("v5").put("metricsJson", """{"cmr":999}""")
+            it.getJSONObject("v5").put("tz", "UTC,0")
+        })
+        assertNotEquals("厂商/指标/时区改了，报文必须跟着变", baseline, medusa())
+        PlaybackProfiles.reset()
+        assertEquals("重置后回到内置明文", baseline, medusa())
+    }
+
+    @Test
+    fun `改设备档案字段会反映到 VendorConstants 设备表`() {
+        PlaybackProfiles.apply(profile {
+            it.getJSONObject("device").put("device_type", "99999MODEL")
+            it.getJSONObject("device").put("os_api", "35")
+        })
+        val table = VendorConstants.device
+        assertEquals("99999MODEL", table.getValue("device_type"))
+        assertEquals("35", table.getValue("os_api"))
+        assertEquals("wifi", table.getValue("ac"))
+    }
+
+    @Test
+    fun `设备档案占位符按当前安装身份解析`() {
+        val table = VendorConstants.device
+        assertEquals("占位符 {iid} 必须解析成运行时安装 ID", VendorConstants.installIid, table.getValue("iid"))
+        assertEquals(VendorConstants.installDeviceId, table.getValue("device_id"))
+        assertEquals(VendorConstants.versionCode, table.getValue("version_code"))
+        assertEquals(VendorConstants.versionName, table.getValue("version_name"))
+        assertNotEquals("解析后不应残留占位符", "{iid}", table.getValue("iid"))
+    }
 }

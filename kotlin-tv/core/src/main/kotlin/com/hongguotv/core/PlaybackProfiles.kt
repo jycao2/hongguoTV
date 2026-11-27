@@ -30,6 +30,16 @@ object PlaybackProfiles {
     val v5: V5Profile get() = active.v5
     val ua: UaProfile get() = active.ua
 
+    /** 旧六头链路的查询串设备档案：以当前安装身份解析占位符后的完整字段表。 */
+    fun deviceTable(): Map<String, String> = active.device.resolve(
+        linkedMapOf(
+            "iid" to VendorConstants.installIid,
+            "device_id" to VendorConstants.installDeviceId,
+            "version_code" to VendorConstants.versionCode,
+            "version_name" to VendorConstants.versionName,
+        )
+    )
+
     fun gate(name: String): GateProfile = active.gate(name)
 
     /** 只接受 revision 严格变大的档案；返回是否真的换了。 */

@@ -6203,7 +6203,7 @@ class MainActivity: Activity() {
                         Toast.makeText(this, L10n.tr("已恢复内置默认档案"), Toast.LENGTH_SHORT).show()
                     }.show()
                 }
-            }, extra = L10n.tr("当前：") + L10n.tr(profileUpdater.statusLine()))
+            }, extra = L10n.tr("当前：") + L10n.tr(profileUpdater.statusLine())).show()
     }
 
     /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。
@@ -6240,9 +6240,9 @@ class MainActivity: Activity() {
         }
         fun check(name: String,btn: TextView,probe: ()->String) {
             val now=System.currentTimeMillis()
-            if(name in busy || now-(lastAt[name] ?: 0L)<3_000) { status.text="${L10n.tr(name)} 请稍候再试"; return }
+            if(name in busy || now-(lastAt[name] ?: 0L)<3_000) { status.text="${L10n.tr(name)} · ${L10n.tr("请稍候再试")}"; return }
             lastAt[name]=now
-            busy+=name; status.text="正在检测 ${L10n.tr(name)}…"
+            busy+=name; status.text="${L10n.tr("正在检测 ")}${L10n.tr(name)}…"
             btn.text=dotLabel(name,accent)
             val started=android.os.SystemClock.elapsedRealtime()
             io.execute {
@@ -6252,7 +6252,7 @@ class MainActivity: Activity() {
                     val elapsed=android.os.SystemClock.elapsedRealtime()-started
                     result.fold(
                         { detail -> status.text="${L10n.tr(name)} · 正常 · $detail · ${elapsed}ms"; btn.text=dotLabel(name,dotOk) },
-                        { problem -> status.text="${L10n.tr(name)} · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; btn.text=dotLabel(name,dotFail) })
+                        { problem -> status.text="${L10n.tr(name)} · ${L10n.tr("失败")} · ${L10n.tr((problem.message ?: problem.javaClass.simpleName).take(80))}"; btn.text=dotLabel(name,dotFail) })
                     busy-=name
                 }
             }

@@ -2408,6 +2408,7 @@ internal object L10nEnglish {
         " · 失败 · " to " · failed · ",
         "正在检测 " to "Checking ",
         " 请稍候再试" to " — try again shortly",
+        "请稍候再试" to "Try again shortly",
         "手机想发送：" to "Phone wants to send:",
         "文件已保存到电视：" to "File saved to TV: ",
         "视频已保存到电视：" to "Video saved to TV: ",

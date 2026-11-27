@@ -68,6 +68,44 @@ class PlaybackProfileTest {
     }
 
     @Test
+    fun `v5 Medusa 明文字段必须合法`() {
+        reject("aid 非数字", mutated { it.getJSONObject("v5").put("aid", "86a2") })
+        reject("aid 缺失", mutated { it.getJSONObject("v5").remove("aid") })
+        reject("tz 非法", mutated { it.getJSONObject("v5").put("tz", "Asia;;Shanghai") })
+        reject("lang 非法", mutated { it.getJSONObject("v5").put("lang", "zh CN!") })
+        reject("metricsJson 不是对象", mutated { it.getJSONObject("v5").put("metricsJson", "[1,2]") })
+        reject("metricsJson 带 control 字符", mutated { it.getJSONObject("v5").put("metricsJson", "{\"a\":1\n,\"b\":2}") })
+        reject("deviceMake 缺失", mutated { it.getJSONObject("v5").remove("deviceMake") })
+        reject("mediaTag 缺失", mutated { it.getJSONObject("v5").remove("mediaTag") })
+    }
+
+    @Test
+    fun `设备档案字段表必须与内置键集合完全一致`() {
+        val device = mutated { it.getJSONObject("device").remove("ssmix") }
+        reject("少一个键", device)
+        val unknown = mutated { it.getJSONObject("device").put("extra_field", "1") }
+        reject("多一个键", unknown)
+        reject("占位符不认识", mutated { it.getJSONObject("device").put("iid", "{fingerprint}") })
+        reject("值为空", mutated { it.getJSONObject("device").put("ssmix", "") })
+        reject("值非 ASCII", mutated { it.getJSONObject("device").put("device_brand", "小米") })
+    }
+
+    @Test
+    fun `设备档案占位符解析覆盖全部身份字段`() {
+        val resolved = PlaybackProfile.builtin().device.resolve(mapOf(
+            "iid" to "111", "device_id" to "222",
+            "version_code" to "73333", "version_name" to "7.3.3.32",
+        ))
+        assertEquals(27, resolved.size)
+        assertEquals("111", resolved.getValue("iid"))
+        assertEquals("222", resolved.getValue("device_id"))
+        assertEquals("73333", resolved.getValue("version_code"))
+        assertEquals("7.3.3.32", resolved.getValue("version_name"))
+        assertEquals("73333", resolved.getValue("manifest_version_code"))
+        assertEquals("wifi", resolved.getValue("ac"))
+    }
+
+    @Test
     fun `门地址必须形如裸域名加绝对路径`() {
         reject("host 带 scheme", mutated { it.getJSONObject("gates").getJSONObject("model").put("hosts", JSONArray().put("https://a.example.com")) })
         reject("host 带端口", mutated { it.getJSONObject("gates").getJSONObject("model").put("hosts", JSONArray().put("a.example.com:443")) })

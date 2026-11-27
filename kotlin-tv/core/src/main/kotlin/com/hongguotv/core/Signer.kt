@@ -176,21 +176,21 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
         val flags = ByteArray(8)
         val version = who.getValue("version_name")
         val deviceInfo = proto(
-            f(1,1,"sint"),f(2,2,"sint"),f(3,"8662"),f(4,who.getValue("device_id")),
-            f(5,VendorConstants.processNonce),f(6,"!noperm!"),f(12,"Asia/Shanghai,8"),f(13,"zh_CN"),
+            f(1,1,"sint"),f(2,2,"sint"),f(3,p.aid),f(4,who.getValue("device_id")),
+            f(5,VendorConstants.processNonce),f(6,p.perm),f(12,p.tz),f(13,p.lang),
             f(22,who.getValue("os_version")),f(25,VendorConstants.processStarted,"sint"),
-            f(30,who.getValue("device_type")),f(31,"HONOR"),
-            f(32,who.getValue("device_type")),f(34,"HONOR"),
+            f(30,who.getValue("device_type")),f(31,p.deviceMake),
+            f(32,who.getValue("device_type")),f(34,p.deviceMake),
         )
         val env = proto(f(6,p.envVersion),f(8,who.getValue("channel")),f(12,deviceInfo),f(14,version))
         val message = proto(
             f(1,p.magic),f(2,5,"sint"),f(3,unsigned(rand()),"sint"),
-            f(4,"8662"),f(5,who.getValue("device_id")),f(6,p.license),
+            f(4,p.aid),f(5,who.getValue("device_id")),f(6,p.license),
             f(7,version),f(8,p.messageVersion),f(9,p.numericVersion,"sint"),
             f(10,flags),f(12,ts,"sint"),f(13,f13),f(14,query.copyOf(6)),
             f(15,proto(f(1,1,"sint"),f(2,1,"sint"),f(3,1,"sint"),f(5,1,"sint"))),
-            f(17,ts,"sint"),f(20,"none"),f(21,p.field21,"sint"),f(23,env),
-            f(24,"""{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}"""),
+            f(17,ts,"sint"),f(20,p.mediaTag),f(21,p.field21,"sint"),f(23,env),
+            f(24,p.metricsJson),
         )
         val nonce = rand()
         val key = p.signKey
