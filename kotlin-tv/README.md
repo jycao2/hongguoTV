@@ -11,6 +11,10 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 开发中（未发布）：取址协议档案
+
+- **取址数据可远程下发**：把播放取址里「站方会改的那部分数据」（v5 的魔数 / license / 主密钥 / 替换盒、版本指纹、UA、各取址门的主机与路径）抽成仓库根的一份 `playback-profile.json`，端上启动时拉取并覆盖内置默认。站方下次改字段集只需改档案、`revision` 加一、推一次仓库，存量设备不用升级就生效；拉不到 / 验签不过 / 解析不过 / 版本号不新一律回退内置默认，行为与改造前**逐字节一致**（`SignerGoldenTest` 守着）。设置「关于红果 → 取址协议档案」可查看当前档案、手动检查、恢复内置默认。设计与维护手册见 [`docs/PLAYBACK_PROFILE.md`](../docs/PLAYBACK_PROFILE.md)。
+
 ## 0.36.0 新增与修复
 
 - **多语言界面**：设置「外观与界面 → 界面语言」可选 简体中文 / 繁體中文 / English，或跟随系统（默认）；切换后整页重建生效。手机遥控页、快传页与语音指令同步界面语言，语言随本地备份与扫码备份迁移。剧名、题材标签等接口下发内容保持原样。

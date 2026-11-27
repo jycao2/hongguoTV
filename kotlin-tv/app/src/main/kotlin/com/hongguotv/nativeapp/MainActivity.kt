@@ -279,6 +279,7 @@ class MainActivity: Activity() {
     private lateinit var extras: PlaybackExtras
     private lateinit var thirdStore: ThirdStore
     private lateinit var updater: AppUpdater
+    private lateinit var profileUpdater: PlaybackProfileUpdater
     private lateinit var mediaSession: TvMediaSession
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
@@ -812,6 +813,8 @@ class MainActivity: Activity() {
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
         updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && !tvTools.showing }
+        // 取址协议档案：先把上次缓存的换上（几毫秒），再按 6 小时节流后台拉一次
+        profileUpdater=PlaybackProfileUpdater(this).apply { loadCached(); refreshIfDue() }
         connectivity=getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         // registerDefaultNetworkCallback 要 API 24，低版本退回全量回调
         runCatching {
@@ -3767,6 +3770,10 @@ class MainActivity: Activity() {
         lateinit var updates: SettingRow
         updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}",{ updater.show(updates) },
             desc="查看当前版本号与更新日志，手动检查或直接安装新版本。")
+        lateinit var profileRow: SettingRow
+        profileRow=setting(about,"取址协议档案",{ showProfileSheet(profileRow) },
+            desc="播放取址用的签名常量与门地址，支持远程下发；出问题时一键恢复内置默认。")
+        profileRow.value=profileUpdater.statusLine()
         lateinit var checkButton: SettingRow
         checkButton=setting(about,"接口自检  ·  首页 / 搜索 / 播放",{ showInterfaceCheck(checkButton) },
             desc="逐项探测首页、搜索与播放接口是否可用，看剧异常时先跑一遍它。")
@@ -6166,6 +6173,37 @@ class MainActivity: Activity() {
             append("\n统计来自本机观看记录，不上传、不联网。")
         }
         tvTools.info("观看统计 · 本机",body,anchor)
+    }
+
+    /** 取址协议档案：看当前生效的那份、手动拉一次、或者一键回到内置默认。
+     *  站方改字段集时改远端档案即可生效；这里给的是「出问题时能立刻退回」的把手。 */
+    private fun showProfileSheet(row: SettingRow) {
+        fun refreshRow() { row.value = L10n.tr(profileUpdater.statusLine()) }
+        TvDialog.choose(this, L10n.tr("取址协议档案"),
+            listOf(L10n.tr("查看当前档案"), L10n.tr("立即检查更新"), L10n.tr("恢复内置默认")),
+            { index ->
+                when (index) {
+                    0 -> {
+                        val error = profileUpdater.sanityError()
+                        val body = profileUpdater.summary() + if (error == null) "" else "\n\n自检异常：$error"
+                        TvDialog.info(this, L10n.tr("取址协议档案"), body).show()
+                    }
+                    1 -> {
+                        Toast.makeText(this, L10n.tr("正在检查协议档案…"), Toast.LENGTH_SHORT).show()
+                        profileUpdater.refresh { _, message ->
+                            refreshRow()
+                            Toast.makeText(this, L10n.tr(message), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    else -> TvDialog.confirm(this, L10n.tr("恢复内置默认"),
+                        L10n.tr("清掉已下发的协议档案，播放取址回到随包默认值。下次启动会重新检查远端档案。"),
+                        confirmText = L10n.tr("恢复"), danger = true) {
+                        profileUpdater.resetToBuiltin()
+                        refreshRow()
+                        Toast.makeText(this, L10n.tr("已恢复内置默认档案"), Toast.LENGTH_SHORT).show()
+                    }.show()
+                }
+            }, extra = L10n.tr("当前：") + L10n.tr(profileUpdater.statusLine()))
     }
 
     /** 接口自检：用户逐项点击，单次串行请求，失败只提示不重试，避免给站点增加并发压力。
@@ -9379,7 +9417,7 @@ class MainActivity: Activity() {
     override fun onDestroy() {
         generation++; cancelWork()
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
-        favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); releasePlayer(); accountManager.destroy(); library.close()
+        favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); profileUpdater.destroy(); saveProgress(); releasePlayer(); accountManager.destroy(); library.close()
         closeRemote()
         xiaoAi?.destroy()
         third?.release()

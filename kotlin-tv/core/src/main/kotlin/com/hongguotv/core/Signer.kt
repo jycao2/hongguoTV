@@ -166,8 +166,11 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
         return (prefix+byteArrayOf(r.toByte(),(r shr 8).toByte(),0,1)+encrypted).base64()
     }
     /** Android v5（v04.10.03）的 Medusa：报文结构、魔数、license、设备串与帧头全部换新，
-     *  AES 走 [AesV3] 的 v5 表。上游 2026-11-16 用纯 Kotlin 复刻后实测可恢复取址。 */
-    private fun medusaV5(url: String, bodyMd5: ByteArray?, ts: Int, who: Map<String,String>): String {
+     *  AES 走 [AesV3] 的 v5 表。上游 2026-11-16 用纯 Kotlin 复刻后实测可恢复取址。
+     *
+     *  [p] 是调用方取的那一份协议档案快照：整条报文的 magic/license/signKey/sbox/版本号
+     *  必须来自同一份档案，中途换档案不能出现「魔数用新版、密钥用旧版」的撕裂。 */
+    private fun medusaV5(url: String, bodyMd5: ByteArray?, ts: Int, who: Map<String,String>, p: V5Profile): String {
         val query = sm3(url.substringAfter('?').toByteArray(Charsets.UTF_8))
         val f13 = hashF13V5(query, bodyMd5 ?: ByteArray(16), ts)
         val flags = ByteArray(8)
@@ -179,18 +182,18 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
             f(30,who.getValue("device_type")),f(31,"HONOR"),
             f(32,who.getValue("device_type")),f(34,"HONOR"),
         )
-        val env = proto(f(6,"v04.10.03.04-bugfix"),f(8,who.getValue("channel")),f(12,deviceInfo),f(14,version))
+        val env = proto(f(6,p.envVersion),f(8,who.getValue("channel")),f(12,deviceInfo),f(14,version))
         val message = proto(
-            f(1,V5Constants.magic),f(2,5,"sint"),f(3,unsigned(rand()),"sint"),
-            f(4,"8662"),f(5,who.getValue("device_id")),f(6,V5Constants.license),
-            f(7,version),f(8,"v04.10.03-ml-android"),f(9,0x040a0300,"sint"),
+            f(1,p.magic),f(2,5,"sint"),f(3,unsigned(rand()),"sint"),
+            f(4,"8662"),f(5,who.getValue("device_id")),f(6,p.license),
+            f(7,version),f(8,p.messageVersion),f(9,p.numericVersion,"sint"),
             f(10,flags),f(12,ts,"sint"),f(13,f13),f(14,query.copyOf(6)),
             f(15,proto(f(1,1,"sint"),f(2,1,"sint"),f(3,1,"sint"),f(5,1,"sint"))),
-            f(17,ts,"sint"),f(20,"none"),f(21,V5Constants.field21,"sint"),f(23,env),
+            f(17,ts,"sint"),f(20,"none"),f(21,p.field21,"sint"),f(23,env),
             f(24,"""{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}"""),
         )
         val nonce = rand()
-        val key = V5Constants.signKey
+        val key = p.signKey
         val hash = sm3(key+le32(nonce)+key)
         val high = (nonce ushr 16) and 255
         val seed = le32((((high shl 11) or (nonce ushr 24)) xor (high ushr 5) xor high).inv())
@@ -199,9 +202,9 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
         val check = 0x18000001 or ((query[0].u() and 63) shl 14) or ((f13[0].u() and 63) shl 8)
         val packed = byteArrayOf(0xca.toByte())+le32(rand())+le32(check)+transformed+
             byteArrayOf((nonce ushr 16).toByte(),(nonce ushr 24).toByte())
-        val encrypted = AesV3(digest("MD5",key.copyOfRange(0,16)),ts,v5=true)
+        val encrypted = AesV3(digest("MD5",key.copyOfRange(0,16)),ts,v5=true,boxOverride=p.sbox)
             .encrypt(packed,digest("MD5",key.copyOfRange(16,32)))
-        val prefix = le32(5)+V5Constants.magic
+        val prefix = le32(5)+p.magic
         for (i in prefix.indices) prefix[i] = (prefix[i].u() xor le32(ts)[i and 3].u()).toByte()
         return (prefix+byteArrayOf(nonce.toByte(),(nonce ushr 8).toByte(),0,1)+encrypted).base64()
     }
@@ -367,6 +370,7 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
      */
     fun signPlaybackV5(base: String, values: Map<String,String>, body: ByteArray?): Request {
         val now=clock(); val ts=(now/1000).toInt()
+        val p=PlaybackProfiles.v5
         val bodyMd5=body?.let { digest("MD5",it) }
         for(offset in 0..1023) {
             val ticket=now+offset
@@ -375,8 +379,8 @@ class Signer(private val clock: () -> Long = System::currentTimeMillis, private 
             val url="$base?$query"
             val headers=linkedMapOf(
                 "x-khronos" to ts.toString(),
-                "x-helios" to helios(ts,V5Constants.license),
-                "x-medusa" to medusaV5(url,bodyMd5,ts,values),
+                "x-helios" to helios(ts,p.license),
+                "x-medusa" to medusaV5(url,bodyMd5,ts,values,p),
             )
             if(bodyMd5!=null && body!=null && body.isNotEmpty()) {
                 headers["Content-Type"]="application/json; charset=utf-8"

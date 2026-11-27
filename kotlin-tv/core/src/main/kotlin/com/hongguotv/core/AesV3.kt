@@ -1,10 +1,12 @@
 // Derived from drpys 22261ad; GPL-3.0-only. Protocol-specific transform, not standard AES.
 package com.hongguotv.core
 
-/** v3（v04.06.04）与 v5（v04.10.03）共用同一套结构，四张表的取值与位序映射随版本不同。 */
-internal class AesV3(key: ByteArray, timestamp: Int, private val v5: Boolean = false) {
+/** v3（v04.06.04）与 v5（v04.10.03）共用同一套结构，四张表的取值与位序映射随版本不同。
+ *  v5 的 1024 字节替换盒来自协议档案（[PlaybackProfiles]）；[boxOverride] 让签名流程
+ *  把同一份快照的 sbox 传进来，避免中途换档案时取到另一版的表。 */
+internal class AesV3(key: ByteArray, timestamp: Int, private val v5: Boolean = false, boxOverride: ByteArray? = null) {
     private val word = timestamp and 3
-    private val box = (if(v5) V5Constants.sbox else VendorConstants.sbox).copyOfRange(word*256,(word+1)*256).map { it.u() }
+    private val box = (boxOverride ?: if(v5) PlaybackProfiles.v5.sbox else VendorConstants.sbox).copyOfRange(word*256,(word+1)*256).map { it.u() }
     private val con = (if(v5) arrayOf(
         intArrayOf(2,0,3,1),intArrayOf(1,3,2,0),intArrayOf(3,2,1,0),intArrayOf(2,3,1,0)
     ) else arrayOf(

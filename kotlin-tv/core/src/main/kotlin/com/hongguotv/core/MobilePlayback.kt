@@ -20,34 +20,36 @@ import org.json.JSONObject
  * 旧参数 `data.video_model` 直挂格式仍由 [directModel] 兼容，`1004` 分组格式走通用解析。
  */
 internal object MobilePlayback {
-    const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
+    /** 门地址与 UA 全部由协议档案驱动（[PlaybackProfiles]），默认值就是内置默认。
+     *  站方换 host / 路径 / 版本指纹时，改远端档案即可 —— 这里不写死任何一项。 */
+    val HOST: String get() = PlaybackProfiles.gate("model").baseUrl
     /** 7.4.5.32 现行 App 协议（上游 0.16.14 实网验收）：默认落在 `reading.snssdk.com`，
      *  端点 `preload/v1`，`dr_scene=preload`、`device_level=2`。 */
-    const val APP_HOST = "https://reading.snssdk.com"
-    const val PRELOAD_PATH = "/novel/player/multi_video_model/preload/v1"
+    val APP_HOST: String get() = PlaybackProfiles.gate("preload").baseUrl
+    val PRELOAD_PATH: String get() = PlaybackProfiles.gate("preload").path
     /** 7.4.3.32 抓包口径（openhongguo `PathPlaybackV5`）：`player/v1`。 */
-    const val PATH = "/novel/player/multi_video_model/player/v1"
+    val PATH: String get() = PlaybackProfiles.gate("model").path
     /** 平铺路径（上游 `FlatPath`）：与 [PATH] 互为轮换，服务端反向切换时靠它兜住。 */
-    const val FLAT_PATH = "/novel/player/multi_video_model/v1"
+    val FLAT_PATH: String get() = PlaybackProfiles.gate("flat").path
     /** 单集现行模型接口（上游 tsukiyo-zero/hongguoTV 0.1.40 d859244 移植）：
      *  官方 7.4.5.32 客户端真实调用的取址端点（APK `RpcOperation("$POST /novel/player/video_model/v1/")` 确认），
      *  2026-11-24 起重新放行，实测取到 1080P；请求体是单集 `video_id` + biz_param，**不带 mixed_video_id_map**。 */
-    const val CURRENT_MODEL_PATH = "/novel/player/video_model/v1/"
+    val CURRENT_MODEL_PATH: String get() = PlaybackProfiles.gate("current").path
     /** 官方剧集详情接口（上游 openhongguo `PathSeries`）：`video_data.video_list[]` 是全量分集，
      *  每项 `vid` 是官方取址认识的纯数字 ID。2026-11-27 官网 SEO 页把匿名 `vid_list` 砍到前 3 集，
      *  这是补全分集的唯一来源。 */
-    const val DETAIL_PATH = "/novel/player/video_detail/v1/"
+    val DETAIL_PATH: String get() = PlaybackProfiles.gate("detail").path
     /** 备用取址 GET（官方 `GetVideoModelRequest` 形态）。2026-11-22 上游 0.16.12 实网确认：
      *  主 POST 返空时，同一身份用 **v5 签名** 打这条 GET 能拿到模型（4 集跨 2 部剧）。 */
-    private const val TAB_PATH = "/reading/bookapi/video_tab/multi_video_model/v1/"
+    private val TAB_PATH: String get() = PlaybackProfiles.gate("tab").path
     /** 单发批量最多带多少集：站方上限 20，留出余量取 15（与 [ContentRepository] 的窗口一致）。 */
     private const val MAX_BATCH = 15
     /** video_tab 是 GET + Cronet 传输，UA 与主 POST 的 tt-ok 形态不同。
      *  2026-11-25 对齐上游 0.1.37（ff4d1d2 实测表）：只有 74532 UA 能通过——版本指纹不齐会被静默丢弃。 */
-    private const val TAB_UA = "com.phoenix.read/74532 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
+    private val TAB_UA: String get() = PlaybackProfiles.gate("tab").userAgent
     // V5 播放 POST 用 tt-ok 形态 + PGT-AN10/Android 12（PhoenixReadApi V5PlaybackUserAgent）；
     // video_tab GET 才用 Cronet 形态。此前两者混用，UA 也是错的一环。
-    const val UA = PassportClient.V5_PLAYBACK_UA
+    val UA: String get() = PlaybackProfiles.ua.playback
     /** 完整 28 项 query，缺一项都可能落到空响应；设备字段一律取自注册画像，避免两套指纹。 */
     private fun query(identity: PlaybackDeviceSession.Profile): Map<String, String> {
         val v = identity.values

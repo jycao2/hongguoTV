@@ -6,8 +6,9 @@ import kotlin.random.Random
 
 /** 公开可见性只为本机的 `:app-phone` 实验模块（`regenerate()`）；该模块不入库，正式包不受影响。 */
 object VendorConstants {
-    const val VIDEO_UA = "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
-    const val APP_UA = "com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)"
+    /** UA 由协议档案驱动（[PlaybackProfiles.ua]）：站方改版本指纹时改档案即可，不用发版。 */
+    val VIDEO_UA: String get() = PlaybackProfiles.ua.video
+    val APP_UA: String get() = PlaybackProfiles.ua.app
     // 设备身份与进程指纹：原硬编码值来自公开抓包样本，已被平台封禁。
     // 现每次 API 调用前由 ContentRepository 调用 regenerate() 刷新，避免同一身份被连坐。
     // var 以便测试固定身份、复现确定性签名。
