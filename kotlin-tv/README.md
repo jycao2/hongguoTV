@@ -11,6 +11,13 @@
 - 手机遥控端：[hongguoTV-remote](https://github.com/jycao2/hongguoTV-remote)（扫码录入并管理电视入口；遥控页面与按键逻辑内置在本 APK）
 - 问题反馈与功能建议：请到 [hongguoTV-updates issues](https://github.com/jycao2/hongguoTV-updates/issues) 提交（该仓库同时承载版本更新与下载）
 
+## 0.36.0 新增与修复
+
+- **多语言界面**：设置「外观与界面 → 界面语言」可选 简体中文 / 繁體中文 / English，或跟随系统（默认）；切换后整页重建生效。手机遥控页、快传页与语音指令同步界面语言，语言随本地备份与扫码备份迁移。剧名、题材标签等接口下发内容保持原样。
+- **英文 / 繁中补译**：多行弹窗说明（小爱同学配置、遥控地址）、自检面板圆点按钮、顶栏遥控状态、Toast、评分与收藏行、`5 分钟` / `3 行` 之类数量选项、榜单副标题此前在英文与繁中下会回退中文，现在按「整段 → 逐行 → 句子骨架片段」三级匹配翻译；未收录文案仍回退简体，不会出现空文案。
+- **最近任务显示应用名**：TCL 等电视的近期任务卡片此前显示 `com.hongguotv.nativeapp.MainActivity`（`ActivityInfo.loadLabel()` 回退为全限定类名），现在显示「红果TV」。标题在任务创建时抓取并缓存，**升级后需重启电视**（或重启桌面）才会刷新。
+- **分集数据修复与全量分集**：官网详情页把分集 ID 改为 `v1_` 混淆格式、匿名访客只下发前 3 集，旧代码按纯数字校验直接判成数据异常。现在两种 ID 都接受，并用官方详情接口补齐全量分集（电视实测 207 集）；`v1_` 分集走官网播放器同款 `fallback-play-info` 播完整正片，不是 SEO 的 10 秒预览。
+
 ## 0.35.0 新增与修复
 
 - **修复限流**：取址对齐果映 TV 0.1.40——新增官方 7.4.5.32 现行单集接口 `video_model/v1` 为首选（11-24 起放行，实测 1080P）；video_tab 备用通道版本指纹修正为 74532 并对齐配套 UA，此前指纹不齐导致主路空响应时兜底被静默丢弃、表现为整体限流。
@@ -476,7 +483,7 @@ keyPassword=your-password
 
 ```sh
 ./scripts/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-0.35.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
+# 输出：outputs/hongguotv-kotlin-0.36.0-android8.apk（单包，minSdk 21，Android 5.0+ 通用）
 # 文件名沿用 -android8.apk 只为兼容既有下载链接与客户端解析，它同时支持 Android 5-7。
 ```
 

@@ -241,7 +241,7 @@ class QuickTransferServer(
     }.getOrDefault(ByteArray(0))
 
     private fun respond(socket: Socket, code: Int, message: String, type: String = if(message.startsWith("<!doctype")) "text/html; charset=utf-8" else "text/plain; charset=utf-8") {
-        val body = message.toByteArray(Charsets.UTF_8)
+        val body=(if(message.startsWith("<!doctype")) HtmlL10n.translate(message) else L10n.tr(message)).toByteArray(Charsets.UTF_8)
         val header = "HTTP/1.1 $code Response\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-$token'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n"
         runCatching {
             socket.getOutputStream().apply { write(header.toByteArray(Charsets.US_ASCII)); write(body); flush() }
@@ -252,7 +252,7 @@ class QuickTransferServer(
         val free = TransferRules.humanBytes(availableBytes().coerceAtLeast(0))
         val limit = TransferRules.humanBytes(TransferRules.MAX_BYTES)
         val minutes = (deadline - System.nanoTime()) / 60_000_000_000L
-        val dirs = TransferKind.entries.map { pickDirectory(it).absolutePath }.distinct().joinToString("、")
+        val dirs = TransferKind.entries.map { pickDirectory(it).absolutePath }.distinct().joinToString(if(L10n.current()==L10n.EN) ", " else "、")
         return PAGE
             .replace("__TOKEN__", token)
             .replace("__FREE__", free)

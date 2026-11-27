@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.net.Socket
@@ -11,6 +13,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class QuickTransferServerTest {
+    // 页面文案随界面语言翻译（HtmlL10n，默认跟随系统 Locale）。
+    // 这些用例断言的是中文原文，必须把测试环境钉死在简体，否则在英文 Locale 的机器上会失败。
+    @Before fun pinChinese() { L10n.configure(L10n.ZH) }
+    @After fun restoreLanguage() { L10n.configure(null) }
+
     private val apkHead = byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x03.toByte(), 0x04.toByte())
     private val apk = apkHead + ByteArray(60)
     private val plain = ByteArray(64)

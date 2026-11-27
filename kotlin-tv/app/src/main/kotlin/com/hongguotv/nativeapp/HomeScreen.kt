@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.widget.*
 import com.hongguotv.core.FocusGrid
+import com.hongguotv.core.L10n
 import com.hongguotv.core.Series
 
 /** Fixed text slots keep D-pad movement from resizing the content below the preview. */
@@ -50,7 +51,7 @@ class HomeScreen(
     private val accent=TvStyle.accent
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private fun shape(focus: Boolean)=TvStyle.card(context,focus)
-    private fun label(value: String,size: Float,color: Int=TvStyle.text)=TextView(context).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
+    private fun label(value: String,size: Float,color: Int=TvStyle.text)=TextView(context).apply { text=L10n.tr(value); textSize=size; setTextColor(color); includeFontPadding=false }
     private val scroll=ScrollView(context).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
     private val contents=LinearLayout(context).apply { orientation=VERTICAL }
     private val rows=mutableListOf<Row>()

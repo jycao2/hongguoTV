@@ -39,6 +39,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.hongguotv.core.L10n
 import com.hongguotv.core.EpisodeEntry
 import com.hongguotv.core.EpisodeGroup
 import com.hongguotv.core.EpisodeGroupDetail
@@ -290,11 +291,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 hasPendingPlay = true
                 playGroup = next
                 playEpisode = playEpisode.coerceAtMost((data?.groups?.getOrNull(next)?.second?.size ?: 1) - 1)
-                Toast.makeText(activity, "播放失败，已自动切换到「${data?.groups?.getOrNull(next)?.first.orEmpty()}」", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("播放失败，已自动切换到「${data?.groups?.getOrNull(next)?.first.orEmpty()}」"), Toast.LENGTH_SHORT).show()
                 // 不在错误回调里直接重建：先让回调返回，下一帧再释放旧的播放器实例
                 main.post { rebuild() }
             } else {
-                playErrorText?.text = "该集播放失败，可换一集或切换线路"; showOverlay()
+                playErrorText?.text = L10n.tr("该集播放失败，可换一集或切换线路"); showOverlay()
             }
         }
     }
@@ -798,7 +799,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val result = client.detail(source, video.id)
             main.post {
                 if(gen != generation || result == null) {
-                    if(gen == generation) Toast.makeText(activity, "获取详情失败，请重试", Toast.LENGTH_SHORT).show()
+                    if(gen == generation) Toast.makeText(activity, L10n.tr("获取详情失败，请重试"), Toast.LENGTH_SHORT).show()
                     return@post
                 }
                 openDetail(result)
@@ -894,13 +895,13 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     /** 历史/收藏引用的源被删除后，按原接口重新加回源列表。 */
     private fun readdSource(api: String, name: String) {
         if(sources.size >= ThirdCms.MAX_SOURCES) {
-            Toast.makeText(activity, "源数量已达上限（${ThirdCms.MAX_SOURCES}）", Toast.LENGTH_SHORT).show(); return
+            Toast.makeText(activity, L10n.tr("源数量已达上限（${ThirdCms.MAX_SOURCES}）"), Toast.LENGTH_SHORT).show(); return
         }
         if(sources.any { it.api == api }) { rebuild(); return }
         val source = ThirdSource("u" + api.hashCode().toUInt().toString(), name.ifBlank { hostOf(api) }, api)
         store.saveSources(sources + source)
         backupRequest()
-        Toast.makeText(activity, "已重新添加「${source.name}」", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("已重新添加「${source.name}」"), Toast.LENGTH_SHORT).show()
         rebuild()
     }
 
@@ -908,7 +909,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         store.removeHistory(entry.sourceApi, entry.videoId)
         sources.firstOrNull { it.api == entry.sourceApi }?.let { store.clearProgress(it.id, entry.videoId) }
         backupRequest()
-        Toast.makeText(activity, "已删除这条记录", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("已删除这条记录"), Toast.LENGTH_SHORT).show()
         rebuild()
     }
 
@@ -926,7 +927,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         tvTools.confirm("清空观看历史", "将删除全部 ${historyEntries.size} 条观看记录，不影响片源配置。", null) {
             store.clearHistory()
             backupRequest()
-            Toast.makeText(activity, "观看历史已清空", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("观看历史已清空"), Toast.LENGTH_SHORT).show()
             rebuild()
         }
     }
@@ -993,7 +994,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun deleteFavorite(entry: ThirdFavorite) {
         store.removeFavorite(entry.sourceApi, entry.videoId)
         backupRequest()
-        Toast.makeText(activity, "已取消收藏", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("已取消收藏"), Toast.LENGTH_SHORT).show()
         if(mode == Mode.FAVORITE) rebuild() else renderDetailRefresh()
     }
 
@@ -1093,7 +1094,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                         videos.addAll(fresh); hasMore = result.hasMore && result.videos.isNotEmpty(); page = requestPage
                         gridAdapter?.submit(insertAt)
                         gridStatus?.text = gridStatusText()
-                    } else gridStatus?.text = "加载更多失败，继续下滑可重试"
+                    } else gridStatus?.text = L10n.tr("加载更多失败，继续下滑可重试")
                 }
             }
         }
@@ -1203,7 +1204,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 ?: "连接超时或接口无响应"
         } else if(missed != null) {
             // 有结果但没一个能播：留在结果页，让人自己点——这比替用户猜一个可靠。
-            Toast.makeText(activity, "没找到能播放的「$missed」，请从结果里选一个", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("没找到能播放的「$missed」，请从结果里选一个"), Toast.LENGTH_SHORT).show()
         }
         if(gridAdapter != null) {
             searchStatusView?.text = searchSummaryText()
@@ -1233,7 +1234,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     gridAdapter?.submit(insertAt)
                     searchStatusView?.text = searchSummaryText()
                     gridStatus?.text = gridStatusText()
-                } else gridStatus?.text = "加载更多失败，继续下滑可重试"
+                } else gridStatus?.text = L10n.tr("加载更多失败，继续下滑可重试")
             }
         }
     }
@@ -1291,7 +1292,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     /** 分类选择：网格弹窗一屏铺开，避免长分类条逐个横移；当前分类获得焦点并自动滚到可见位置。 */
     private fun showCategoryPicker() {
-        if(categories.isEmpty()) { Toast.makeText(activity, "分类还在加载，稍后再试", Toast.LENGTH_SHORT).show(); return }
+        if(categories.isEmpty()) { Toast.makeText(activity, L10n.tr("分类还在加载，稍后再试"), Toast.LENGTH_SHORT).show(); return }
         val options = listOf(ThirdCategory("", "全部")) + categories
         val cols = 5
         val buttons = mutableListOf<TextView>()
@@ -1458,7 +1459,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(speedTesting || sources.isEmpty()) return
         speedTesting = true
         val gen = generation
-        Toast.makeText(activity, "正在依次测速，请稍候…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("正在依次测速，请稍候…"), Toast.LENGTH_SHORT).show()
         probeExecutor.execute {
             var best: ThirdSource? = null
             var bestMs = Long.MAX_VALUE
@@ -1487,9 +1488,9 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 if(gen != generation) return@post
                 probeSummary?.text = probeSummaryText()
                 val winner = best
-                if(winner == null) Toast.makeText(activity, "测速完成：没有可用片源", Toast.LENGTH_SHORT).show()
+                if(winner == null) Toast.makeText(activity, L10n.tr("测速完成：没有可用片源"), Toast.LENGTH_SHORT).show()
                 else {
-                    Toast.makeText(activity, "测速完成：${winner.name} 最快（${bestMs}ms）", Toast.LENGTH_LONG).show()
+                    Toast.makeText(activity, L10n.tr("测速完成：${winner.name} 最快（${bestMs}ms）"), Toast.LENGTH_LONG).show()
                     if(winner.id != currentId) switchSource(winner)
                 }
             }
@@ -1618,7 +1619,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
 
     /** 单源测速：只探这一个源并就地刷新状态与延迟，不触发自动切源。 */
     private fun speedTestOne(source: ThirdSource) {
-        Toast.makeText(activity, "正在测试「${source.name}」…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("正在测试「${source.name}」…"), Toast.LENGTH_SHORT).show()
         val gen = generation
         probeExecutor.execute {
             val started = android.os.SystemClock.elapsedRealtime()
@@ -1639,8 +1640,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     currentBarText?.text = currentSourceBarText()
                 }
                 probeSummary?.text = probeSummaryText()
-                Toast.makeText(activity,
-                    if(result.ok) "「${source.name}」可连接 · ${cost}ms" else "「${source.name}」不可用：${result.reason ?: "无响应"}",
+                Toast.makeText(activity, L10n.tr(if(result.ok) "「${source.name}」可连接 · ${cost}ms" else "「${source.name}」不可用：${result.reason ?: "无响应"}"),
                     Toast.LENGTH_LONG).show()
             }
         }
@@ -1654,7 +1654,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             if(remaining.none { it.id == currentId }) store.setCurrent(remaining.firstOrNull()?.id)
             probes.remove(source.id)
             resetBrowseState()
-            Toast.makeText(activity, "已删除「${source.name}」", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("已删除「${source.name}」"), Toast.LENGTH_SHORT).show()
             backupRequest(); rebuild()
         }
     }
@@ -1667,8 +1667,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             probes.clear()
             if(added > 0) {
                 backupRequest(); rebuild()
-                Toast.makeText(activity, "已追加 $added 个源（已有源保持不变）", Toast.LENGTH_LONG).show()
-            } else Toast.makeText(activity, "没有需要新增的源（均已存在或已达上限）", Toast.LENGTH_LONG).show()
+                Toast.makeText(activity, L10n.tr("已追加 $added 个源（已有源保持不变）"), Toast.LENGTH_LONG).show()
+            } else Toast.makeText(activity, L10n.tr("没有需要新增的源（均已存在或已达上限）"), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1700,10 +1700,10 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             val name = nameEdit.text.toString().trim()
             val api = apiEdit.text.toString().trim()
             when {
-                api.isEmpty() -> errorText.text = "请填写接口地址"
-                !api.startsWith("http") -> errorText.text = "接口地址需以 http(s):// 开头"
+                api.isEmpty() -> errorText.text = L10n.tr("请填写接口地址")
+                !api.startsWith("http") -> errorText.text = L10n.tr("接口地址需以 http(s):// 开头")
                 else -> {
-                    errorText.text = "正在探活…"; save.isFocusable = false; save.isEnabled = false
+                    errorText.text = L10n.tr("正在探活…"); save.isFocusable = false; save.isEnabled = false
                     val gen = generation
                     executor.execute {
                         val probe = client.probe(api)
@@ -1711,14 +1711,14 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                             if(gen != generation) return@post
                             if(!probe.ok) { errorText.text = "探活失败：${probe.reason}"; save.isFocusable = true; save.isEnabled = true; return@post }
                             if(sources.size >= ThirdCms.MAX_SOURCES) { errorText.text = "源数量已达上限（${ThirdCms.MAX_SOURCES}）"; return@post }
-                            if(sources.any { it.api == api }) { errorText.text = "该源已存在"; return@post }
+                            if(sources.any { it.api == api }) { errorText.text = L10n.tr("该源已存在"); return@post }
                             val id = "u" + api.hashCode().toUInt().toString()
                             val source = ThirdSource(id, name.ifEmpty { hostOf(api) }, api)
                             store.saveSources(sources + source); store.setCurrent(source.id)
                             probes[source.id] = ProbeState(Dot.OK, probe.total)
                             resetBrowseState()
                             dialog.dismiss()
-                            Toast.makeText(activity, "已添加「${source.name}」", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(activity, L10n.tr("已添加「${source.name}」"), Toast.LENGTH_SHORT).show()
                             backupRequest(); rebuild()
                         }
                     }
@@ -1743,7 +1743,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     apiEdit.setText(api)
                     if(name.isNotEmpty()) nameEdit.setText(name)
                     nameEdit.requestFocus()
-                } else errorText.text = "请输入以 http 开头的接口地址"
+                } else errorText.text = L10n.tr("请输入以 http 开头的接口地址")
             }
         }
         dialog.show()
@@ -1775,8 +1775,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         TvDialog.styleWindow(activity, dialog)
         fun runParse(rawUrl: String) {
             val url = rawUrl.trim()
-            if(!url.startsWith("http")) { errorText.text = "请填写以 http 开头的配置链接"; return }
-            errorText.text = "正在获取配置…"; parse.isFocusable = false; parse.isEnabled = false
+            if(!url.startsWith("http")) { errorText.text = L10n.tr("请填写以 http 开头的配置链接"); return }
+            errorText.text = L10n.tr("正在获取配置…"); parse.isFocusable = false; parse.isEnabled = false
             val gen = generation
             executor.execute {
                 val result = client.importTvbox(url)
@@ -1803,7 +1803,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             )) { values ->
                 val value = values["url"].orEmpty()
                 if(value.startsWith("http")) { urlEdit.setText(value); runParse(value) }
-                else errorText.text = "请输入以 http 开头的配置链接"
+                else errorText.text = L10n.tr("请输入以 http 开头的配置链接")
             }
         }
         dialog.show()
@@ -1928,7 +1928,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             if(duplicated > 0) append("，跳过重复 $duplicated 个")
             if(imported < selected.size) append("，超出上限跳过 ${selected.size - imported - duplicated} 个")
         }
-        Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
+        Toast.makeText(activity, L10n.tr(message), Toast.LENGTH_LONG).show()
         if(imported > 0) backupRequest()
         rebuild()
     }
@@ -2434,7 +2434,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val added = store.toggleFavorite(ThirdFavorite(source.api, source.name, data.video.id, data.video.name, data.video.cover,
             episode, label, progress?.positionMs ?: 0, System.currentTimeMillis()))
         backupRequest()
-        Toast.makeText(activity, if(added) "已收藏《${data.video.name}》" else "已取消收藏", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr(if(added) "已收藏《${data.video.name}》" else "已取消收藏"), Toast.LENGTH_SHORT).show()
         renderDetailRefresh()
     }
 
@@ -2444,7 +2444,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun showSourceSwitcher(data: ThirdDetail) {
         val ordered = sources.filter { it.api != detailSource?.api }
             .sortedBy { if(probes[it.id]?.dot == Dot.DEAD) 1 else 0 }
-        if(ordered.isEmpty()) { Toast.makeText(activity, "没有其它片源可切换", Toast.LENGTH_SHORT).show(); return }
+        if(ordered.isEmpty()) { Toast.makeText(activity, L10n.tr("没有其它片源可切换"), Toast.LENGTH_SHORT).show(); return }
         tvTools.choose("换源播放《${data.video.name}》", ordered.map { it.name }, null, { choice ->
             ordered.getOrNull(choice)?.let { target -> switchDetailSource(data, target) }
         })
@@ -2454,7 +2454,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun switchDetailSource(data: ThirdDetail, target: ThirdSource) {
         val gen = generation
         val episode = playEpisode
-        Toast.makeText(activity, "正在「${target.name}」查找《${data.video.name}》…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("正在「${target.name}」查找《${data.video.name}》…"), Toast.LENGTH_SHORT).show()
         executor.execute {
             val result = client.searchPage(target, data.video.name, 1)
             main.post {
@@ -2464,7 +2464,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 val matched = page?.details?.firstOrNull { ThirdCms.searchKey(it.video.name, it.year) == key }
                     ?: page?.details?.firstOrNull()
                 if(matched == null) {
-                    Toast.makeText(activity, "「${target.name}」暂未找到这部影片", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, L10n.tr("「${target.name}」暂未找到这部影片"), Toast.LENGTH_SHORT).show()
                     return@post
                 }
                 openDetail(matched, target)
@@ -2473,7 +2473,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                     val size = matched.groups.getOrNull(detailGroup)?.second?.size ?: 0
                     if(size > 0) { playEpisode = episode.coerceAtMost(size - 1); renderDetailRefresh() }
                 }
-                Toast.makeText(activity, "已切换到「${target.name}」", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("已切换到「${target.name}」"), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -2527,7 +2527,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             pendingStartMs = positionMs
             pendingAutoplay = true
             hasPendingPlay = true
-            Toast.makeText(activity, "当前线路太慢，已切换线路「${data.groups[next].first}」", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("当前线路太慢，已切换线路「${data.groups[next].first}」"), Toast.LENGTH_SHORT).show()
             // 先让本轮回调结束，再释放旧播放器，避免在播放器回调栈里 release
             main.post { if(mode == Mode.PLAY) rebuild() }
         } else {
@@ -2550,7 +2550,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val episode = playEpisode
         val group = playGroup
         val key = ThirdCms.searchKey(data.video.name, data.year)
-        Toast.makeText(activity, "当前片源太慢，正在尝试其它片源…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("当前片源太慢，正在尝试其它片源…"), Toast.LENGTH_SHORT).show()
         executor.execute {
             var found: ThirdSearchHit? = null
             for(target in targets) {
@@ -2573,7 +2573,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 pendingStartMs = positionMs
                 pendingAutoplay = true
                 hasPendingPlay = true
-                Toast.makeText(activity, "已自动切换到片源「${hit.source.name}」", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("已自动切换到片源「${hit.source.name}」"), Toast.LENGTH_SHORT).show()
                 rebuild()
             }
         }
@@ -2583,7 +2583,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun showSlowHint() {
         if(stallAdviceShown) return
         stallAdviceShown = true
-        Toast.makeText(activity, "当前片源网速太慢，已尝试全部线路；建议返回详情手动切换片源", Toast.LENGTH_LONG).show()
+        Toast.makeText(activity, L10n.tr("当前片源网速太慢，已尝试全部线路；建议返回详情手动切换片源"), Toast.LENGTH_LONG).show()
     }
 
     private fun attachPlayer(startMs: Long, autoplay: Boolean) {
@@ -2651,7 +2651,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val startMark = store.skipMark(skipKey(data.video.id))
         if(startMs <= 0L && (startMark?.intro ?: 0) > 0) {
             instance.seekTo(startMark!!.intro * 1000L)
-            Toast.makeText(activity, "已跳过片头 ${startMark.intro} 秒", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("已跳过片头 ${startMark.intro} 秒"), Toast.LENGTH_SHORT).show()
         }
         outroTriggered = false
         main.removeCallbacks(outroTick)
@@ -2846,7 +2846,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         store.playbackSpeed = next
         player?.setPlaybackSpeed(next)
         button.text = "倍速 ${PlaybackSpeed.label(next)}"
-        Toast.makeText(activity, "播放速度 ${PlaybackSpeed.label(next)}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("播放速度 ${PlaybackSpeed.label(next)}"), Toast.LENGTH_SHORT).show()
     }
 
     /** 画面比例循环：适应(原始比例) → 拉伸(满屏) → 裁剪(去黑边)，本机记忆。 */
@@ -2855,7 +2855,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         store.resizeMode = next
         playerView?.resizeMode = resizeModeValue(next)
         button.text = "比例 ${resizeModeLabel(next)}"
-        Toast.makeText(activity, "画面比例：${resizeModeLabel(next)}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("画面比例：${resizeModeLabel(next)}"), Toast.LENGTH_SHORT).show()
     }
 
     private fun resizeModeLabel(mode: Int) = when(mode) { 1 -> "拉伸"; 2 -> "裁剪"; else -> "适应" }
@@ -2943,11 +2943,11 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
                 1 -> pickSkipSeconds(anchor, "跳过片尾") { seconds ->
                     store.setSkipMark(key, ThirdSkipMark(mark.intro, seconds))
                     outroTriggered = false
-                    Toast.makeText(activity, if(seconds > 0) "片尾将跳过最后 $seconds 秒" else "已关闭片尾跳过", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, L10n.tr(if(seconds > 0) "片尾将跳过最后 $seconds 秒" else "已关闭片尾跳过"), Toast.LENGTH_SHORT).show()
                 }
                 else -> {
                     store.setSkipMark(key, null)
-                    Toast.makeText(activity, "已关闭片头片尾跳过", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, L10n.tr("已关闭片头片尾跳过"), Toast.LENGTH_SHORT).show()
                 }
             }
         })
@@ -2965,7 +2965,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val instance = player ?: return
         val target = seconds * 1000L
         if(instance.currentPosition < target) instance.seekTo(target)
-        Toast.makeText(activity, "已跳过片头 $seconds 秒", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr("已跳过片头 $seconds 秒"), Toast.LENGTH_SHORT).show()
     }
 
     /** 每秒检查一次片尾：到达片尾窗口且正在播放时自动跳下一集，只触发一次。 */
@@ -2981,7 +2981,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         outroTriggered = true
         val episodes = data.groups.getOrNull(playGroup)?.second ?: return
         if(playEpisode + 1 < episodes.size) {
-            Toast.makeText(activity, "已跳过片尾，播放下一集", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("已跳过片尾，播放下一集"), Toast.LENGTH_SHORT).show()
             jumpEpisode(1)
         } else showOverlay()
     }
@@ -3039,7 +3039,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         val added = store.toggleFavorite(ThirdFavorite(source.api, source.name, data.video.id, data.video.name, data.video.cover,
             playEpisode, label, player?.currentPosition ?: 0, System.currentTimeMillis()))
         backupRequest()
-        Toast.makeText(activity, if(added) "已收藏《${data.video.name}》" else "已取消收藏", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, L10n.tr(if(added) "已收藏《${data.video.name}》" else "已取消收藏"), Toast.LENGTH_SHORT).show()
         updatePointerRow()
     }
 
@@ -3155,7 +3155,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
             main.post {
                 if(gen != generation) return@post
                 val data = result ?: run {
-                    Toast.makeText(activity, "「${entry.title}」暂时打不开，可在片源里重新搜索", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, L10n.tr("「${entry.title}」暂时打不开，可在片源里重新搜索"), Toast.LENGTH_SHORT).show()
                     return@post
                 }
                 val progress = store.progress(source.id, entry.videoId)
@@ -3206,7 +3206,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
      */
     fun remotePlayTitle(word: String, episode: Int = 0): Boolean {
         if(currentSource() == null) {
-            Toast.makeText(activity, "先选一个片源，再搜「$word」", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("先选一个片源，再搜「$word」"), Toast.LENGTH_SHORT).show()
             return false
         }
         if(mode == Mode.PLAY) { saveProgressNow(); releasePlayback() }
@@ -3241,7 +3241,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
         if(wantEpisode > 0) {
             val count = picked.groups.getOrNull(group)?.second?.size ?: 0
             if(wantEpisode > count) {
-                Toast.makeText(activity, "「${picked.video.name}」只有 $count 集", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("「${picked.video.name}」只有 $count 集"), Toast.LENGTH_SHORT).show()
                 return true
             }
             playEpisode(group, wantEpisode - 1, 0L)
@@ -3285,8 +3285,8 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun jumpEpisode(direction: Int) {
         val episodes = detail?.groups?.getOrNull(playGroup)?.second ?: return
         val next = playEpisode + direction
-        if(next < 0) { Toast.makeText(activity, "已是第一集", Toast.LENGTH_SHORT).show(); return }
-        if(next >= episodes.size) { Toast.makeText(activity, "已是最后一集", Toast.LENGTH_SHORT).show(); return }
+        if(next < 0) { Toast.makeText(activity, L10n.tr("已是第一集"), Toast.LENGTH_SHORT).show(); return }
+        if(next >= episodes.size) { Toast.makeText(activity, L10n.tr("已是最后一集"), Toast.LENGTH_SHORT).show(); return }
         playEpisode(playGroup, next)
     }
 
@@ -3380,7 +3380,7 @@ class ThirdSourceScreen(private val activity: Activity, private val rebuild: () 
     private fun rounded(color: Int, border: Int = Color.TRANSPARENT, radius: Int = 10) =
         TvStyle.shape(activity, color, border, radius)
     private fun text(value: String, size: Float = 16f, color: Int = TvStyle.text) = TextView(activity).apply {
-        text = value; textSize = size; setTextColor(color); includeFontPadding = false
+        text = L10n.tr(value); textSize = size; setTextColor(color); includeFontPadding = false
     }
     private fun column() = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
     private fun row() = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }

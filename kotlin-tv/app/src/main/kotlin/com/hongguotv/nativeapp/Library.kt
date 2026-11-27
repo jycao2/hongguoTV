@@ -272,6 +272,10 @@ class Library(context: Context) {
     var railOrder: String
         get() = prefs.getString("railOrder", "") ?: ""
         set(value) { prefs.edit().putString("railOrder", value).apply() }
+    /** 界面语言（2026-11-26）：zh/tw/en，空=跟随系统。随备份迁移；切换后需重启生效。 */
+    var language: String
+        get() = prefs.getString("language", null)?.takeIf { it in L10n.SUPPORTED || it == L10n.FOLLOW_SYSTEM } ?: L10n.FOLLOW_SYSTEM
+        set(value) { prefs.edit().putString("language", value).apply() }
     /** 排行榜「上新」视图上次用的时间窗：记住偏好，下次进区不用重新选。本机偏好，不进备份。 */
     var newReleaseWindow: String
         get() = prefs.getString("newReleaseWindow", null).orEmpty()
@@ -320,7 +324,8 @@ class Library(context: Context) {
             dpadUpDownAction = extra["dpadUpDownAction"] as? String ?: s.dpadUpDownAction,
             mouseRightAction = extra["mouseRightAction"] as? String ?: s.mouseRightAction,
             favoriteSort = extra["favoriteSort"] as? String ?: s.favoriteSort,
-            railOrder = extra["railOrder"] as? String ?: s.railOrder))
+            railOrder = extra["railOrder"] as? String ?: s.railOrder,
+            language = extra["language"] as? String ?: s.language))
     }
 
     /** 由 MainActivity 注入：播放器键位偏好（playback-extras-v1）与收藏排序随备份写出/恢复。 */

@@ -475,6 +475,36 @@
 (function(){
   "use strict";
   var token = location.pathname.split("/").filter(Boolean)[0] || "";
+
+  // ---- 多语言（2026-11-26）----
+  // 字典由电视端 /i18n 下发（与电视界面语言一致）；缺词条时原样显示中文，永不空。
+  var I18N = { lang: "zh", dict: {} };
+  function tr(s){
+    if(!s) return s;
+    return I18N.dict[s] || s;
+  }
+  function loadI18n(){
+    if(!token) return;
+    fetch("/" + token + "/i18n").then(function(r){ return r.json(); }).then(function(d){
+      if(d && d.dict){ I18N.lang=d.lang||"zh"; I18N.dict=d.dict; translateStatic(); }
+    }).catch(function(){});
+  }
+  // 静态 DOM 文案：只替换「整个文本节点就是一条已登记文案」的情况，避免误伤混合内容。
+  function translateStatic(){
+    var skip={SCRIPT:1,STYLE:1};
+    function walk(node){
+      if(node.nodeType===3){
+        var raw=node.nodeValue.trim();
+        if(raw && I18N.dict[raw]) node.nodeValue=node.nodeValue.replace(raw,I18N.dict[raw]);
+        return;
+      }
+      if(node.nodeType!==1 || skip[node.tagName]) return;
+      if(node.hasAttribute("data-no-i18n")) return;
+      for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
+    }
+    walk(document.body);
+  }
+  loadI18n();
   // 每次加载生成一个会话标识。被顶替的旧页面如果还在发命令，服务端靠它对上号直接丢弃，
   // 否则旧页面的大 seq 会把新页面的水位线抬高，新手机之后每条命令都被判成过期。
   // 注：在线设备数由电视端按客户端内网 IP 去重，所以同一台手机的多标签/多浏览器只算一台，
@@ -1036,6 +1066,13 @@
       ["打开网络代理 / 关闭网络代理", "按已保存的配置开关"],
       ["网络代理", "在开 / 关之间切换"],
       ["代理状态", "播报当前开关与地址"],
+    ]},
+    { name: "English / 英文指令", rows: [
+      ["next episode / previous", "下一集 / 上一集"],
+      ["pause / resume", "暂停 / 继续"],
+      ["episodes / playback settings", "选集 / 播放设置"],
+      ["settings / search / home", "打开对应页面"],
+      ["skip intro / favorite", "跳过片头 / 收藏"],
     ]},
   ];
   (function buildCmds(){

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
+import java.util.Locale
+
 /**
  * 一句话 → 遥控命令。
  *
@@ -269,9 +271,62 @@ object VoiceIntent {
      *
      * @return null 表示「不像任何能执行的东西」——调用方应当什么都不做，而不是猜。
      */
+    /** 英文指令词表（2026-11-26）：英文界面下用英文语音/文字遥控。
+     *  独立匹配、优先于中文路径——英文句子走中文的 fuzzy/语气词逻辑会被当成剧名去搜索。 */
+    private data class EnRule(val words: List<String>, val command: RemoteCommand, val echo: String)
+    private val EN_RULES: List<EnRule> = listOf(
+        EnRule(listOf("next episode", "next", "skip episode"), RemoteCommand.Act("play.next"), "Next episode"),
+        EnRule(listOf("previous episode", "prev episode", "last episode", "previous", "prev"), RemoteCommand.Act("play.prev"), "Previous episode"),
+        EnRule(listOf("pause", "play pause", "stop playing"), RemoteCommand.Act("play.toggle"), "Paused"),
+        EnRule(listOf("resume", "continue playing", "play"), RemoteCommand.Act("play.toggle"), "Resumed"),
+        EnRule(listOf("episodes", "episode list", "open episodes"), RemoteCommand.Act("panel.episodes"), "Episodes"),
+        EnRule(listOf("playback settings", "quick panel", "settings panel"), RemoteCommand.Act("panel.quick"), "Quick panel"),
+        EnRule(listOf("skip intro", "skip the intro"), RemoteCommand.Act("skip.intro"), "Intro skipped"),
+        EnRule(listOf("exit player", "close player", "stop watching", "go back to details"), RemoteCommand.Act("player.close"), "Exited player"),
+        EnRule(listOf("faster", "speed up", "increase speed"), RemoteCommand.Act("speed.up"), "Speed up"),
+        EnRule(listOf("slower", "speed down", "decrease speed"), RemoteCommand.Act("speed.down"), "Speed down"),
+        EnRule(listOf("toggle danmaku", "danmaku", "comments on screen"), RemoteCommand.Act("danmaku.toggle"), "Danmaku toggled"),
+        EnRule(listOf("favorite", "add to favorites", "toggle favorite"), RemoteCommand.Act("favorite.toggle"), "Favorite toggled"),
+        EnRule(listOf("continue watching", "resume watching", "watch history"), RemoteCommand.Act("resume.latest"), "Resuming"),
+        EnRule(listOf("check for updates", "check updates"), RemoteCommand.Act("update.check"), "Checking for updates"),
+        EnRule(listOf("toggle theme", "switch theme", "change theme"), RemoteCommand.Act("theme.toggle"), "Theme switched"),
+        EnRule(listOf("dark theme", "night mode"), RemoteCommand.Act("theme.set", "dark"), "Dark theme"),
+        EnRule(listOf("light theme", "day mode"), RemoteCommand.Act("theme.set", "light"), "Light theme"),
+        EnRule(listOf("show clock", "toggle clock"), RemoteCommand.Act("clock.toggle"), "Clock toggled"),
+        EnRule(listOf("clear cache"), RemoteCommand.Act("cache.clear"), "Cache cleared"),
+        EnRule(listOf("preview screensaver", "preview screensaver"), RemoteCommand.Act("saver.preview"), "Screensaver preview"),
+    ).sortedByDescending { it.words.maxOf { w -> w.length } }
+
+    /** 英文导航词 → 模块。 */
+    private val EN_MODULES = listOf(
+        "home page" to "home", "home" to "home",
+        "search page" to "search", "search" to "search",
+        "rankings" to "rank", "ranking" to "rank",
+        "favorites" to "favorite", "my favorites" to "favorite",
+        "watch history" to "history", "history" to "history",
+        "settings" to "settings",
+        "sources" to "source", "source" to "source",
+        "local library" to "library", "library" to "library",
+    ).sortedByDescending { it.first.length }
+
+    /** 英文回执按当前界面语言翻译（英文界面直接是英文；中文界面下仍回中文）。 */
+    private fun echo(text: String): String = L10n.tr(text)
+
     fun parse(raw: String): Plan? {
         val text = normalize(raw)
         if(text.length < 2) return null
+
+        // 0. 英文指令：纯 ASCII 且命中英文词表时直接返回，避免被中文路径当剧名搜索。
+        if(text.all { it.code < 128 }) {
+            val lower = text.lowercase(Locale.ROOT)
+            EN_RULES.firstOrNull { rule -> rule.words.any { lower == it || lower.endsWith(" $it") } }
+                ?.let { return Plan(it.command, echo(it.echo)) }
+            EN_MODULES.firstOrNull { (word, _) -> lower == word || lower.endsWith(" $word") }
+                ?.let { return Plan(RemoteCommand.Open(it.second), when (L10n.current()) {
+                    L10n.EN -> "Opening ${it.second}"
+                    else -> "打开${it.second}"
+                }) }
+        }
 
         // 「认动作」用剥过语气词的形式；「认剧名」用原句，避免把真片名开头剥掉
         val bare = stripPoliteness(text)

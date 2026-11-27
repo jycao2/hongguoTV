@@ -11,7 +11,9 @@
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths"/>
         </provider>
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTop">
+        <!-- 最近任务标题：TCL 的 TaskManager 不读运行时 setTaskDescription，只认 ActivityInfo 的 label，
+             缺 label 时会回退显示 Activity 全限定类名（com.hongguotv.nativeapp.MainActivity）。 -->
+        <activity android:name=".MainActivity" android:label="@string/app_name" android:exported="true" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTop">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/></intent-filter>
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>

@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import com.hongguotv.core.L10n
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageView
@@ -113,22 +114,24 @@ object TvDialog {
             setPadding(dp(activity, 28), dp(activity, 24), dp(activity, 28), dp(activity, 20))
         }
         card.addView(content)
+        // 弹窗内容常常是拼装出来的，统一兜底翻译一次（见 UiL10n）
+        card.post { UiL10n.apply(card) }
         pendingCard = card
         return card
     }
 
-    /** 弹窗标题：20sp 加粗，底部留间距。 */
+    /** 弹窗标题：20sp 加粗，底部留间距。文案统一走 L10n.tr 翻译。 */
     fun title(activity: Activity, text: String): TextView = TextView(activity).apply {
-        this.text = text
+        this.text = L10n.tr(text)
         textSize = 20f
         setTypeface(null, android.graphics.Typeface.BOLD)
         setTextColor(TvStyle.text)
         setPadding(0, 0, 0, dp(activity, 14))
     }
 
-    /** 弹窗正文/说明：15sp，muted 色，行高舒适。 */
+    /** 弹窗正文/说明：15sp，muted 色，行高舒适。文案统一走 L10n.tr 翻译。 */
     fun body(activity: Activity, text: String): TextView = TextView(activity).apply {
-        this.text = text
+        this.text = L10n.tr(text)
         textSize = 15f
         setTextColor(TvStyle.muted)
         setLineSpacing(0f, 1.25f)
@@ -183,7 +186,7 @@ object TvDialog {
         val dp = { v: Int -> dp(activity, v) }
         val corner = dp(radiusDp).toFloat()
         return Button(activity).apply {
-            this.text = text
+            this.text = L10n.tr(text)
             textSize = if(compact) 13f else 15f
             setTextColor(TvStyle.text)
             minHeight = dp(if(compact) 34 else 44)

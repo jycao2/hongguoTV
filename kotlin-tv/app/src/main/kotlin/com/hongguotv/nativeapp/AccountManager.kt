@@ -228,11 +228,11 @@ class AccountManager(private val context: Context, private val library: Library)
                         cloudHistory = rows.distinctBy { it.series.id }
                             .sortedByDescending { it.updatedAt }
                         historyLoaded = true
-                        status = "已读取 ${cloudHistory.size} 部云端观看记录"
+                        status = L10n.trFmt("已读取 {0} 部云端观看记录", cloudHistory.size)
                         changed()
                     }
                     .onFailure { error ->
-                        status = "云端历史读取失败：${safeError(error)}"
+                        status = L10n.trFmt("云端历史读取失败：{0}", safeError(error))
                         changed()
                     }
                 onDone?.invoke()
@@ -267,12 +267,12 @@ class AccountManager(private val context: Context, private val library: Library)
                         favoritesLoaded = true
                         val suspects = reconcileCloudFavorites(rows)
                         val updates = library.updatedCloudFavorites() + library.cloudNewCount()
-                        status = "已读取 ${cloudFavorites.size} 部云端收藏" + if (updates > 0) "，$updates 部有更新" else ""
+                        status = L10n.trFmt("已读取 {0} 部云端收藏", cloudFavorites.size) + if (updates > 0) L10n.trFmt("，{0} 部有更新", updates) else ""
                         changed()
                         scheduleSeasonChecks(suspects)
                     }
                     .onFailure { error ->
-                        status = "云端收藏读取失败：${safeError(error)}"
+                        status = L10n.trFmt("云端收藏读取失败：{0}", safeError(error))
                         changed()
                     }
                 onDone?.invoke()
@@ -365,8 +365,8 @@ class AccountManager(private val context: Context, private val library: Library)
                     favoritesLoaded = true
                     reconcileCloudFavorites(rows)
                 }
-                status = if (failed > 0) "收藏同步完成：上传 $pushed 部，失败 $failed 部"
-                else "收藏同步完成：上传 $pushed 部，跳过 $skipped 部"
+                status = if (failed > 0) L10n.trFmt("收藏同步完成：上传 {0} 部，失败 {1} 部", pushed, failed)
+                else L10n.trFmt("收藏同步完成：上传 {0} 部，跳过 {1} 部", pushed, skipped)
                 onDone(pushed, skipped, failed)
             }
         }
@@ -439,8 +439,8 @@ class AccountManager(private val context: Context, private val library: Library)
                     uploaded.forEach { merged[it.series.id] = it }
                     cloudHistory = merged.values.sortedByDescending { it.updatedAt }
                 }
-                status = if (failed > 0) "同步完成：上传 $pushed 部，失败 $failed 部"
-                else "同步完成：上传 $pushed 部，跳过 $skipped 部"
+                status = if (failed > 0) L10n.trFmt("同步完成：上传 {0} 部，失败 {1} 部", pushed, failed)
+                else L10n.trFmt("同步完成：上传 {0} 部，跳过 {1} 部", pushed, skipped)
                 // 手动同步完成只回传计数给调用方弹 Toast/Dialog，不触发 onAccountChanged 重建页面
                 Log.i("HongguoTV", "syncLocalToCloud invoking onDone($pushed,$skipped,$failed)")
                 onDone(pushed, skipped, failed)
@@ -468,8 +468,8 @@ class AccountManager(private val context: Context, private val library: Library)
                     1 -> syncLocalToCloud { pushed, skipped, failed ->
                         toast(
                             when {
-                                failed > 0 -> "同步完成：上传 $pushed 部，失败 $failed 部"
-                                pushed > 0 -> "已上传 $pushed 部到云端${if (skipped > 0) "，$skipped 部云端已是最新" else ""}"
+                                failed > 0 -> L10n.trFmt("同步完成：上传 {0} 部，失败 {1} 部", pushed, failed)
+                                pushed > 0 -> L10n.trFmt("已上传 {0} 部到云端", pushed) + if (skipped > 0) L10n.trFmt("，{0} 部云端已是最新", skipped) else ""
                                 else -> "云端已是最新，无需上传"
                             }
                         )
@@ -708,7 +708,7 @@ class AccountManager(private val context: Context, private val library: Library)
             inputType =
                 if (numeric) android.text.InputType.TYPE_CLASS_NUMBER
                 else android.text.InputType.TYPE_CLASS_PHONE
-            hint = if (numeric) "6 位数字" else "13800138000 或 +区号 号码"
+            hint = L10n.tr(if (numeric) "6 位数字" else "13800138000 或 +区号 号码")
             textSize = 16f
             setTextColor(TvStyle.text)
             setHintTextColor(TvStyle.muted)
@@ -762,7 +762,7 @@ class AccountManager(private val context: Context, private val library: Library)
         generation++
         status = "已登录，正在读取云端历史…"
         changed()
-        toast("已登录 ${account.nickname}")
+        toast(L10n.trFmt("已登录 {0}", account.nickname))
         refreshHistory()
         refreshFavorites()
     }
@@ -811,7 +811,7 @@ class AccountManager(private val context: Context, private val library: Library)
     }
 
     private fun toast(value: String) {
-        if (!closed) Toast.makeText(context, value, Toast.LENGTH_LONG).show()
+        if (!closed) Toast.makeText(context, L10n.tr(value), Toast.LENGTH_LONG).show()
     }
 
     private fun safeError(error: Throwable) = when (error) {
@@ -828,14 +828,14 @@ class AccountManager(private val context: Context, private val library: Library)
     fun checkAccountHealth(): String {
         val cred = credentials ?: return "未登录，跳过"
         val user = client.profile(cred)
-        return "登录态有效 · ${user.nickname}"
+        return L10n.trFmt("登录态有效 · {0}", user.nickname)
     }
 
     /** 检测云端历史接口：同步调 history 接口；未登录直接返回提示。 */
     fun checkCloudHistory(): String {
         val cred = credentials ?: return "未登录，跳过"
         val rows = client.history(cred)
-        return "返回 ${rows.size} 条云端观看记录"
+        return L10n.trFmt("返回 {0} 条云端观看记录", rows.size)
     }
 
     // ——— 行为上报（官方推荐画像）：与手机版同口径的最小风险方案 ———

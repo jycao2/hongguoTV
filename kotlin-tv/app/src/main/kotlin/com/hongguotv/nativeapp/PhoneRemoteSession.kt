@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.hongguotv.core.L10n
 import com.hongguotv.core.LanRemoteHub
 import com.hongguotv.core.RemoteController
 import com.hongguotv.core.RemoteTarget
@@ -70,6 +71,13 @@ class PhoneRemoteSession(
     init {
         // 实际绑定的端口可能因为被占用而变了，回写以便下次优先用这个
         RemoteAccess.port = hub.port
+        // 多语言字典（2026-11-26）：手机遥控页通过 /i18n 取当前语言词条，跟随 TV 的界面语言
+        hub.i18nProvider = {
+            val lang = L10n.current()
+            val dict = org.json.JSONObject()
+            L10n.dictionary(lang).forEach { (k, v) -> dict.put(k, v) }
+            org.json.JSONObject().put("lang", lang).put("dict", dict).toString()
+        }
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

@@ -3,6 +3,7 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.ActivityManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -631,7 +632,7 @@ class MainActivity: Activity() {
                     if(p.duration>0 && remaining in 0..outroSkipSeconds*1000L) {
                         outroTriggered=true
                         if(library.autoNext && episodeIndex<data.episodes.lastIndex) {
-                            Toast.makeText(this@MainActivity,"已跳过片尾，播放下一集",Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity,L10n.tr("已跳过片尾，播放下一集"),Toast.LENGTH_SHORT).show()
                             playEpisode(episodeIndex+1,savedPosition(episodeIndex+1))
                         } else if(continueToNextSeason()) { /* season jump in progress */ }
                     }
@@ -663,10 +664,18 @@ class MainActivity: Activity() {
     /** 「名称  ·  值」整串刷新：SettingRow 拆到左右两侧，HUD 按钮（TextView）保持整串原样（规范 §6.1）。 */
     private fun View?.setValueLabel(label: String) = SettingRow.setValueLabel(this,label)
     private fun rounded(color: Int,border: Int=Color.TRANSPARENT)=TvStyle.shape(this,color,border)
-    private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
+    /** UI 文案出口统一走 [L10n.tr]：简体原样、繁中字典转换、英文词条替换；未收录的自动回退中文。
+     *  集中在这一层拦截，几千处调用点无需逐个改。 */
+    /**
+     * 通用文本。用 [LocalizedTextView] 而不是裸 TextView：页面里大量文案是加载完才回填的
+     * （榜单副标题、状态行、计数），构建时那一遍 [UiL10n.apply] 扫不到，只能靠控件自己兜。
+     */
+    private fun text(value: String,size: Float=16f,color: Int=white)=LocalizedTextView(this).apply { text=L10n.tr(value); textSize=size; setTextColor(color); includeFontPadding=false }
+    /** 会「后改文案」的控件用它：弹窗状态行、进度提示在建好之后才 setText，构建时的那遍翻译扫不到。 */
+    private fun textLive(value: String,size: Float=16f,color: Int=white)=LocalizedTextView(this).apply { text=L10n.tr(value); textSize=size; setTextColor(color); includeFontPadding=false }
     /** 顶栏纯文字 tab：无按钮背景，选中/聚焦用强调色 */
     private fun tabLabel(label: String,selected: Boolean,onClick: ()->Unit): TextView = TextView(this).apply {
-        text=label; textSize=15f; isFocusable=true; isClickable=true
+        text=L10n.tr(label); textSize=15f; isFocusable=true; isClickable=true
         setTextColor(if(selected) accent else muted); includeFontPadding=false
         setPadding(dp(14),dp(8),dp(14),dp(8))
         setOnClickListener { onClick() }
@@ -731,8 +740,19 @@ class MainActivity: Activity() {
         val view=button(label,selected,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
     }
     override fun onCreate(state: Bundle?) {
-        TvStyle.apply(getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).getString("theme", null))
+        val bootPrefs=getSharedPreferences("native-library-v1", Context.MODE_PRIVATE)
+        TvStyle.apply(bootPrefs.getString("theme", null))
+        // 多语言：手动选择优先，未选（空串）跟随系统 Locale。core 不依赖 Android，
+        // 这里把系统语言解析注入进去；切换语言后由设置页触发 recreate() 重建全部文案。
+        L10n.configure(bootPrefs.getString("language", null))
         super.onCreate(state)
+        // 最近任务卡片显式设标签：部分电视 ROM（TCL）不读 application label，
+        // taskDescription.label 为 null 时回退显示组件名（com.hongguotv.nativeapp.M…）。
+        // 2026-11-27 再加两层保险：window title（部分 ROM 的 recents 取它）+ manifest 的
+        // activity 级 android:label，避免只依赖 TaskDescription 一种来源。
+        val appLabel=getString(R.string.app_name)
+        setTaskDescription(ActivityManager.TaskDescription(appLabel))
+        title=appLabel
         // 系统风格 / 界面缩放切换触发的重建：把原页面和焦点带回来
         if(PageRestore.tab>=0) {
             tab=PageRestore.tab
@@ -780,12 +800,13 @@ class MainActivity: Activity() {
             mapOf("autoSkip" to extras.autoSkipUnplayable,"seekStep" to extras.seekStepSeconds,"fastSpeed" to extras.longPressSpeed,
                 "menuKeyAction" to extras.menuKeyAction,"dpadUpDownAction" to extras.dpadUpDownAction,
                 "mouseRightAction" to extras.mouseRightAction,"favoriteSort" to library.favoriteSort,
-                "railOrder" to library.railOrder)
+                "railOrder" to library.railOrder,"language" to library.language)
         }
         library.extrasRestore={ s ->
             extras.autoSkipUnplayable=s.autoSkip; extras.seekStepSeconds=s.seekStep; extras.longPressSpeed=s.fastSpeed
             extras.menuKeyAction=s.menuKeyAction; extras.dpadUpDownAction=s.dpadUpDownAction; extras.mouseRightAction=s.mouseRightAction
             library.favoriteSort=s.favoriteSort; library.railOrder=s.railOrder
+            library.language=s.language
         }
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -834,7 +855,7 @@ class MainActivity: Activity() {
             localPermissionContinuation={ restoreLocalBackup(done) }
             if(!storage.request(this)) {
                 localPermissionContinuation=null; library.localRestoreChecked=true
-                Toast.makeText(this,"当前设备无法授予存储权限，可在设置中使用手机备份迁移",Toast.LENGTH_LONG).show()
+                Toast.makeText(this,L10n.tr("当前设备无法授予存储权限，可在设置中使用手机备份迁移"),Toast.LENGTH_LONG).show()
                 done()
             }
         }.also { it.setOnDismissListener { library.localRestoreChecked=true; done() }; it.show() }
@@ -849,7 +870,7 @@ class MainActivity: Activity() {
                     favoriteMonitor.stop()
                     library.applyLocalBackup(data!!)
                     tabState.clear(); tabFocus.clear(); catalogFocus=""; page=1
-                    Toast.makeText(this,"已从本机备份恢复收藏与记录",Toast.LENGTH_LONG).show()
+                    Toast.makeText(this,L10n.tr("已从本机备份恢复收藏与记录"),Toast.LENGTH_LONG).show()
                 }
                 library.localRestoreChecked=true
                 library.maybeBackupOnStartup()
@@ -884,7 +905,7 @@ class MainActivity: Activity() {
                 if(needsPermission) requestLocalBackupPermission(anchor) else localBackupAction(anchor)
             } else {
                 library.localBackupEnabled=false; anchor.setValueLabel(localBackupLabel())
-                Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this,L10n.tr("已关闭本地自动备份，已有备份文件保留"),Toast.LENGTH_SHORT).show()
             }
         }).show()
     }
@@ -902,13 +923,13 @@ class MainActivity: Activity() {
         if(!library.localBackup().request(this)) {
             localPermissionContinuation=null
             anchor.setValueLabel(localBackupLabel())
-            Toast.makeText(this,"当前设备无法授予存储权限，请使用手机备份迁移",Toast.LENGTH_LONG).show()
+            Toast.makeText(this,L10n.tr("当前设备无法授予存储权限，请使用手机备份迁移"),Toast.LENGTH_LONG).show()
         }
     }
     private fun backupWithToast(anchor: View) {
         library.backupNow { ok ->
             anchor.setValueLabel(localBackupLabel())
-            Toast.makeText(this,if(ok) "本机备份已更新" else "备份失败，请检查存储权限",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, L10n.tr(if(ok) "本机备份已更新" else "备份失败，请检查存储权限"),Toast.LENGTH_SHORT).show()
         }
     }
     override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
@@ -939,6 +960,10 @@ class MainActivity: Activity() {
         if(title!=null) { val heading=row(); addButton(heading,"‹ 返回") { goBack() }; heading.addView(text(title,22f).apply { setTypeface(null,Typeface.BOLD); gravity=Gravity.CENTER_VERTICAL },lp(0,dp(44)).apply { weight=1f }); container.addView(heading) }
         applyClock()
         applyNetSpeedOverlay()
+        // 页面构建完成后统一兜底翻译一次（见 UiL10n），补上漏包 L10n.tr 的出口；
+        // 再补一次延迟扫描，兜住「构建后才异步到达的数据」填充的卡片文案。
+        root.post { UiL10n.apply(root) }
+        root.postDelayed({ if(root.isAttachedToWindow) UiL10n.apply(root) },900)
         return container
     }
     /** Re-adds the optional top-right clock after every root rebuild; ticks on minute boundaries. */
@@ -988,7 +1013,7 @@ class MainActivity: Activity() {
             override fun run() {
                 val rx=android.net.TrafficStats.getTotalRxBytes()
                 val tx=android.net.TrafficStats.getTotalTxBytes()
-                if(rx<0 || tx<0) netSpeedView?.text="网速 · 当前设备不支持"
+                if(rx<0 || tx<0) netSpeedView?.text=L10n.tr("网速 · 当前设备不支持")
                 else {
                     if(lastRxBytes>=0 && lastTxBytes>=0) {
                         netSpeedView?.text="↓ ${speedLabel(rx-lastRxBytes)}   ↑ ${speedLabel(tx-lastTxBytes)}"
@@ -1085,6 +1110,7 @@ class MainActivity: Activity() {
         cancelLoadingAnim()
         val status=text("正在加载剧集",14f,white).apply { alpha=0.75f }
         val block=column().apply {
+            tag="loading_block"
             gravity=Gravity.CENTER
             addView(ProgressBar(this@MainActivity).apply {
                 isIndeterminate=true
@@ -1102,7 +1128,7 @@ class MainActivity: Activity() {
         val tick=object: Runnable {
             override fun run() {
                 dots=(dots+1)%4
-                status.text="正在加载剧集"+"·".repeat(dots)
+                status.text=L10n.tr("正在加载剧集")+"·".repeat(dots)
                 main.postDelayed(this,420L)
             }
         }
@@ -1113,10 +1139,26 @@ class MainActivity: Activity() {
         loadingDotsAnim?.let { main.removeCallbacks(it) }; loadingDotsAnim=null
         loadingPulseAnim?.cancel(); loadingPulseAnim=null
     }
+    /** 错误页居中块：网络异常图标 + 主文案 + 错误详情 + 重试（用户 2026-11-27）。
+     *  失败路径可能残留 loadingBlock 的转圈与「正在加载剧集」，先连动画带视图一并清掉，
+     *  否则两者叠在一起（第二张图）。 */
     private fun error(parent: LinearLayout,problem: Throwable,retry: ()->Unit) {
-        message(parent,"暂时无法加载，请检查网络后重试。")
+        cancelLoadingAnim()
+        // 只移除加载块，保留标题栏（返回按钮）；从后往前删避免下标错位
+        for(i in parent.childCount-1 downTo 0) if(parent.getChildAt(i).tag=="loading_block") parent.removeViewAt(i)
         val detail=if(problem is java.net.UnknownHostException) "无法连接内容网站" else if(problem is java.net.SocketTimeoutException) "连接超时" else problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
-        parent.addView(text(detail,13f,muted)); addButton(parent,"重试",onClick=retry).requestFocus()
+        // 居中块撑满剩余高度，内容垂直居中（gravity=CENTER 同时管子 view 的横向对齐）
+        val center=column().apply {
+            gravity=Gravity.CENTER
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_network_error); setColorFilter(muted)
+            },lp(-2,-2).apply { bottomMargin=dp(16) })
+            addView(text("暂时无法加载，请检查网络后重试。",19f,white).apply { gravity=Gravity.CENTER })
+            addView(text(L10n.tr(detail),13f,muted).apply { gravity=Gravity.CENTER },lp(-2,-2).apply { topMargin=dp(9) })
+            addView(button(L10n.tr("重试"),true,retry),lp(-2,-2).apply { topMargin=dp(20) })
+        }
+        parent.addView(center,lp(-1,0).apply { weight=1f })
+        (center.getChildAt(center.childCount-1) as? View)?.requestFocus()
     }
     /** 导航栏模块是否被用户隐藏：首页(0) 与设置(5) 始终显示。 */
     private fun navHiddenAt(index: Int): Boolean = when(index) {
@@ -1309,6 +1351,7 @@ class MainActivity: Activity() {
         if(tab==5) {
             // 右上工具固定在行末：留白推开后接手机快传与设置（设置页也需要顶栏工具，否则 nav[5] 不在视图树中）
             top.addView(Space(this),lp(0,1).apply { weight=1f })
+            // 顺序固定为 手机快传 → 遥控 → 设置（设置在最右，用户习惯位置，勿调）
             top.addView(quickTool,lp(-2,-2).apply { rightMargin=dp(8) })
             top.addView(remoteTool,lp(-2,-2).apply { rightMargin=dp(8) })
             top.addView(settingsTool,lp(-2,-2))
@@ -1583,13 +1626,13 @@ class MainActivity: Activity() {
             heading.addView(text(if(tab==3) if(favoriteManage) "管理收藏" else "我的收藏" else "最近观看",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(tab==3 && !favoriteManage) {
                 favoriteCheck=addButton(heading,"检查更新") {
-                    if(favoriteMonitor.running) Toast.makeText(this,"正在检查收藏更新…",Toast.LENGTH_SHORT).show()
-                    else if(library.favorites().isEmpty() && !accountManager.signedIn) Toast.makeText(this,"先收藏几部剧，再来检查更新",Toast.LENGTH_SHORT).show()
+                    if(favoriteMonitor.running) Toast.makeText(this,L10n.tr("正在检查收藏更新…"),Toast.LENGTH_SHORT).show()
+                    else if(library.favorites().isEmpty() && !accountManager.signedIn) Toast.makeText(this,L10n.tr("先收藏几部剧，再来检查更新"),Toast.LENGTH_SHORT).show()
                     else {
                         // 本机收藏逐部查详情；云端收藏顺带对账书架（0 额外请求），两个区一起更新
                         if(library.favorites().isNotEmpty()) favoriteMonitor.check(force=true)
                         if(accountManager.signedIn && !accountManager.isBusy) accountManager.refreshFavorites()
-                        Toast.makeText(this,"开始检查收藏更新…",Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this,L10n.tr("开始检查收藏更新…"),Toast.LENGTH_SHORT).show()
                     }
                 }.apply { nextFocusUpId=nav[tab].id }
                 favoriteManageButton=addButton(heading,"管理") {
@@ -1599,9 +1642,9 @@ class MainActivity: Activity() {
             if(tab==3 && !favoriteManage && accountManager.signedIn) {
                 // 云端收藏与最近观看页同款：只读展示 + 本机收藏手动推云端
                 favoriteCloudRefresh=addButton(heading,"刷新云端收藏") {
-                    if(accountManager.isBusy) Toast.makeText(this,"账号操作进行中，请稍候",Toast.LENGTH_SHORT).show()
+                    if(accountManager.isBusy) Toast.makeText(this,L10n.tr("账号操作进行中，请稍候"),Toast.LENGTH_SHORT).show()
                     else {
-                        Toast.makeText(this,"正在刷新云端收藏…",Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this,L10n.tr("正在刷新云端收藏…"),Toast.LENGTH_SHORT).show()
                         accountManager.refreshFavorites {
                             favoriteCloudRefresh?.takeIf { it.isAttachedToWindow }?.requestFocus()
                         }
@@ -1645,9 +1688,9 @@ class MainActivity: Activity() {
             if(tab==4 && accountManager.signedIn) {
                 // 手动刷新：只重新拉取云端记录，不写本机；云端记录只读，本机记录用右侧按钮上传
                 historyRefresh=addButton(heading,"刷新云端记录") {
-                    if(accountManager.isBusy) Toast.makeText(this,"账号操作进行中，请稍候",Toast.LENGTH_SHORT).show()
+                    if(accountManager.isBusy) Toast.makeText(this,L10n.tr("账号操作进行中，请稍候"),Toast.LENGTH_SHORT).show()
                     else {
-                        Toast.makeText(this,"正在刷新云端记录…",Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this,L10n.tr("正在刷新云端记录…"),Toast.LENGTH_SHORT).show()
                         accountManager.refreshHistory {
                             historyRefresh?.takeIf { it.isAttachedToWindow }?.requestFocus()
                         }
@@ -1759,7 +1802,7 @@ class MainActivity: Activity() {
             }, { result ->
                 if(requestTab==0 && requestPage==1 && requestGenre==null) library.cacheHome(requestType,result.items,result.hasMore)
                 if(requestTab==0 && requestPage==1 && requestGenre==null && (homeFromCache || tvTools.showing || updater.showing)) {
-                    homeScreen?.refresh?.text="热门已更新 · 按确认查看"
+                    homeScreen?.refresh?.text=L10n.tr("热门已更新 · 按确认查看")
                     homeScreen?.refresh?.setOnClickListener { catalog=result.items; hasMore=result.hasMore; ranking=result.ranking; showCatalog() }
                 } else {
                     catalog=result.items; hasMore=result.hasMore; ranking=result.ranking
@@ -1788,7 +1831,7 @@ class MainActivity: Activity() {
                 if(requestTab==1 && searchFocusPending) { searchFocusPending=false; searchInput?.requestFocus() }
                 if(problem is SearchSessionExpiredException) {
                     page=1; catalogFocus=""
-                    Toast.makeText(this,"搜索结果已过期，已回到第 1 页刷新",Toast.LENGTH_LONG).show()
+                    Toast.makeText(this,L10n.tr("搜索结果已过期，已回到第 1 页刷新"),Toast.LENGTH_LONG).show()
                     showCatalog(true)
                 } else {
                     body.removeAllViews()
@@ -2212,10 +2255,10 @@ class MainActivity: Activity() {
             loadingMore=false
             if(problem is SearchSessionExpiredException) {
                 page=1; catalogFocus=""
-                Toast.makeText(this,"搜索结果已过期，已回到第 1 页刷新",Toast.LENGTH_LONG).show()
+                Toast.makeText(this,L10n.tr("搜索结果已过期，已回到第 1 页刷新"),Toast.LENGTH_LONG).show()
                 showCatalog(true)
             } else {
-                Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this,L10n.tr("加载失败，继续浏览会自动重试"),Toast.LENGTH_SHORT).show()
                 catalogAdapter?.updateFooter(FOOTER_ERROR)
                 restoreCatalogFocus()
             }
@@ -2342,8 +2385,8 @@ class MainActivity: Activity() {
             if(getItemViewType(position)==TYPE_FOOTER) { bindFooter(holder.itemView as FrameLayout); return }
             if(getItemViewType(position)==TYPE_MORE) {
                 val card=holder.itemView as LinearLayout
-                (card.getChildAt(1) as TextView).text="查看全部"
-                (card.getChildAt(2) as TextView).text="本机记录"+if(moreTotal>0) " · 共 $moreTotal 部" else ""
+                (card.getChildAt(1) as TextView).text=L10n.tr("查看全部")
+                (card.getChildAt(2) as TextView).text=L10n.tr("本机记录")+if(moreTotal>0) " · 共 $moreTotal 部" else ""
                 card.contentDescription="查看全部本机记录"
                 card.setOnClickListener {
                     // 展开：焦点落在折叠时看不到的第一张卡上，视觉连续
@@ -2408,7 +2451,7 @@ class MainActivity: Activity() {
                 card.contentDescription="$rankLabel，${item.title}，${rankPosition?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"}"
             } else if(cloudRow!=null || cloudFav!=null) {
                 // 云端卡角标：与本机同剧并存时一眼可辨
-                holder.rank.text="云端"
+                holder.rank.text=L10n.tr("云端")
                 holder.rank.setTextColor(white)
                 holder.rank.background=rounded(accent,6)
                 holder.rank.visibility=View.VISIBLE
@@ -2488,7 +2531,7 @@ class MainActivity: Activity() {
         ensureRecommendFeed { ok ->
             if(!ok) {
                 dismissFreeFeedTransition(); feedEntering=false
-                Toast.makeText(this,"推荐暂不可用，稍后再试",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this,L10n.tr("推荐暂不可用，稍后再试"),Toast.LENGTH_SHORT).show()
                 return@ensureRecommendFeed
             }
             if(recommendCursor<0) recommendCursor=0
@@ -2629,11 +2672,11 @@ class MainActivity: Activity() {
     /** ↑↓ 换剧：队列内前后移动，越过尾部自动续拉一页（正常都已被 maybePrefetch 提前拉好）。 */
     private fun switchRecommend(direction: Int) {
         val target=recommendCursor+direction
-        if(target<0) { Toast.makeText(this,"已经是推荐里的第一部了",Toast.LENGTH_SHORT).show(); return }
+        if(target<0) { Toast.makeText(this,L10n.tr("已经是推荐里的第一部了"),Toast.LENGTH_SHORT).show(); return }
         if(target<recommendItems.size) { playRecommend(target); return }
-        if(recommendEnd) { Toast.makeText(this,"推荐刷到底了，返回键回首页",Toast.LENGTH_SHORT).show(); return }
+        if(recommendEnd) { Toast.makeText(this,L10n.tr("推荐刷到底了，返回键回首页"),Toast.LENGTH_SHORT).show(); return }
         loadRecommendFeed { ok ->
-            if(ok && target<recommendItems.size) playRecommend(target) else Toast.makeText(this,"没拉到更多推荐",Toast.LENGTH_SHORT).show()
+            if(ok && target<recommendItems.size) playRecommend(target) else Toast.makeText(this,L10n.tr("没拉到更多推荐"),Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -2641,7 +2684,7 @@ class MainActivity: Activity() {
     private fun nextRecommend() {
         val target=recommendCursor+1
         if(target<recommendItems.size) { playRecommend(target); return }
-        if(recommendEnd) { Toast.makeText(this,"推荐刷到底了，返回键回首页",Toast.LENGTH_SHORT).show(); returnToRecommendPage(); return }
+        if(recommendEnd) { Toast.makeText(this,L10n.tr("推荐刷到底了，返回键回首页"),Toast.LENGTH_SHORT).show(); returnToRecommendPage(); return }
         loadRecommendFeed { ok -> if(ok && target<recommendItems.size) playRecommend(target) else returnToRecommendPage() }
     }
 
@@ -2801,7 +2844,7 @@ class MainActivity: Activity() {
 
     /** 开启本剧连播时给一句提示，避免用户以为「下滑换剧」坏了。 */
     private fun showBingeBadge() {
-        Toast.makeText(this,"已开启本剧连播 · 播完自动下一集",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this,L10n.tr("已开启本剧连播 · 播完自动下一集"),Toast.LENGTH_SHORT).show()
     }
 
     private fun renderHome(body: LinearLayout,focusNav: Boolean,focusType: Boolean,loading: Boolean) {        homeUpdateCount=library.updatedFavorites()
@@ -2877,10 +2920,10 @@ class MainActivity: Activity() {
             val detailIndex=if(grouped) 4 else 3
             when(choice) {
                 0 -> openDetail(series,true)
-                1 -> { val added=library.toggle(series); Toast.makeText(this,if(added) "已收藏" else "已取消收藏",Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,!added && (tab==3 || collection=="updates")); if(added) favoriteMonitor.check() }
-                2 -> { val added=library.toggleLater(series); Toast.makeText(this,if(added) "已加入稍后看" else "已移出稍后看",Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,!added && collection=="later") }
+                1 -> { val added=library.toggle(series); Toast.makeText(this@MainActivity, L10n.tr(if(added) "已收藏" else "已取消收藏"),Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,!added && (tab==3 || collection=="updates")); if(added) favoriteMonitor.check() }
+                2 -> { val added=library.toggleLater(series); Toast.makeText(this@MainActivity, L10n.tr(if(added) "已加入稍后看" else "已移出稍后看"),Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,!added && collection=="later") }
                 3 -> if(grouped) showGroupPicker(series,anchor) else openDetail(series)
-                else -> if(choice==detailIndex) openDetail(series) else if(tab==4 || collection=="resume") manageHistory(series,anchor) else { library.hide(series.id); Toast.makeText(this,"已隐藏热门推荐，可在设置中恢复",Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,true) }
+                else -> if(choice==detailIndex) openDetail(series) else if(tab==4 || collection=="resume") manageHistory(series,anchor) else { library.hide(series.id); Toast.makeText(this,L10n.tr("已隐藏热门推荐，可在设置中恢复"),Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,true) }
             }
         })
     }
@@ -2898,7 +2941,7 @@ class MainActivity: Activity() {
                     invalidMessage="请输入 1—12 个字符的分组名称"
                 )) { values ->
                     val name=values["name"].orEmpty()
-                    if(!library.setGroup(series.id,name)) Toast.makeText(this,"分组数量已达上限或名称无效",Toast.LENGTH_SHORT).show()
+                    if(!library.setGroup(series.id,name)) Toast.makeText(this,L10n.tr("分组数量已达上限或名称无效"),Toast.LENGTH_SHORT).show()
                     apply()
                 }
                 else -> { library.setGroup(series.id,options[index]); apply() }
@@ -3296,7 +3339,7 @@ class MainActivity: Activity() {
             danmakuFont.value=DanmakuPrefs.fontLabel(library.danmakuFont)
             danmakuSpeed.value=DanmakuPrefs.speedLabel(library.danmakuSpeed)
             danmakuRows.value="${library.danmakuRows} 行"
-            Toast.makeText(this,"弹幕设置已恢复默认",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this,L10n.tr("弹幕设置已恢复默认"),Toast.LENGTH_SHORT).show()
         },desc="一键还原上面全部弹幕样式设置，不影响弹幕开关与屏蔽词。",hint="按确认键恢复")
         danmakuPrefRows.addAll(listOf(danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,danmakuReset))
         lateinit var blockedWords: SettingRow
@@ -3323,6 +3366,32 @@ class MainActivity: Activity() {
             labels={ TvStyle.Theme.entries.map { it.label } },
             selectedIndex={ TvStyle.Theme.entries.indexOf(TvStyle.theme) },
             onPick={ i -> val t=TvStyle.Theme.entries[i]; if(t!=TvStyle.theme) { library.theme=t.name; recreateKeepingPage("系统风格") } })
+        // 界面语言（2026-11-26）：手动选 zh/tw/en，或跟随系统。切换后整页重建成新语言。
+        lateinit var languageButton: SettingRow
+        val languageLabels=listOf("跟随系统","简体中文","繁體中文","English")
+        val languageCodes=listOf(L10n.FOLLOW_SYSTEM,L10n.ZH,L10n.TW,L10n.EN)
+        fun languageLabel(): String {
+            val idx=languageCodes.indexOf(library.language).coerceAtLeast(0)
+            return "语言  ·  ${languageLabels[idx]}"
+        }
+        languageButton=setting(look,languageLabel(),{
+            val current=languageCodes.indexOf(library.language).coerceAtLeast(0)
+            tvTools.choose("界面语言",languageLabels.mapIndexed { i,l -> l+(if(i==current) "   ·   当前" else "") },
+                languageButton,{ choice ->
+                    val code=languageCodes[choice]
+                    if(code!=library.language) {
+                        library.language=code
+                        L10n.configure(code)   // 立即生效于后续文案；页面重建后全部刷新
+                        recreateKeepingPage("语言")
+                    }
+                },focusIndex=current)
+        },desc="界面文字语言。未手动选择时跟随电视系统语言；切换后整页重建生效。")
+        withOptions(languageButton,
+            labels={ languageLabels },
+            selectedIndex={ languageCodes.indexOf(library.language).coerceAtLeast(0) },
+            onPick={ i -> val code=languageCodes[i]; if(code!=library.language) {
+                library.language=code; L10n.configure(code); recreateKeepingPage("语言")
+            } })
         lateinit var scaleButton: SettingRow
         scaleButton=setting(look,"界面缩放  ·  ${UiScale.label(this)}",{
             // 档位多了之后循环切换体验差（要按好几次才知道自己到哪一档），改成弹窗直接选
@@ -3494,15 +3563,15 @@ class MainActivity: Activity() {
             selectedIndex={-1},
             onPick={ i ->
                 if(accountManager.isBusy) {
-                    Toast.makeText(this,"账号操作进行中，请稍候",Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this,L10n.tr("账号操作进行中，请稍候"),Toast.LENGTH_SHORT).show()
                 } else if(accountManager.signedIn) when(i) {
                     0 -> accountManager.refreshHistory()
                     1 -> accountManager.syncLocalToCloud { pushed,skipped,failed ->
-                        Toast.makeText(this,when {
+                        Toast.makeText(this@MainActivity, L10n.tr(when {
                             failed>0 -> "同步完成：上传 $pushed 部，失败 $failed 部"
                             pushed>0 -> "已上传 $pushed 部到云端${if(skipped>0) "，$skipped 部云端已是最新" else ""}"
                             else -> "云端已是最新，无需上传"
-                        },Toast.LENGTH_SHORT).show()
+                        }),Toast.LENGTH_SHORT).show()
                     }
                     else -> accountManager.signOut()
                 } else when(i) {
@@ -3554,7 +3623,7 @@ class MainActivity: Activity() {
                 val storage=library.localBackup()
                 if(i==1) {
                     library.localBackupEnabled=false
-                    Toast.makeText(this,"已关闭本地自动备份，已有备份文件保留",Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this,L10n.tr("已关闭本地自动备份，已有备份文件保留"),Toast.LENGTH_SHORT).show()
                 } else when {
                     !library.localBackupEnabled -> {
                         library.localBackupEnabled=true
@@ -3569,7 +3638,7 @@ class MainActivity: Activity() {
         subHeading(device,"本机记录")
         lateinit var hidden: SettingRow
         hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部",{
-            library.unhideAll(); hidden.value="0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
+            library.unhideAll(); hidden.value="0 部"; Toast.makeText(this,L10n.tr("热门推荐已恢复"),Toast.LENGTH_SHORT).show()
         },desc="把之前手动隐藏的热门推荐一次性全部恢复显示。",hint="按确认键恢复")
         lateinit var statsButton: SettingRow
         statsButton=setting(device,"观看统计  ·  本机累计",{ showWatchStats(statsButton) },
@@ -3588,7 +3657,7 @@ class MainActivity: Activity() {
                 main.post {
                     if(isDestroyed) return@post
                     clearCache.value=cacheLabel(remaining).substringAfter("  ·  ")
-                    Toast.makeText(this,"缓存已清理",Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this,L10n.tr("缓存已清理"),Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -3614,7 +3683,7 @@ class MainActivity: Activity() {
         lateinit var crashToggle: SettingRow
         crashToggle=toggleSetting(device,"崩溃日志记录",CrashLogger.enabled(this),{ next ->
             CrashLogger.setEnabled(this,next)
-            Toast.makeText(this,if(next) "已开启：发生崩溃时会记录日志" else "已关闭：不再记录新日志（旧日志保留）",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, L10n.tr(if(next) "已开启：发生崩溃时会记录日志" else "已关闭：不再记录新日志（旧日志保留）"),Toast.LENGTH_SHORT).show()
         },desc="发生崩溃时在本机记录日志，便于排查问题。默认关闭。")
         lateinit var crashExport: SettingRow
         crashExport=setting(device,"导出崩溃日志  ·  手机扫码",{
@@ -3636,11 +3705,11 @@ class MainActivity: Activity() {
             io.execute {
                 CrashLogger.clear(this@MainActivity)
                 val remaining=CrashLogger.sizeBytes(this@MainActivity)
-                main.post { if(!isDestroyed) { crashClear.value=crashLabel(remaining).substringAfter("  ·  "); Toast.makeText(this@MainActivity,"崩溃日志已清理",Toast.LENGTH_SHORT).show() } }
+                main.post { if(!isDestroyed) { crashClear.value=crashLabel(remaining).substringAfter("  ·  "); Toast.makeText(this@MainActivity,L10n.tr("崩溃日志已清理"),Toast.LENGTH_SHORT).show() } }
             }
         }
         crashClear=setting(device,crashLabel(null),{
-            if(CrashLogger.sizeBytes(this)==0L) { Toast.makeText(this,"当前没有崩溃日志",Toast.LENGTH_SHORT).show() }
+            if(CrashLogger.sizeBytes(this)==0L) { Toast.makeText(this,L10n.tr("当前没有崩溃日志"),Toast.LENGTH_SHORT).show() }
             else TvDialog.confirm(this,"清理崩溃日志","删除本机保存的全部崩溃日志文件，不影响其他数据。") { clearCrashNow() }.show()
         },desc="删除本机保存的全部崩溃日志文件，不影响其他数据。",hint="按确认键清理")
         // 三栏：确认动作进右栏选项，不再弹确认框；两栏兜底仍走确认弹窗（用户 2026-11-25）
@@ -3660,7 +3729,7 @@ class MainActivity: Activity() {
                     favoriteMonitor.stop(); library.restore(data,restoreSettings)
                     tabState.clear(); tabFocus.clear(); catalogFocus=""; page=1
                     showCatalog(); favoriteMonitor.check()
-                    Toast.makeText(this,"本机收藏与记录已合并；云端记录请登录账号后拉取",Toast.LENGTH_LONG).show()
+                    Toast.makeText(this,L10n.tr("本机收藏与记录已合并；云端记录请登录账号后拉取"),Toast.LENGTH_LONG).show()
                 }
             }.onFailure { tvTools.info("无法生成备份","本机记录暂时无法导出，请重试。",backup) }
         }
@@ -3757,6 +3826,9 @@ class MainActivity: Activity() {
                 optionPanel.visibility=if(panelOn(index)) View.VISIBLE else View.GONE
                 categoryKeys.forEach { key -> paintRail(categoryKeys.indexOf(key),railButtons.getValue(key).hasFocus()) }
                 rechainSettings()
+                // 切分类会把中/右栏整块换掉，新长出来的文案没经过 base() 的那次兜底扫描：
+                // 这里补一次（查不到就原样保留，重复调用安全）。
+                main.post { UiL10n.apply(root) }
                 if(focusFirst) {
                     (groupRows[categories[index].third].orEmpty().firstOrNull { it.visibility==View.VISIBLE } ?: railButtons.getValue(categoryKeys[index])).requestFocus()
                 }
@@ -3771,7 +3843,7 @@ class MainActivity: Activity() {
             // 冻结上下焦点：排序期间方向键由 dispatchKeyEvent 接管
             railButtons.values.forEach { b -> b.nextFocusUpId=b.id; b.nextFocusDownId=b.id }
             railButtons.getValue(categoryKeys[pos]).animate().scaleX(1.08f).scaleY(1.08f).setDuration(140).start()
-            Toast.makeText(this,"上下键移动 · 确认键放下",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this,L10n.tr("上下键移动 · 确认键放下"),Toast.LENGTH_SHORT).show()
         }
         railReorderMove={ delta ->
             val from=railReorderPos
@@ -3844,7 +3916,8 @@ class MainActivity: Activity() {
         footerHost.addView(settingsDisclaimer,lp(-2,-2))
         // 页面重建（如切换片源显隐）后按标签恢复焦点，避免跳回顶部导航
         val wanted=settingsFocusKey.also { settingsFocusKey=null }
-        val target=wanted?.let { key -> settingRows.firstOrNull { it.title.startsWith(key) } }
+        // 焦点 key 用未翻译原文匹配：切换语言后 title 已是译文，「语言」→「語言」/「Language」会失配（2026-11-27）
+        val target=wanted?.let { key -> settingRows.firstOrNull { it.sourceTitle.startsWith(key) || it.title.startsWith(key) } }
         if(target!=null) {
             val index=categories.indexOfFirst { it.third===(target.parent as? View) }
             if(index>=0) showCategory(index,false)
@@ -4165,7 +4238,7 @@ class MainActivity: Activity() {
             }
         }, { problem ->
             catalog=emptyList(); hasMore=false; discoveryCursor=null; pendingNewReleaseFocus=null
-            rankSubtitle?.text="上新加载失败"
+            rankSubtitle?.text=L10n.tr("上新加载失败")
             body.removeAllViews(); error(body,problem) { showCatalog(true) }
         })
     }
@@ -4214,7 +4287,7 @@ class MainActivity: Activity() {
             }
         }, { _ ->
             loadingMore=false
-            Toast.makeText(this,"加载失败，继续浏览会自动重试",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this,L10n.tr("加载失败，继续浏览会自动重试"),Toast.LENGTH_SHORT).show()
             catalogAdapter?.updateFooter(FOOTER_ERROR)
             restoreCatalogFocus()
         })
@@ -4227,7 +4300,7 @@ class MainActivity: Activity() {
         showRandomDialog(emptyList(), loading = true)
         replenishRandomPool {
             val next=randomRecommender.pick(4)
-            if(next.isNotEmpty()) showRandomDialog(next) else randomDialog?.dismiss().also { Toast.makeText(this,"暂时无法随机荐剧，请稍后重试",Toast.LENGTH_SHORT).show() }
+            if(next.isNotEmpty()) showRandomDialog(next) else randomDialog?.dismiss().also { Toast.makeText(this,L10n.tr("暂时无法随机荐剧，请稍后重试"),Toast.LENGTH_SHORT).show() }
         }
     }
 
@@ -4366,7 +4439,7 @@ class MainActivity: Activity() {
                 if(isDestroyed || !foreground || screen!="catalog") return@post
                 if(aiMode) { if(tab!=2 || !aiCatalog) return@post } else if(tab!=0) return@post
                 result.onSuccess { genres ->
-                    tvTools.choose("选择${type.label}题材",listOf("全部题材")+genres.map { it.name },anchor,{ index ->
+                    tvTools.choose(L10n.trFmt("选择{0}题材", L10n.tr(type.label)),listOf("全部题材")+genres.map { it.name },anchor,{ index ->
                         val next=if(index==0) null else genres[index-1]
                         if(next!=current) {
                             if(aiMode) aiGenre=next else genre=next
@@ -4439,10 +4512,13 @@ class MainActivity: Activity() {
         // 评分与收藏数来自详情页同一份数据，卡片列表没有这些字段；缺失时整行不显示
         if(!data.social.isEmpty) {
             val metrics=mutableListOf<String>()
-            val score=if(data.social.rating>0) String.format(Locale.CHINA,"%.1f 分",data.social.rating) else ""
-            if(score.isNotEmpty()) metrics+=score+data.social.ratingCount.takeIf { it.isNotBlank() }?.let { "（$it 人评分）" }.orEmpty()
-            if(data.social.favoriteText.isNotBlank()) metrics+=data.social.favoriteText
-            if(data.social.heatText.isNotBlank()) metrics+=data.social.heatText
+            // 分数、评分人数、收藏与热度都是拼出来的（站点下发的还是「181万收藏」这种），
+            // 这行又是带色 span 的 SpannableString，走不了整串翻译，只能逐段先译好
+            val score=if(data.social.rating>0) String.format(Locale.CHINA,"%.1f",data.social.rating) else ""
+            val raters=data.social.ratingCount.trim().let { if(it.endsWith("万")) it.dropLast(1)+"M" else it }
+            if(score.isNotEmpty()) metrics+=score+if(raters.isEmpty()) "" else L10n.trFmt("（{0} 人评分）",raters)
+            if(data.social.favoriteText.isNotBlank()) metrics+=UiL10n.text(data.social.favoriteText)
+            if(data.social.heatText.isNotBlank()) metrics+=UiL10n.text(data.social.heatText)
             val line=SpannableString(metrics.joinToString("  ·  "))
             if(score.isNotEmpty()) {
                 line.setSpan(ForegroundColorSpan(accent),0,score.length,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -4913,7 +4989,8 @@ class MainActivity: Activity() {
             danmakuLayer.applyPrefs(library.danmakuOpacity,library.danmakuFont,library.danmakuSpeed,library.danmakuRows)
             root.addView(danmakuLayer,FrameLayout.LayoutParams(-1,(resources.displayMetrics.heightPixels*.38f).toInt(),Gravity.TOP).apply { topMargin=dp(12) })
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
-            playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }
+            // 标题行是「剧名 · 第 N 集」：剧名原样保留，只有集数要按语言改写（第 2 集 → EP 2）
+            playbackTitle=LocalizedTextView(this).apply { textSize=23f; includeFontPadding=false; setTextColor(white); maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }
             // 标题行右侧留一个鼠标能点的退出：遥控用户按返回键，插鼠标的用户不该只剩键盘快捷键。
             // 默认收起，等鼠标真的动了/点了才放出来——遥控用户看到一颗点不到的按钮只会更困惑。
             val titleRow=row().apply { gravity=Gravity.CENTER_VERTICAL }
@@ -4928,9 +5005,17 @@ class MainActivity: Activity() {
             playerExit=exitPlay
             titleRow.addView(exitPlay,lp(-2,-2))
             hud.addView(titleRow)
-            playbackStatus=text("",14f,gold).apply { setPadding(0,dp(6),0,0); maxLines=1 }
+            // 清晰度/倍速/弹幕状态行：同样靠控件层兜底翻译（`1080P · 1× · 弹幕 开`）
+            playbackStatus=LocalizedTextView(this).apply {
+                textSize=14f; includeFontPadding=false; setTextColor(gold); setPadding(0,dp(6),0,0); maxLines=1
+            }
             hud.addView(playbackStatus)
-            playbackText=text("",15f,muted).apply { setPadding(0,dp(7),0,dp(9)) }; hud.addView(playbackText)
+            // 状态行文案几乎全是运行时拼出来的（失败原因、跳过计数、限流倒计时），出口几十处，
+            // 逐个包 L10n.tr 必漏；用 LocalizedTextView 在控件层兜一次，新增文案自动生效。
+            playbackText=LocalizedTextView(this).apply {
+                textSize=15f; setTextColor(muted); includeFontPadding=false
+                setPadding(0,dp(7),0,dp(9))
+            }; hud.addView(playbackText)
             // 进度条自己画轨道与滑块：轨道 4dp、可点区域 26dp，鼠标/手指按住就能拖
             progressBar=PlaybackSeekBar(this).apply { max=1000 }
             progressBar.onScrubPreview=preview@{ ratio ->
@@ -5003,7 +5088,7 @@ class MainActivity: Activity() {
         applyClock()
         applyNetSpeedOverlay()
         playbackTitle.text=playbackHeading(data.series,episodeIndex)
-        playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE
+        playbackText.text=L10n.tr("正在获取播放地址…"); progressBar.progress=0; progressBar.visibility=View.VISIBLE
         // 换集一律不主动弹控制条（用户 2026-11-19：每次都弹太吵）；但用户本来就开着的话别抽走，
         // 只把展开的面板收起来，底部那一条留着继续显示集数与进度。
         if(reuse && hud.visibility==View.VISIBLE) { panel=false; controls.visibility=View.GONE; controls.clearFocus() } else hidePlaybackOverlay()
@@ -5158,7 +5243,7 @@ class MainActivity: Activity() {
                     val intro=library.skipMark(data.series.id)?.introSeconds ?: 0
                     if(intro>0) {
                         p.seekTo(intro*1000L)
-                        Toast.makeText(this@MainActivity,"已跳过片头 $intro 秒",Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, L10n.tr("已跳过片头 $intro 秒"),Toast.LENGTH_SHORT).show()
                     }
                     if(p.playbackState==Player.STATE_READY) markReady() else if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     syncMediaSession()
@@ -5195,7 +5280,7 @@ class MainActivity: Activity() {
             android.util.Log.w("HongguoTV","Playback timing episode=${episodeIndex+1} toPrepare=${android.os.SystemClock.elapsedRealtime()-playbackStarted}ms attached=$queueAttach")
             if(!queueAttach || p.playbackState==Player.STATE_IDLE || p.playbackState==Player.STATE_ENDED) p.prepare()
             p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
-            if(introSkip>0 && position<=0) Toast.makeText(this,"已跳过片头 ${skipMark!!.introSeconds} 秒",Toast.LENGTH_SHORT).show()
+            if(introSkip>0 && position<=0) Toast.makeText(this@MainActivity, L10n.tr("已跳过片头 ${skipMark!!.introSeconds} 秒"),Toast.LENGTH_SHORT).show()
         }, { problem -> playerFailure(problem) })
     }
     private fun closeTransport(http: okhttp3.OkHttpClient?) {
@@ -5341,7 +5426,7 @@ class MainActivity: Activity() {
         // 预算耗尽：自动重试彻底走不通，把手动面板摆出来让用户决定。
         if(!recovery.remaining) {
             autoRecovery=false
-            playbackText.text="已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"
+            playbackText.text=L10n.tr("已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。")
             showManualRecoveryPanel(incompatible=false,decoding=false)
             return
         }
@@ -5573,7 +5658,7 @@ class MainActivity: Activity() {
         // 撤了就是黑底错误页一闪一闪（真机实测就是这样），改成留画面 + 换文案。
         val keepFreeze=incompatible && recommendMode && recommendFailStreak+1<3 && freezeLayer!=null
         if(keepFreeze) {
-            freezeTip?.text="本集片源不可用，正在跳到下一部…"
+            freezeTip?.text=L10n.tr("本集片源不可用，正在跳到下一部…")
             freezeFade?.let { main.removeCallbacks(it) }
             val guard=Runnable { releaseFreeze() }; freezeFade=guard; main.postDelayed(guard,20000)
         } else releaseFreeze()
@@ -5607,7 +5692,7 @@ class MainActivity: Activity() {
                 // 重试必须清死档名单，否则 prepareFromLadder 会跳过原档直接抛「暂不兼容」，碰不到原档；
                 // 重试全程不打取址接口（阶梯缓存内零请求，不撞风控），失败面板照常回来，最坏多花几秒。
                 decodeRetried=true; failedTiers.clear()
-                playbackText.text="正在重试…"
+                playbackText.text=L10n.tr("正在重试…")
                 recoverySpinner?.visibility=View.VISIBLE
                 autoRecovery=false
                 main.postDelayed({ if(foreground && screen=="player" && playError) playEpisode(episodeIndex,retryPosition,retryAutoplay) },600)
@@ -5626,7 +5711,7 @@ class MainActivity: Activity() {
                     recommendFailStreak++
                     if(recommendFailStreak>=3) {
                         recommendFailStreak=0
-                        playbackText.text="连续几部都放不出来，先回首页看看"
+                        playbackText.text=L10n.tr("连续几部都放不出来，先回首页看看")
                         main.postDelayed({ if(foreground && screen=="player" && playError) { playError=false; returnToRecommendPage() } },2500)
                     } else {
                         playbackText.text="这部暂时放不出来，2.5 秒后自动换下一部 · 已跳过 $recommendFailStreak 部"
@@ -5682,7 +5767,7 @@ class MainActivity: Activity() {
     /** 用户在自动重试转圈时主动打断：停掉定时器，切到手动面板让用户决定下一步。 */
     private fun stopAutoRecoveryAndShowPanel() {
         cancelRecovery()
-        playbackText.text="已取消自动重试，观看位置已保留。"
+        playbackText.text=L10n.tr("已取消自动重试，观看位置已保留。")
         showManualRecoveryPanel(incompatible=false,decoding=false)
     }
     private fun hidePlaybackOverlay() {
@@ -5760,24 +5845,25 @@ class MainActivity: Activity() {
 
     private fun keyHintText(): String {
         // 推荐 feed 用另一套键位：上下是换剧；左右短按换集/长按快进；确认短按暂停/长按进详情
+        // 每一段都是独立词条，逐段 L10n.tr：整串（多段用 4 空格拼接）在字典里查不到。
         if(recommendMode) {
-            val binge=feedSeriesBinge || !library.feedAutoSwipe
             val prefix=when {
                 feedSeriesBinge -> "本剧连播中 · "
                 library.feedAutoSwipe -> "自动下滑已开 · "
                 else -> "本剧连播 · "
             }
-            val base="$prefix"+ "左右 换集 · 长按 快进/快退    上下 换剧    确认 暂停 · 长按 进详情    菜单 控制条 · 长按 快捷面板    返回 回上页"
-            return if(mouseSeen) "$base    鼠标 单击 暂停/播放 · 上下滑 换剧 · 拖进度条/滚轮 快进快退 · 右键 退出" else base
+            val base=L10n.tr(prefix)+L10n.tr("左右 换集 · 长按 快进/快退    上下 换剧    确认 暂停 · 长按 进详情    菜单 控制条 · 长按 快捷面板    返回 回上页")
+            return if(mouseSeen) base+"    "+L10n.tr("鼠标 单击 暂停/播放 · 上下滑 换剧 · 拖进度条/滚轮 快进快退 · 右键 退出") else base
         }
-        val upDown=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) "↓ 下一集    ↑ 上一集" else "↓ 选集    ↑ 更多"
-        val parts=mutableListOf("确认 暂停/播放","左右 快退/快进","长按右键 3× 快进",upDown,"长按菜单 快捷面板")
+        val upDown=if(extras.dpadUpDownAction==PlaybackExtras.UPDOWN_SWITCH) L10n.tr("↓ 下一集    ↑ 上一集") else L10n.tr("↓ 选集    ↑ 更多")
+        val parts=mutableListOf(L10n.tr("确认 暂停/播放"),L10n.tr("左右 快退/快进"),L10n.tr("长按右键 3× 快进"),upDown,L10n.tr("长按菜单 快捷面板"))
         // 没在用鼠标就不提鼠标手势：屏幕上写着「拖进度条」，人伸手去摸遥控器只会更迷糊
         if(mouseSeen) {
-            val right=if(extras.mouseRightAction==PlaybackExtras.MOUSE_EXIT) "右键退出" else "右键${mouseRightLabel()} · 右上角退出"
-            parts+="鼠标 单击暂停/播放 · 拖进度条定位 · 条上滚轮 ±10 秒 · 上下滑换集 · $right"
+            val right=if(extras.mouseRightAction==PlaybackExtras.MOUSE_EXIT) L10n.tr("右键退出")
+                else L10n.tr("右键")+L10n.tr(mouseRightLabel())+" · "+L10n.tr("右上角退出")
+            parts+=L10n.tr("鼠标 单击暂停/播放 · 拖进度条定位 · 条上滚轮 ±10 秒 · 上下滑换集")+" · "+right
         }
-        parts+="返回 收起 / 退出"
+        parts+=L10n.tr("返回 收起 / 退出")
         return parts.joinToString("    ")
     }
 
@@ -5828,11 +5914,11 @@ class MainActivity: Activity() {
         // 判断依据是在播档位的 codec（融合路径 vc2Active 恒为 false，原实现拿旧模式标志导致标签永不显示）。
         val hudQuality=if((vc2Active || activeTier?.codec=="bytevc2") && quality.isNotBlank()) "$quality(软解)" else quality
         playbackStatus.text=listOfNotNull(hudQuality.ifBlank { null },PlaybackSpeed.label(player?.playbackParameters?.speed ?: effectiveSpeed()),"弹幕 "+(if(danmakuOn) "开" else "关")).joinToString("   ·   ")
-        if(sleepStopped) { playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"; return }
+        if(sleepStopped) { playbackText.text=L10n.tr("定时停止已生效 · 观看位置已保存 · 按播放可继续"); return }
         if(!playbackReady) { playbackText.text=(if(!requestedAutoplay) "准备后保持暂停 · " else "")+if(video==null) "正在获取播放地址…" else "正在缓冲…"; return }
         val p=player ?: return
         // vc2 模式下解码器还没就绪：音频先行，画面短暂黑屏，状态行给个预期
-        if(vc2Active && vc2Decoder==null) { playbackText.text="正在加载原生解码…"; return }
+        if(vc2Active && vc2Decoder==null) { playbackText.text=L10n.tr("正在加载原生解码…"); return }
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { ffActive -> "3× 快进中"; p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
         playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}"+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
@@ -5885,8 +5971,7 @@ class MainActivity: Activity() {
         // 上下键换集、媒体键、手势、语音/遥控 play.next 都走这里；到头了必须给反馈，
         // 否则用户只看到「按了没反应」。方向对称，第一集往上同样提示。
         if(target !in 0 until count) {
-            Toast.makeText(this,
-                if(direction>0) "已经是最后一集了 · 播完会自动标记已看完" else "已经是第一集了",
+            Toast.makeText(this@MainActivity, L10n.tr(if(direction>0) "已经是最后一集了 · 播完会自动标记已看完" else "已经是第一集了"),
                 Toast.LENGTH_SHORT).show()
             return false
         }
@@ -5913,9 +5998,9 @@ class MainActivity: Activity() {
         sleepStopped=true; requestedAutoplay=false; retryAutoplay=false; pausedForLifecycle=true
         cancelRecovery(); player?.pause(); if(saveCurrent) saveProgress()
         playerScreenOn=false; refreshScreenOn()
-        playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"
+        playbackText.text=L10n.tr("定时停止已生效 · 观看位置已保存 · 按播放可继续")
         showHud(); if(!playError && episodePanel==null) showPanel(); syncMediaSession()
-        Toast.makeText(this,"定时停止已生效",Toast.LENGTH_LONG).show()
+        Toast.makeText(this,L10n.tr("定时停止已生效"),Toast.LENGTH_LONG).show()
     }
     private fun showSleepPicker(anchor: View) {
         val labels=listOf("关闭定时停止","15 分钟后","30 分钟后","60 分钟后","90 分钟后","本集播完","再播完 3 集","再播完 5 集")
@@ -6046,7 +6131,7 @@ class MainActivity: Activity() {
         val save=TvDialog.capsuleButton(this,"保存") {
             extras.blockedWords=words.filterIndexed { index,_ -> checked[index] }.toSet()
             applyBlockedWords(); anchor.setValueLabel("弹幕屏蔽词  ·  ${extras.blockedWords.size} 个")
-            Toast.makeText(this@MainActivity,"屏蔽词已保存，立即生效",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity,L10n.tr("屏蔽词已保存，立即生效"),Toast.LENGTH_SHORT).show()
         }
         buttons.addView(clear,lp(-2,-2).apply { rightMargin=dp(12) })
         buttons.addView(save,lp(-2,-2))
@@ -6087,7 +6172,7 @@ class MainActivity: Activity() {
      *  状态圆点内嵌在按钮文字前：灰=未检测，橙=检测中，绿=通，红=不通；3 秒内重复点击直接忽略。 */
     private fun showInterfaceCheck(anchor: View) {
         val content=column()
-        val status=text("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
+        val status=textLive("选择一项开始检测",14f,muted).apply { setPadding(dp(8),0,dp(8),dp(10)) }
         content.addView(status)
         lateinit var dialog: AlertDialog
         // 6 项拆两行各 3 个：弹窗收窄后单行 6 个 weight 均分会把按钮压到逐字竖排换行
@@ -6100,7 +6185,7 @@ class MainActivity: Activity() {
         val lastAt=mutableMapOf<String,Long>()
         val busy=mutableSetOf<String>()
         fun dotLabel(name: String,color: Int): CharSequence {
-            val span=android.text.SpannableString("●  $name")
+            val span=android.text.SpannableString("●  ${L10n.tr(name)}")
             span.setSpan(object: android.text.style.ReplacementSpan() {
                 override fun getSize(paint: android.graphics.Paint,text: CharSequence?,start: Int,end: Int,fm: android.graphics.Paint.FontMetricsInt?): Int =
                     (paint.textSize*0.55f).toInt()
@@ -6117,9 +6202,9 @@ class MainActivity: Activity() {
         }
         fun check(name: String,btn: TextView,probe: ()->String) {
             val now=System.currentTimeMillis()
-            if(name in busy || now-(lastAt[name] ?: 0L)<3_000) { status.text="$name 请稍候再试"; return }
+            if(name in busy || now-(lastAt[name] ?: 0L)<3_000) { status.text="${L10n.tr(name)} 请稍候再试"; return }
             lastAt[name]=now
-            busy+=name; status.text="正在检测 $name…"
+            busy+=name; status.text="正在检测 ${L10n.tr(name)}…"
             btn.text=dotLabel(name,accent)
             val started=android.os.SystemClock.elapsedRealtime()
             io.execute {
@@ -6128,8 +6213,8 @@ class MainActivity: Activity() {
                     if(!dialog.isShowing) return@post
                     val elapsed=android.os.SystemClock.elapsedRealtime()-started
                     result.fold(
-                        { detail -> status.text="$name · 正常 · $detail · ${elapsed}ms"; btn.text=dotLabel(name,dotOk) },
-                        { problem -> status.text="$name · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; btn.text=dotLabel(name,dotFail) })
+                        { detail -> status.text="${L10n.tr(name)} · 正常 · $detail · ${elapsed}ms"; btn.text=dotLabel(name,dotOk) },
+                        { problem -> status.text="${L10n.tr(name)} · 失败 · ${(problem.message ?: problem.javaClass.simpleName).take(80)}"; btn.text=dotLabel(name,dotFail) })
                     busy-=name
                 }
             }
@@ -6142,13 +6227,13 @@ class MainActivity: Activity() {
             rows[(buttons.size-1)/3].addView(btn,LinearLayout.LayoutParams(0,-2,1f).apply { rightMargin=dp(6) })
             return btn
         }
-        add("首页") { val page=repository.home(1,library.contentType); "返回 ${page.items.size} 条" }
-        add("搜索") { val page=repository.search("修仙",1,library.contentType); "返回 ${page.items.size} 条" }
+        add("首页") { val page=repository.home(1,library.contentType); L10n.trFmt("返回 {0} 条",page.items.size) }
+        add("搜索") { val page=repository.search("修仙",1,library.contentType); L10n.trFmt("返回 {0} 条",page.items.size) }
         add("播放") {
             val progress=library.history().firstOrNull() ?: throw IllegalStateException("暂无观看记录，先播放一集")
             val info=repository.stream(progress.episodeId,library.maxQuality); "获取成功 · ${info.quality}"
         }
-        add("联想") { val words=repository.suggest("修仙"); "联想 ${words.size} 个" }
+        add("联想") { val words=repository.suggest("修仙"); L10n.trFmt("联想 {0} 个",words.size) }
         add("账号") { accountManager.checkAccountHealth() }
         add("云端") { accountManager.checkCloudHistory() }
         content.addView(rows[0])
@@ -6294,7 +6379,7 @@ class MainActivity: Activity() {
         val data=detail ?: return false
         if(!library.autoNext || !library.autoSeason || episodeIndex<data.episodes.lastIndex) return false
         val next=data.nextSeason ?: return false
-        Toast.makeText(this,"即将播放《${next.title}》",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, L10n.tr("即将播放《${next.title}》"),Toast.LENGTH_SHORT).show()
         openDetail(next,resume=true,autoplay=true)
         return true
     }
@@ -6302,7 +6387,7 @@ class MainActivity: Activity() {
     private fun markSeriesWatched(series: Series) {
         if(library.watched(series.id)) return
         library.setWatched(series.id,true)
-        Toast.makeText(this,"《${series.title}》已看完 · 已移出「接着看」，可在「我的 - 观看历史」查看",Toast.LENGTH_LONG).show()
+        Toast.makeText(this@MainActivity, L10n.tr("《${series.title}》已看完 · 已移出「接着看」，可在「我的 - 观看历史」查看"),Toast.LENGTH_LONG).show()
     }
     private fun showEndedPanel() {
         val data=detail
@@ -6314,7 +6399,7 @@ class MainActivity: Activity() {
         }
         val cached=library.cachedHome(library.contentType)?.items.orEmpty().filter { it.id!=data.series.id }
         if(cached.isNotEmpty()) { showRecommendationPanel(cached); return }
-        playbackText.text="本集已结束"; showPanel()
+        playbackText.text=L10n.tr("本集已结束"); showPanel()
         // The home cache can be empty on a cold start that went straight into playback; fetch once and upgrade the panel.
         work({ repository.home(1,library.contentType) }, { page ->
             if(screen=="player" && player?.playbackState==Player.STATE_ENDED && detail?.series?.id==data.series.id) {
@@ -6353,7 +6438,7 @@ class MainActivity: Activity() {
             val next=if(intro) old.copy(introSeconds=options[index]) else old.copy(outroSeconds=options[index])
             library.setSkipMark(data.series.id,next)
             if(!intro) { outroSkipSeconds=next.outroSeconds; outroTriggered=false }
-            Toast.makeText(this,"已保存，仅对《${data.series.title}》生效",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, L10n.tr("已保存，仅对《${data.series.title}》生效"),Toast.LENGTH_SHORT).show()
             showHud()
         },"当前 ${if(current>0) "$current 秒" else "关闭"}",onExtra={})
     }
@@ -6607,13 +6692,13 @@ class MainActivity: Activity() {
             }.getOrNull()
             main.post {
                 if(isDestroyed) return@post
-                if(bitmap==null) { Toast.makeText(this@MainActivity,"图片无法使用，请换一张试试",Toast.LENGTH_LONG).show(); return@post }
+                if(bitmap==null) { Toast.makeText(this@MainActivity,L10n.tr("图片无法使用，请换一张试试"),Toast.LENGTH_LONG).show(); return@post }
                 backdropBitmap=bitmap
                 backdropView?.let {
                     if(it.parent==null && screen!="player") root.addView(it,0,FrameLayout.LayoutParams(-1,-1))
                     it.setImageBitmap(bitmap)
                 }
-                Toast.makeText(this@MainActivity,"背景已更新",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity,L10n.tr("背景已更新"),Toast.LENGTH_SHORT).show()
                 onDone()
             }
         }
@@ -6623,7 +6708,7 @@ class MainActivity: Activity() {
         io.execute { filesDir.listFiles()?.filter { it.name.startsWith("backdrop.") }?.forEach { it.delete() } }
         getSharedPreferences("native-library-v1", Context.MODE_PRIVATE).edit().putString("backdropStyle",style).apply()
         loadBackdrop()
-        Toast.makeText(this,if(style=="forced") "已恢复为强制欣赏" else "已恢复默认背景",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, L10n.tr(if(style=="forced") "已恢复为强制欣赏" else "已恢复默认背景"),Toast.LENGTH_SHORT).show()
     }
     /**
      * 语音「打开快传文件」：与设置页里的入口同一条路，不另写一份列表。
@@ -6646,22 +6731,22 @@ class MainActivity: Activity() {
             TransferKind.IMAGE -> if(direct) tvTools.previewImage(anchor,file) { setQuickBackdrop(file) }
                 else TvDialog.confirm(this,"设为电视背景","已收到图片 ${file.name}，是否用作电视背景？") { setQuickBackdrop(file) }.show()
             TransferKind.VIDEO -> if(direct) tvTools.playVideo(anchor,file)
-                else Toast.makeText(this,"视频已保存到电视：${file.name}",Toast.LENGTH_LONG).show()
-            TransferKind.OTHER -> Toast.makeText(this,"文件已保存到电视：${file.name}",Toast.LENGTH_LONG).show()
+                else Toast.makeText(this@MainActivity, L10n.tr("视频已保存到电视：${file.name}"),Toast.LENGTH_LONG).show()
+            TransferKind.OTHER -> Toast.makeText(this@MainActivity, L10n.tr("文件已保存到电视：${file.name}"),Toast.LENGTH_LONG).show()
         }
     }
     /** 图片直接生效（可逆：设置页可恢复默认背景），后台读图，完成后刷新设置页文案。 */
     private fun setQuickBackdrop(file: java.io.File) {
         io.execute {
             val bytes=runCatching { file.readBytes() }.getOrNull()
-            if(bytes==null) main.post { Toast.makeText(this,"图片无法读取，请换一张试试",Toast.LENGTH_SHORT).show() }
+            if(bytes==null) main.post { Toast.makeText(this,L10n.tr("图片无法读取，请换一张试试"),Toast.LENGTH_SHORT).show() }
             else saveBackdrop(bytes,TransferRules.extensionOf(file.name) ?: "jpg") { refreshBackdropSetting?.invoke() }
         }
     }
     private fun installQuickApk(apk: java.io.File) {
         when(ApkInstaller.install(this,apk)) {
-            ApkInstaller.Result.LAUNCHED -> { pendingQuickApk=null; Toast.makeText(this,"已打开安装界面",Toast.LENGTH_SHORT).show() }
-            ApkInstaller.Result.NEEDS_PERMISSION -> Toast.makeText(this,"请允许本应用安装应用，返回后会自动继续安装",Toast.LENGTH_LONG).show()
+            ApkInstaller.Result.LAUNCHED -> { pendingQuickApk=null; Toast.makeText(this,L10n.tr("已打开安装界面"),Toast.LENGTH_SHORT).show() }
+            ApkInstaller.Result.NEEDS_PERMISSION -> Toast.makeText(this,L10n.tr("请允许本应用安装应用，返回后会自动继续安装"),Toast.LENGTH_LONG).show()
             ApkInstaller.Result.FAILED -> { pendingQuickApk=null; tvTools.info("无法安装","电视没有可用的安装入口，请用系统文件管理器安装。",null) }
         }
     }
@@ -6701,12 +6786,12 @@ class MainActivity: Activity() {
     /** 播放中切换当前剧的弹幕并记住：全局弹幕关闭时先提示打开总开关，避免出现「开了却看不到」。 */
     private fun toggleSeriesDanmaku(seriesId: String) {
         if(!library.danmaku) {
-            Toast.makeText(this,"弹幕总开关已关闭，请先在设置或播放设置中开启",Toast.LENGTH_SHORT).show(); return
+            Toast.makeText(this,L10n.tr("弹幕总开关已关闭，请先在设置或播放设置中开启"),Toast.LENGTH_SHORT).show(); return
         }
         val on=!extras.danmakuEnabled(seriesId,true)
         extras.setDanmakuEnabled(seriesId,on)
         if(on) startDanmaku() else stopDanmaku()
-        Toast.makeText(this,"已为《${detail?.series?.title.orEmpty()}》${if(on) "开启" else "关闭"}弹幕",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, L10n.tr("已为《${detail?.series?.title.orEmpty()}》${if(on) "开启" else "关闭"}弹幕"),Toast.LENGTH_SHORT).show()
     }
     private fun stopDanmaku() {
         danmakuLoader=null
@@ -6961,7 +7046,7 @@ class MainActivity: Activity() {
             }
             main.post {
                 if(isDestroyed) return@post
-                Toast.makeText(this@MainActivity,"已加入屏保素材：${shortName(file.name)}",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, L10n.tr("已加入屏保素材：${shortName(file.name)}"),Toast.LENGTH_SHORT).show()
                 refreshSaverMediaSetting?.invoke()
                 onDone()
             }
@@ -6994,7 +7079,7 @@ class MainActivity: Activity() {
         val own=saverMediaFiles()
         val transfers=quickTransferMedia().filter { f -> own.none { it.name==f.name } }
         if(own.isEmpty() && transfers.isEmpty()) {
-            Toast.makeText(this,"还没有素材，先用手机传一张图片或一段视频",Toast.LENGTH_LONG).show()
+            Toast.makeText(this,L10n.tr("还没有素材，先用手机传一张图片或一段视频"),Toast.LENGTH_LONG).show()
             startSaverUpload(anchor); return
         }
         val stored=saverPickedNames(own)
@@ -7167,7 +7252,7 @@ class MainActivity: Activity() {
         /** 按勾选结果落盘并立刻预览：全选写空串（= 全部轮播，以后新传的自动包含）。 */
         fun applySelection() {
             val names=own.map { it.name }.filter { it in draft }
-            if(names.isEmpty()) { Toast.makeText(this,"至少勾选一个素材",Toast.LENGTH_SHORT).show(); return }
+            if(names.isEmpty()) { Toast.makeText(this,L10n.tr("至少勾选一个素材"),Toast.LENGTH_SHORT).show(); return }
             library.screensaverStyle="custom"
             library.screensaverMedia=if(names.size==own.size) "" else names.joinToString(",")
             refreshSaverStyleSetting?.invoke(); refreshSaverMediaSetting?.invoke()
@@ -7199,8 +7284,8 @@ class MainActivity: Activity() {
                             if(saverMediaFiles().isEmpty()) {
                                 library.screensaverStyle="classic"
                                 refreshSaverStyleSetting?.invoke()
-                                Toast.makeText(this,"屏保素材已清空，屏保画面已切回「经典墨夜」",Toast.LENGTH_LONG).show()
-                            } else Toast.makeText(this,"屏保素材已清空",Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this,L10n.tr("屏保素材已清空，屏保画面已切回「经典墨夜」"),Toast.LENGTH_LONG).show()
+                            } else Toast.makeText(this,L10n.tr("屏保素材已清空"),Toast.LENGTH_SHORT).show()
                             dialogRef?.dismiss()
                         }
                     }
@@ -7437,7 +7522,7 @@ class MainActivity: Activity() {
                     library.screensaverStyle=key
                     refreshSaverStyleSetting?.invoke()
                     (it.tag as? AlertDialog)?.dismiss()
-                    Toast.makeText(this@MainActivity,"屏保画面：$name",Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, L10n.tr("屏保画面：$name"),Toast.LENGTH_SHORT).show()
                     // 选了「我的素材」却一个素材都没有：直接把上传入口摆出来，别让用户对着提示干瞪眼
                     if(key=="custom" && saverMediaFiles().isEmpty() && quickTransferMedia().isEmpty()) {
                         main.postDelayed({ if(!isDestroyed) showSaverMediaManager(anchor) },450)
@@ -7900,13 +7985,14 @@ class MainActivity: Activity() {
         val session=remote
         val clients=session?.hub?.clientCount ?: 0
         val short=navTight
-        view.text=when {
+        // 顶栏键位文案是随会话状态变的，必须每次 setText 都过一遍字典（构建时翻不到）
+        view.text=L10n.tr(when {
             session==null -> "手机遥控"
             // 现在允许多台手机同时控制，写出台数比笼统的「已连接」更有用
             clients>1 -> if(short) "遥控中 · ${clients} 台" else "遥控中 · ${clients} 台设备"
             clients==1 -> if(short) "遥控中" else "遥控中 · 手机已连接"
             else -> if(short) "遥控" else "遥控 · 待连接"
-        }
+        })
     }
 
     private fun closeRemote() {
@@ -8176,21 +8262,21 @@ class MainActivity: Activity() {
             AppProxy.save(this,cfg)
             anchor.setValueLabel(proxyLabel())
             dialog.dismiss()
-            Toast.makeText(this,if(cfg.enabled) "网络代理已启用 · ${cfg.host}:${cfg.port}" else "网络代理已停用",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, L10n.tr(if(cfg.enabled) "网络代理已启用 · ${cfg.host}:${cfg.port}" else "网络代理已停用"),Toast.LENGTH_SHORT).show()
         }
         enable.setOnClickListener {
             val cfg=readConfig(true)
             when {
-                cfg.host.isEmpty() -> errorText.text="请填写代理地址"
-                cfg.port !in 1..65535 -> errorText.text="端口需为 1-65535 的数字"
+                cfg.host.isEmpty() -> errorText.text=L10n.tr("请填写代理地址")
+                cfg.port !in 1..65535 -> errorText.text=L10n.tr("端口需为 1-65535 的数字")
                 else -> persist(cfg)
             }
         }
         disable.setOnClickListener { persist(readConfig(false)) }
         test.setOnClickListener {
             val cfg=readConfig(true)
-            if(cfg.host.isEmpty() || cfg.port !in 1..65535) { errorText.text="请先填写有效的地址与端口"; return@setOnClickListener }
-            errorText.text="测试中…"; test.isFocusable=false; test.isEnabled=false
+            if(cfg.host.isEmpty() || cfg.port !in 1..65535) { errorText.text=L10n.tr("请先填写有效的地址与端口"); return@setOnClickListener }
+            errorText.text=L10n.tr("测试中…"); test.isFocusable=false; test.isEnabled=false
             io.execute {
                 val started=System.currentTimeMillis()
                 val result=runCatching {
@@ -8224,7 +8310,7 @@ class MainActivity: Activity() {
                 val host=values["host"].orEmpty().trim()
                 val port=values["port"].orEmpty().trim()
                 if(host.isNotEmpty() && port.toIntOrNull() in 1..65535) { hostEdit.setText(host); portEdit.setText(port); enable.requestFocus() }
-                else errorText.text="请填写有效的地址与端口"
+                else errorText.text=L10n.tr("请填写有效的地址与端口")
             }
         }
         dialog.show()
@@ -8561,7 +8647,7 @@ class MainActivity: Activity() {
 
     /** 语音动作的回执：短提示，不打断画面，也不抢焦点。 */
     private fun voiceSay(message: String) {
-        Toast.makeText(this,message,Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, L10n.tr(message),Toast.LENGTH_SHORT).show()
     }
 
     /**
@@ -8711,7 +8797,7 @@ class MainActivity: Activity() {
         val plan=VoiceIntent.parse(text) ?: return remoteWatch(text)
         val ok=remoteDo(plan.command)
         // 做不到就补一句：否则屏幕上什么都没变，人只会怀疑手机掉线了
-        if(!ok) Toast.makeText(this,"${plan.echo}：当前页面做不到",Toast.LENGTH_SHORT).show()
+        if(!ok) Toast.makeText(this@MainActivity, L10n.tr("${plan.echo}：当前页面做不到"),Toast.LENGTH_SHORT).show()
         return ok
     }
 
@@ -8733,7 +8819,7 @@ class MainActivity: Activity() {
         if(tab==6) {
             val module=third
             if(module==null) {
-                Toast.makeText(this,"片源模块还没准备好，稍后再试",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this,L10n.tr("片源模块还没准备好，稍后再试"),Toast.LENGTH_SHORT).show()
                 return false
             }
             return if(episode>0 || autoplay) module.remotePlayTitle(query,episode) else module.remoteSearchTitle(query)
@@ -8776,7 +8862,7 @@ class MainActivity: Activity() {
                 if(ready==null) {
                     val why=if(hit==null) "没搜到「$query」，可以换个说法再试"
                         else "《${hit.second.title}》暂时没有可播放的剧集，请在结果里选一个"
-                    Toast.makeText(this,why,Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, L10n.tr(why),Toast.LENGTH_SHORT).show()
                     return@post
                 }
                 val (type,series,loaded)=ready
@@ -8784,7 +8870,7 @@ class MainActivity: Activity() {
                 if(episode>0) {
                     if(episode>loaded.episodes.size) {
                         openDetail(series,resume=false,autoplay=false,preloaded=loaded)
-                        Toast.makeText(this,"《${series.title}》只有 ${loaded.episodes.size} 集",Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, L10n.tr("《${series.title}》只有 ${loaded.episodes.size} 集"),Toast.LENGTH_SHORT).show()
                         return@post
                     }
                     // 说了集号就落到那一集：先摆详情页，再从那一集起播（不续播旧进度）
@@ -8814,7 +8900,7 @@ class MainActivity: Activity() {
             main.post {
                 if(isDestroyed || found.first==library.contentType) return@post
                 runSearch(query,found.first,fromPhone=true)
-                Toast.makeText(this,"${found.first.label}里找到 ${found.second} 条「$query」",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, L10n.tr("${found.first.label}里找到 ${found.second} 条「$query」"),Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -8856,7 +8942,7 @@ class MainActivity: Activity() {
         // 通用指令自己会出回执（「已切换弹幕」），只有做不到时才需要在这里补一句
         if(action is XiaoAiVoice.Action.Do) {
             if(!remoteDo(action.command))
-                Toast.makeText(this,"小爱同学：${action.echo}，但当前页面做不到",Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, L10n.tr("小爱同学：${action.echo}，但当前页面做不到"),Toast.LENGTH_SHORT).show()
             return
         }
         val ok=when(action) {
@@ -8870,7 +8956,7 @@ class MainActivity: Activity() {
             is XiaoAiVoice.Action.Watch -> "播放「${action.query}」"
             is XiaoAiVoice.Action.Do -> action.echo
         }
-        Toast.makeText(this,if(ok) "小爱同学：$what" else "小爱同学：$what 没生效（当前页面不支持）",Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, L10n.tr(if(ok) "小爱同学：$what" else "小爱同学：$what 没生效（当前页面不支持）"),Toast.LENGTH_SHORT).show()
     }
 
     private fun moduleLabel(module: String): String = when(module) {
@@ -8902,7 +8988,7 @@ class MainActivity: Activity() {
                 appendLine("④ 把控制台首页那串私钥填进来（扫码最省事），电视在前台时生效")
             }
         })
-        val status=TextView(this).apply {
+        val status=LocalizedTextView(this).apply {
             textSize=14f; setTextColor(TvStyle.text); setPadding(0,dp(10),0,0)
             text=xiaoAiStatusText()
         }
@@ -8917,7 +9003,7 @@ class MainActivity: Activity() {
         val clear=TvDialog.capsuleButton(this,"清除") {
             XiaoAiAccess.setUid(""); xiaoAi?.destroy(); xiaoAi=null; xiaoAiState=""
             status.text=xiaoAiStatusText()
-            Toast.makeText(this,"已清除小爱配置",Toast.LENGTH_SHORT).show()
+            Toast.makeText(this,L10n.tr("已清除小爱配置"),Toast.LENGTH_SHORT).show()
         }
         val close=TvDialog.capsuleButton(this,"关闭") { dialog.dismiss() }
         actions.addView(scan,lp(-2,-2).apply { rightMargin=dp(10) })
@@ -8939,8 +9025,8 @@ class MainActivity: Activity() {
                 if(uid.length>=20) {
                     XiaoAiAccess.setUid(uid); restartXiaoAi()
                     status.text=xiaoAiStatusText()
-                    Toast.makeText(this,"已保存，正在连巴法云",Toast.LENGTH_SHORT).show()
-                } else status.text="私钥短了，巴法云的是 32 位；请重新扫码填写"
+                    Toast.makeText(this,L10n.tr("已保存，正在连巴法云"),Toast.LENGTH_SHORT).show()
+                } else status.text=L10n.tr("私钥短了，巴法云的是 32 位；请重新扫码填写")
             }
         }
         dialog.show()

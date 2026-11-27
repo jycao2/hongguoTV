@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.Window
 import android.widget.*
+import com.hongguotv.core.L10n
 
 /** A remote-accessible side panel; selecting a number is the only action that changes episodes. */
 class EpisodePanel(
@@ -20,7 +21,7 @@ class EpisodePanel(
     private var group=current/20
     private var focused=current
     private fun dp(n: Int)=(n*activity.resources.displayMetrics.density).toInt()
-    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
+    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=L10n.tr(value); textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
     private fun button(value: String,active: Boolean=false,action: ()->Unit)=label(value,16f).apply {
         id=View.generateViewId(); gravity=Gravity.CENTER; minHeight=dp(48); isFocusable=true; isFocusableInTouchMode=true
         fun paint(focus: Boolean) {

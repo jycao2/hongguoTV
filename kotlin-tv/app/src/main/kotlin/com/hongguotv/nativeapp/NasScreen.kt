@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import com.hongguotv.core.L10n
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
@@ -155,23 +156,23 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         actionRow.addView(phoneBtn)
         actionRow.addView(button("测试连接", false) {
             if (urlInput.value.trim().isBlank()) {
-                Toast.makeText(activity, "请填写 WebDAV 地址", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("请填写 WebDAV 地址"), Toast.LENGTH_SHORT).show()
                 return@button
             }
             val d = buildConn(nameInput, urlInput, pathInput, userInput, passInput, editing, existing)
             // 自定义视图的 AlertDialog 上 setTitle 不可见，用 Toast 反馈
-            Toast.makeText(activity, "正在测试连接…", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, L10n.tr("正在测试连接…"), Toast.LENGTH_SHORT).show()
             Thread {
                 val msg = try {
                     NasWebDav(d.url, d.user, d.pass).testConnection(); "连接成功"
                 } catch (e: Exception) { "失败：${e.message}" }
-                main.post { Toast.makeText(activity, msg, Toast.LENGTH_LONG).show() }
+                main.post { Toast.makeText(activity, L10n.tr(msg), Toast.LENGTH_LONG).show() }
             }.start()
         })
         actionRow.addView(button("取消", false) { dialog.dismiss() })
         actionRow.addView(button(if (editing) "保存" else "保存并扫描", true) {
             if (urlInput.value.trim().isBlank()) {
-                Toast.makeText(activity, "请填写 WebDAV 地址", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, L10n.tr("请填写 WebDAV 地址"), Toast.LENGTH_SHORT).show()
                 return@button
             }
             val conn = buildConn(nameInput, urlInput, pathInput, userInput, passInput, editing, existing)
@@ -690,13 +691,13 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
         speedBtn = pbtn("倍速 1.0x") {
             speedIdx = (speedIdx + 1) % speeds.size
             player.setPlaybackSpeed(speeds[speedIdx])
-            speedBtn.text = "倍速 " + speedLabels[speedIdx]
+            speedBtn.text = L10n.tr("倍速 ") + speedLabels[speedIdx]
         }
         btnRow.addView(speedBtn)
         loopBtn = pbtn("循环：关") {
             loop = !loop
             player.repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-            loopBtn.text = if (loop) "循环：开" else "循环：关"
+            loopBtn.text = L10n.tr(if (loop) "循环：开" else "循环：关")
         }
         btnRow.addView(loopBtn)
         // 适应=留黑边保比例；填满=裁掉多余部分铺满屏幕（对付宽银幕上下黑边）
@@ -706,12 +707,12 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
             zoom = !zoom
             playerView.resizeMode = if (zoom) AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 else AspectRatioFrameLayout.RESIZE_MODE_FIT
-            zoomBtn.text = if (zoom) "比例：填满" else "比例：适应"
+            zoomBtn.text = L10n.tr(if (zoom) "比例：填满" else "比例：适应")
         }
         btnRow.addView(zoomBtn)
 
         player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(playing: Boolean) { playBtn.text = if (playing) "暂停" else "播放" }
+            override fun onIsPlayingChanged(playing: Boolean) { playBtn.text = L10n.tr(if (playing) "暂停" else "播放") }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED && !loop) {
                     if (index < playlist.lastIndex) loadEpisode(index + 1) else dialog.dismiss()
@@ -825,7 +826,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
 
     private fun text(s: String, size: Float, color: Int = TvStyle.text, bold: Boolean = false): TextView =
         TextView(activity).apply {
-            text = s; textSize = size; setTextColor(color); includeFontPadding = false
+            text = L10n.tr(s); textSize = size; setTextColor(color); includeFontPadding = false
             if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
 
@@ -834,7 +835,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
 
     private fun button(s: String, primary: Boolean = false, onClick: () -> Unit): TextView =
         TextView(activity).apply {
-            text = s; textSize = 13.5f; gravity = Gravity.CENTER; includeFontPadding = false
+            text = L10n.tr(s); textSize = 13.5f; gravity = Gravity.CENTER; includeFontPadding = false
             setTextColor(if (primary) Color.WHITE else TvStyle.text)
             background = TvStyle.shape(activity, if (primary) TvStyle.accent else TvStyle.surface,
                 if (primary) TvStyle.accent else TvStyle.outline, 10)
@@ -854,7 +855,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
 
     private fun chip(s: String, selected: Boolean, onClick: () -> Unit = {}): TextView =
         TextView(activity).apply {
-            text = s; textSize = 13f; gravity = Gravity.CENTER; includeFontPadding = false
+            text = L10n.tr(s); textSize = 13f; gravity = Gravity.CENTER; includeFontPadding = false
             setTextColor(if (selected) TvStyle.text else TvStyle.muted)
             background = TvStyle.shape(activity, if (selected) TvStyle.selectedSurface else TvStyle.surface,
                 if (selected) TvStyle.accent else TvStyle.outline, 999)
@@ -887,7 +888,7 @@ class NasScreen(private val activity: Activity, private val tvTools: TvTools) {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, dp(4))
         }
         val labelView = TextView(activity).apply {
-            text = label; textSize = 13f; setTextColor(TvStyle.muted)
+            text = L10n.tr(label); textSize = 13f; setTextColor(TvStyle.muted)
             layoutParams = LinearLayout.LayoutParams(dp(112), -2).apply { rightMargin = dp(10) }
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
         }

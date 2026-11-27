@@ -120,6 +120,12 @@ class LanRemoteHub(
     @Volatile var snapshot: PlaybackSnapshot = PlaybackSnapshot()
 
     /**
+     * 多语言字典出口（2026-11-26）：由 app 层注入当前语言与词条 JSON，手机遥控页加载时取一次。
+     * 返回 `{"lang":"tw","dict":{...}}`；未注入时页面保持中文原文。
+     */
+    @Volatile var i18nProvider: (() -> String)? = null
+
+    /**
      * 会话标识。每次扫码都会新建一个 Hub，所以它天然「一次扫码一个值」。
      * 手机端只用来判断「对面是不是同一个会话」，不需要用户手动管理。
      */
@@ -234,7 +240,8 @@ class LanRemoteHub(
         if(!path.startsWith("/$token")) return reply(socket, 404, "页面不存在")
         val route = path.removePrefix("/$token").ifEmpty { "/" }
         when {
-            method == "GET" && route == "/" -> reply(socket, 200, LanRemotePage.html, "text/html")
+            // 页面正文由手机端脚本按 /i18n 下发词条自行渲染，但 <title> 这类静态节点得在服务端翻
+            method == "GET" && route == "/" -> reply(socket, 200, HtmlL10n.translate(LanRemotePage.html), "text/html")
             method == "GET" && route == "/events" -> serveEvents(socket, headers, query)
             method == "GET" && route == "/episodes" -> {
                 allowOrigin(socket, headers) ?: return
@@ -251,6 +258,10 @@ class LanRemoteHub(
             method == "GET" && route == "/cover" -> {
                 allowOrigin(socket, headers) ?: return
                 serveCover(socket, query)
+            }
+            method == "GET" && route == "/i18n" -> {
+                allowOrigin(socket, headers) ?: return
+                reply(socket, 200, i18nProvider?.invoke() ?: "{\"lang\":\"zh\",\"dict\":{}}", "application/json")
             }
             method == "POST" && route == "/cmd" -> handleCommand(socket, input, headers)
             method == "POST" && route == "/upload" -> handleUpload(socket, input, headers, query)

@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
 internal fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key, "").trim()
 internal fun cleanUrl(s: String) = s.replace("\\/","/").replace("\\u002F","/",ignoreCase=true).replace("\\u0026","&").replace("&amp;","&")
+/** 分集 ID：官方旧版是纯数字；2026-11-27 起官网 SEO 详情页改下发 `v1_<base64url>` 混淆 ID。 */
+internal val EPISODE_ID = Regex("[0-9]{1,30}|v1_[A-Za-z0-9_-]{1,60}")
 data class Series(val id: String, val title: String, val cover: String = "", val description: String = "", val badge: String = "", val tags: String = "") {
     fun toJson() = JSONObject().put("id",id).put("title",title).put("cover",cover).put("description",description).put("badge",badge).put("tags",tags)
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),seriesTitle(o.str("title")),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
@@ -119,16 +121,21 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         extraHeaders.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
-        return RequestScope.execute(http.newCall(request.build())) { response ->
-            if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
-            val body = response.body ?: throw IOException("内容响应为空")
-            if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
-            val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
-            while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
-            if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
-            if(bytes.isEmpty()) throw IOException("接口响应为空，请稍后重试")
-            String(bytes,Charsets.UTF_8)
-        }
+        return executeText(request.build())
+    }
+    private fun postJson(url: String, json: String): String = executeText(
+        Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA)
+            .header("Accept-Language","zh-CN,zh;q=0.9")
+            .post(json.toRequestBody("application/json; charset=utf-8".toMediaType())).build())
+    private fun executeText(request: Request): String = RequestScope.execute(http.newCall(request)) { response ->
+        if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
+        val body = response.body ?: throw IOException("内容响应为空")
+        if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
+        val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
+        while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
+        if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
+        if(bytes.isEmpty()) throw IOException("接口响应为空，请稍后重试")
+        String(bytes,Charsets.UTF_8)
     }
     private fun router(url: String) = extractRouter(text(url)).getJSONObject("loaderData")
     private fun card(item: JSONObject): Series {
@@ -538,8 +545,25 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         if(key.isEmpty() || key.length>20 || !key.matches(Regex("[a-z0-9]+"))) return emptyList()
         return suggestRaw(key)
     }
-    /** 详情公共部分：剧集列表 + 卡片 + 社交数；related/sameName 只有完整详情才需要（两者都要联网）。 */
-    private fun detailCommon(id: String): Triple<Detail, String, JSONObject> {
+    private val detailApiCache=linkedMapOf<String,Pair<Long,List<String>>>()
+    /** 官方 detail 接口的全量分集（10 分钟内复用）。失败返回 null，调用方保留官网已下发的分集。 */
+    private fun fullEpisodes(seriesId: String): List<String>? {
+        synchronized(detailApiCache) {
+            detailApiCache[seriesId]?.takeIf { clock()-it.first<600_000 }?.let { return it.second }
+        }
+        val ids=runCatching {
+            MobilePlayback.videoDetail(seriesId,playbackSession.profile(http),http,signer,clock())
+        }.getOrNull() ?: return null
+        synchronized(detailApiCache) {
+            detailApiCache[seriesId]=clock() to ids
+            while(detailApiCache.size>100) detailApiCache.remove(detailApiCache.keys.first())
+        }
+        return ids
+    }
+    /** 详情公共部分：剧集列表 + 卡片 + 社交数；related/sameName 只有完整详情才需要（两者都要联网）。
+     *  [withFullEpisodes] 仅详情页传 true：官网匿名页只下发前 3 集，官方 detail 接口能补全；
+     *  feed 的 [detailLite] 不需要全量（起播只要第一集），避免滑一部剧就打一发官方接口。 */
+    private fun detailCommon(id: String, withFullEpisodes: Boolean = false): Triple<Detail, String, JSONObject> {
         require(id.matches(Regex("[0-9]{1,30}")))
         // 404 大多是「已官宣未上线」的季（官方 plan feed 会列出、但网页详情页还没建），
         // 报成网络错误会误导用户去检查网络（2026-11-22 公路求生榜第四季实测）。
@@ -549,8 +573,13 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         val loader=extractRouter(html).getJSONObject("loaderData")
         val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
         val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
-        val episodes=(0 until raw.length()).map { raw.getString(it) }
-        if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
+        var episodes=(0 until raw.length()).map { raw.getString(it) }
+        // 2026-11-27 起官网匿名页只下发前 3 集（实测 6 部剧全 3/60+）；详情页用官方 detail 接口补全。
+        // 官方接口失败/空响应时保留官网这 3 集，不把整页打成「分集数据异常」。
+        val declared=o.optInt("episode_cnt",o.optJSONObject("series_episode_info")?.optInt("episode_cnt",0) ?: 0)
+        if(withFullEpisodes && declared>episodes.size)
+            fullEpisodes(id)?.takeIf { it.size>episodes.size }?.let { episodes=it }
+        if(episodes.isEmpty() || episodes.any { !it.matches(EPISODE_ID) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         val series=card(o).copy(id=id)
         val social=social(loader.optJSONObject("detail_page")?.optJSONObject("seriesSocialInfo"))
         return Triple(Detail(series,episodes,social=social),html,o)
@@ -559,7 +588,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  （sameName 会并发连发多次网站搜索，feed 滑动换剧完全用不到，白耗 1-2 秒）。 */
     open fun detailLite(id: String): Detail = detailCommon(id).first
     fun detail(id: String): Detail {
-        val (base,html,o)=detailCommon(id)
+        val (base,html,o)=detailCommon(id,true)
         // 相关推荐双层：官方 plan/v1（from=select_panel_recommend，show_type=160）为主；
         // 匿名身份常拿不到 160 cell（只回通用 401「更多好剧」），此时回落官网详情页内嵌
         // related_list（本身就是按剧下发的真·相关推荐，匿名最优解）。登录态接入后 160 才稳定出现。
@@ -636,7 +665,9 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
      *  正常情况只要 1 个请求（v5 签名链）；站方空响应（HTTP 200 + 0 字节）会立刻转成
      *  [PlaybackThrottledException] 并进入全局冷却，冷却期内本方法不发任何请求。 */
     fun stream(id: String, maxQuality: Int = 1080, quiet: Boolean = false): StreamInfo {
-        require(id.matches(Regex("[0-9]{1,30}")))
+        require(id.matches(EPISODE_ID))
+        // 官网新版 v1_ 混淆 ID 不走官方取址接口（它不认这种 ID），直接走官网播放器的换链接口。
+        if(id.startsWith("v1_")) return protectedStream(id)
         // 风控冷却期内连一次请求都不发：继续打只会把冷却期成倍拉长。
         guardPlaybackCooldown()
         try {
@@ -671,14 +702,33 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
 
     private val ladderCache=HashMap<String,StreamLadder>()
 
+    /** 官网 SEO 页 2026-11-27 起把分集 ID 换成 `v1_<base64url>`：官方取址接口不认这种 ID，
+     *  但官网播放器调用的 `fallback-play-info` 能把它换成完整正片直链（实测 144 秒，
+     *  不是 `/video/public/<id>/360p.mp4` 那条只有 10 秒的 SEO 预览）。
+     *  该接口属于官网自有服务，不受官方取址的匿名设备额度/风控冷却影响。 */
+    @Synchronized private fun protectedStream(id: String): StreamInfo {
+        val payload=JSONObject().put("item_id",id).put("force_refresh",false).toString()
+        val response=JSONObject(postJson("$site/api/video/protected/fallback-play-info?aid=8662",payload))
+        val result=response.optJSONObject("base_resp")
+        val url=cleanUrl(response.str("main_url"))
+        if(result?.optInt("StatusCode",-1)!=0 || !url.startsWith("https://"))
+            throw IOException("官网播放地址暂不可用")
+        val stream=StreamInfo(url,null,"360P",qNum=360)
+        val now=System.currentTimeMillis()/1000
+        val expire=response.optLong("url_expire").takeIf { it>now } ?: (now+1800)
+        ladderCache[id]=StreamLadder(id,listOf(stream),expire)
+        return stream
+    }
+
     /** 取一集完整清晰度阶梯（见 [StreamLadder]）。
      *  普通档从高到低在前，bytevc2 档按从低到高垫底（最低档 = 最后兜底）；
      *  某一档解密失败/直链为空就跳过该档；全部档位都拿不到时抛 [UnplayableVideoException]。
      *  结果缓存到 url_expire，期间切清晰度/重播/自动降档全部零请求。 */
     @Synchronized fun ladder(id: String,quiet: Boolean=false): List<StreamInfo> {
-        require(id.matches(Regex("[0-9]{1,30}")))
+        require(id.matches(EPISODE_ID))
         val now=System.currentTimeMillis()/1000
         ladderCache[id]?.takeIf { it.expireAt>now && it.tiers.isNotEmpty() }?.let { return it.tiers }
+        if(id.startsWith("v1_")) return listOf(protectedStream(id))
         guardPlaybackCooldown()
         val model=videoModel(id,quiet=quiet)
         // 内联档位（7.4.5.32 现行 App）：模型自带全部直链，省掉 fallback_api 那一发。
@@ -733,7 +783,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
 
     /** 从阶梯挑一条（不 prepare）：普通档里 ≤cap 的最高档；全无普通档则 bytevc2 最低档。 */
     fun streamFromLadder(id: String, maxQuality: Int = 1080): StreamInfo {
-        require(id.matches(Regex("[0-9]{1,30}")))
+        require(id.matches(EPISODE_ID))
         val tiers=ladder(id)
         val normal=tiers.filter { it.codec!="bytevc2" }
         return normal.lastOrNull { it.qNum in 1..maxQuality }

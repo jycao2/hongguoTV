@@ -8,7 +8,7 @@ internal object PhoneServerPage {
     const val PLACEHOLDER = "__WECHAT__"
 
     fun fill(page: String, userAgent: String?): String =
-        page.replace(PLACEHOLDER, notice(userAgent))
+        HtmlL10n.translate(page.replace(PLACEHOLDER, notice(userAgent)))
 
     private fun notice(userAgent: String?): String =
         if(userAgent?.contains("micromessenger", ignoreCase = true) == true)

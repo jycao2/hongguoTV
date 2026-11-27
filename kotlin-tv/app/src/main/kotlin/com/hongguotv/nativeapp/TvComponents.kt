@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import com.hongguotv.core.L10n
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
@@ -34,12 +35,17 @@ class SettingRow(context: Context) : LinearLayout(context) {
     }
     val switchView = TvSwitch(context)
 
+    /** 未翻译的名称原文：页面重建后按它恢复焦点，不受界面语言切换影响（2026-11-27） */
+    var sourceTitle: String = ""
+        private set
     var title: String
         get() = titleView.text.toString()
-        set(v) { titleView.text = v }
+        // 设置行文案统一翻译（2026-11-26）：getter 返回译文原文（界面所见），setter 防重复翻译。
+        // 走 UiL10n.text 而不是 L10n.tr：设置行标题常带「N 秒 / N 集」这类数字模板，要能按正则改写。
+        set(v) { sourceTitle = v; titleView.text = UiL10n.text(v) }
     var value: String
         get() = valueView.text.toString()
-        set(v) { valueView.text = v; valueView.visibility = if(v.isEmpty()) View.GONE else View.VISIBLE; onValueChanged?.invoke() }
+        set(v) { valueView.text = UiL10n.text(v); valueView.visibility = if(v.isEmpty()) View.GONE else View.VISIBLE; onValueChanged?.invoke() }
     var checked: Boolean
         get() = switchView.checked
         set(v) { switchView.checked = v; onValueChanged?.invoke() }
@@ -121,7 +127,7 @@ class SettingRow(context: Context) : LinearLayout(context) {
                     // 无分隔符：整串给值位，名称保持不变（HUD 按钮等场景不走这里）
                     r.value = label
                 }
-            } else (row as? TextView)?.text = label
+            } else (row as? TextView)?.text = L10n.tr(label)
         }
     }
 }
@@ -227,8 +233,8 @@ class SettingOptionPanel(context: Context) : LinearLayout(context) {
     }.apply { isFocusable = false }
 
     private fun reset(title: String, desc: String) {
-        titleView.text = title
-        descView.text = desc
+        titleView.text = L10n.tr(title)
+        descView.text = L10n.tr(desc)
         descView.visibility = if(desc.isEmpty()) View.GONE else View.VISIBLE
         optionHost.removeAllViews()
         optionHost.visibility = View.GONE
@@ -243,7 +249,7 @@ class SettingOptionPanel(context: Context) : LinearLayout(context) {
 
     /** 提示区：分隔线 + 一行小字（reset 后调用一次即可） */
     private fun setHint(text: String) {
-        hintView.text = text
+        hintView.text = L10n.tr(text)
         divider.visibility = View.VISIBLE
     }
 
@@ -275,7 +281,7 @@ class SettingOptionPanel(context: Context) : LinearLayout(context) {
             val tv = TextView(context).apply {
                 textSize = 14f; includeFontPadding = false
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                text = label
+                text = L10n.tr(label)
             }
             val rowView = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -365,7 +371,7 @@ class SettingOptionPanel(context: Context) : LinearLayout(context) {
                 background = TvStyle.shape(context, TvStyle.surface, TvStyle.outline, TvStyle.Radius.M)
                 val label = TextView(context).apply {
                     textSize = 14f; setTextColor(TvStyle.muted); includeFontPadding = false
-                    text = "当前状态"
+                    text = L10n.tr("当前状态")
                 }
                 addView(label, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 val sw = TvSwitch(context).apply {
@@ -414,4 +420,18 @@ class TvSwitch(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
         setMeasuredDimension((40*d).toInt(), (26*d).toInt())
+}
+
+/**
+ * 自动翻译的文本控件（2026-11-27）。
+ *
+ * 播放页状态行这类文案全是运行时拼出来的：失败原因、跳过计数、限流倒计时、定位时间。
+ * 出口散在几十处赋值里，逐个包 `L10n.tr` 必然漏，而且以后新加的文案还会继续漏。
+ * 这里在控件层兜一次：每次 setText 都过 [UiL10n.text]（整串 → 分段 → 数字模板），
+ * 查不到就原样显示，所以对用户生成的内容（剧名等）也不会误改——只用于纯 UI 文案控件。
+ */
+class LocalizedTextView(context: Context) : TextView(context) {
+    override fun setText(text: CharSequence?, type: BufferType?) {
+        super.setText(text?.let { UiL10n.text(it.toString()) }, type)
+    }
 }

@@ -16,6 +16,11 @@ class LibraryBackupTest {
         val result=LibraryBackup.decode(LibraryBackup.encode(sanitized))
         assertEquals("你 好",result.favorites.single().title); assertEquals("",result.favorites.single().cover)
     }
+    @Test fun `v1 episode ids survive backup round trip`() {
+        val record=BackupProgress(series("123"),"v1_Mo5NSn6s9i0fhoxvTJqDb2tF-W8",1,100L,144000,false,100L)
+        val original=data().copy(history=listOf(record))
+        assertEquals(original,LibraryBackup.decode(LibraryBackup.encode(original)))
+    }
     @Test fun `merge retains newer progress and watched state unless imported progress is newer`() {
         val local=data(); val incoming=data().copy(favorites=listOf(series("2"),series("1")),history=listOf(progress("1",50),progress("2",200)),watched=emptySet(),settings=BackupSettings(480,2f))
         val merged=LibraryBackup.merge(local,incoming,false)

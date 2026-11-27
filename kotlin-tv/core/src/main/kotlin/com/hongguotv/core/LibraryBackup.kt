@@ -20,7 +20,9 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
     val menuKeyAction: String="panel",val dpadUpDownAction: String="panel",val mouseRightAction: String="exit",
     val favoriteSort: String="update",
     // 设置页左栏分类顺序（逗号分隔分类 key，用户 2026-11-25）：空=默认顺序；未知 key 忽略、缺失 key 按默认补齐
-    val railOrder: String="") {
+    val railOrder: String="",
+    // 界面语言（2026-11-26）：zh/tw/en，空=跟随系统。语言是显示偏好、不是设备绑定信息，随备份迁移
+    val language: String="") {
     fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("autoSeason",autoSeason).put("danmaku",danmaku)
         .put("danmakuOpacity",danmakuOpacity).put("danmakuFont",danmakuFont).put("danmakuSpeed",danmakuSpeed).put("danmakuRows",danmakuRows).put("showClock",showClock).put("sourceHidden",sourceHidden)
         .put("navHidden",JSONArray(navHidden.filter { it in LibraryBackup.NAV_KEYS }.sorted())).put("feedAutoSwipe",feedAutoSwipe)
@@ -31,6 +33,7 @@ data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext
         .put("menuKeyAction",menuKeyAction).put("dpadUpDownAction",dpadUpDownAction).put("mouseRightAction",mouseRightAction)
         .put("favoriteSort",favoriteSort)
         .put("railOrder",railOrder)
+        .put("language",language)
 }
 
 /** 待机屏保档位（用户 2026-11-19）：分钟数，0=关闭；非播放页空闲超过设定时长后盖全屏时钟。
@@ -103,7 +106,8 @@ object LibraryBackup {
     val NAV_KEYS=setOf("search","rank","nas","favorite","history")
     const val MAX_THIRD_HISTORY=100
     const val MAX_THIRD_FAVORITES=100
-    private val idPattern=Regex("[0-9]{1,30}")
+    // 2026-11-27：官网改下发 v1_ 混淆分集 ID，备份恢复不能把它判为非法。
+    private val idPattern=Regex("[0-9]{1,30}|v1_[A-Za-z0-9_-]{1,60}")
     private fun id(value: String)=value.also { require(idPattern.matches(it)) { "剧集标识无效" } }
     private fun cleanCover(value: String): String=runCatching {
         val uri=URI(value); val host=uri.host.orEmpty().lowercase()
@@ -191,7 +195,7 @@ object LibraryBackup {
         }
         val history=o.rows("history",200).map { row ->
             val duration=row.number("duration",604_800_000)
-            BackupProgress(series(row.getJSONObject("series")),id(row.string("episodeId",30)),row.number("episodeIndex",100_000).toInt(),row.number("position",604_800_000).let { if(duration>0) minOf(it,duration) else it },duration,row.get("completed").also { require(it is Boolean) } as Boolean,row.number("updatedAt",4_102_444_800_000))
+            BackupProgress(series(row.getJSONObject("series")),id(row.string("episodeId",64)),row.number("episodeIndex",100_000).toInt(),row.number("position",604_800_000).let { if(duration>0) minOf(it,duration) else it },duration,row.get("completed").also { require(it is Boolean) } as Boolean,row.number("updatedAt",4_102_444_800_000))
         }
         require(favorites.distinctBy { it.id }.size==favorites.size && history.distinctBy { it.series.id }.size==history.size) { "备份包含重复剧集" }
         val watched=o.getJSONArray("watched"); require(watched.length()<=500)
@@ -242,6 +246,8 @@ object LibraryBackup {
         val favoriteSort=settings.optString("favoriteSort","update").takeIf { it in listOf("update","watch","name") } ?: "update"
         // 设置页左栏分类顺序：旧备份缺字段时空串（=默认顺序）；只保留已知 key 由 app 侧过滤（2026-11-25）
         val railOrder=settings.optString("railOrder","").take(300)
+        // 界面语言：旧备份缺字段时空串（=跟随系统）；非法值回落空串
+        val language=settings.optString("language","").takeIf { it in L10n.SUPPORTED || it==L10n.FOLLOW_SYSTEM } ?: L10n.FOLLOW_SYSTEM
         // 三方源：旧备份没有该字段时静默为空；非法接口直接跳过，不影响整体恢复。
         // v2 字段（type/headers/元数据）缺失时回落 v1 默认值，新旧备份双向兼容
         val thirdSources=if(o.has("thirdSources")) o.rows("thirdSources",ThirdSourceConfig.MAX).mapNotNull { row ->
@@ -299,7 +305,7 @@ object LibraryBackup {
                 }.getOrNull()
             }
         }.getOrDefault(emptyList()) else emptyList()
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden,navHidden,feedAutoSwipe,screensaverMinutes,screensaverStyle,screensaverMuted,screensaverMedia,screensaverFit,screensaverInterval,screensaverClockPos,softQuality,autoSkip,seekStep,fastSpeed,menuKeyAction,dpadUpDownAction,mouseRightAction,favoriteSort,railOrder),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,autoSeason,danmaku,danmakuOpacity,danmakuFont,danmakuSpeed,danmakuRows,showClock,sourceHidden,navHidden,feedAutoSwipe,screensaverMinutes,screensaverStyle,screensaverMuted,screensaverMedia,screensaverFit,screensaverInterval,screensaverClockPos,softQuality,autoSkip,seekStep,fastSpeed,menuKeyAction,dpadUpDownAction,mouseRightAction,favoriteSort,railOrder,language),later,hiddenIds,favoriteGroups,thirdSources,thirdHistory,thirdFavorites)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {

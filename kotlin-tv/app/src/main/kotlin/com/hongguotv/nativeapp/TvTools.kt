@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import com.hongguotv.core.L10n
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
@@ -118,7 +119,7 @@ class TvTools(private val activity: Activity) {
             saved++
         }
         if(saved>0) main.post {
-            android.widget.Toast.makeText(activity,"已接收 $saved 个文件到快传文件",android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(activity, L10n.tr("已接收 $saved 个文件到快传文件"),android.widget.Toast.LENGTH_SHORT).show()
         }
         return when {
             saved==prepared.size -> true to "已保存 $saved 个文件"
@@ -170,7 +171,12 @@ class TvTools(private val activity: Activity) {
         if(!answered) main.post { runCatching { shown.get()?.takeIf { it.isShowing }?.dismiss() } }
         return answered && approved.get()
     }
-    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
+    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=L10n.tr(value); textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
+    /**
+     * 会随运行时变化的一行文案（倒计时、剩余空间、文件计数）。
+     * 普通 label 只在创建时查一次字典，这类文案每秒重写一次、整串带变量，必须靠自动翻译控件。
+     */
+    private fun labelLive(value: String,size: Float=17f)=LocalizedTextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
     private fun open(next: AlertDialog,anchor: View?,fullscreen: Boolean=false,onDismiss: (()->Unit)?=null) {
         dialog?.dismiss(); dialog=next
@@ -199,7 +205,7 @@ class TvTools(private val activity: Activity) {
         var digits=(current+1).toString(); var replace=true
         val value=label(digits,28f).apply { gravity=Gravity.CENTER; setTextColor(TvStyle.text) }; content.addView(value)
         val error=label("定位到该集，再按确认播放",14f).apply { setTextColor(TvStyle.muted) }; content.addView(error)
-        fun digit(key: String) { digits=if(replace) key else (digits+key).take(6); replace=false; value.text=digits; error.text="定位到该集，再按确认播放" }
+        fun digit(key: String) { digits=if(replace) key else (digits+key).take(6); replace=false; value.text=digits; error.text=L10n.tr("定位到该集，再按确认播放") }
         fun erase() { digits=if(replace) "" else digits.dropLast(1); replace=false; value.text=digits.ifEmpty { "—" } }
         val buttons=mutableListOf<Button>()
         listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("清空","0","退格")).forEach { keys ->
@@ -286,7 +292,7 @@ class TvTools(private val activity: Activity) {
                         label("手机扫码打开，按提示填写，提交后发送到电视。\n仅限同一局域网，关闭即失效。",16f),
                         TvDialog.urlLabel(activity, session.url)))
                 }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机填写，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启手机填写，请检查网络后重试。") } }
         }
     }
     /** 源配置的手机扫码导入导出：手机页可下载当前源配置，也可上传配置文件追加到电视。 */
@@ -310,7 +316,7 @@ class TvTools(private val activity: Activity) {
                         label("扫码打开：可下载当前源配置，或上传配置恢复到电视。\n已有源不覆盖，仅追加缺失。",16f),
                         TvDialog.urlLabel(activity, session.url)))
                 }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启源配置传输，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启源配置传输，请检查网络后重试。") } }
         }
     }
     /** 崩溃日志扫码导出：合并本机全部崩溃文件为一份 txt，手机扫码下载（只出不进，不回收任何数据）。 */
@@ -334,7 +340,7 @@ class TvTools(private val activity: Activity) {
                         label("手机扫码打开后点「下载日志文件」。\n下载完成后把文件发给开发者即可。",16f),
                         TvDialog.urlLabel(activity, session.url)))
                 }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启日志导出，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启日志导出，请检查网络后重试。") } }
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {
@@ -376,7 +382,7 @@ class TvTools(private val activity: Activity) {
                         label("扫码用浏览器下载备份，或选择备份文件恢复。\n仅限同一局域网，恢复需在电视确认。",16f),
                         TvDialog.urlLabel(activity, session.url)))
                 }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启备份传输，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启备份传输，请检查网络后重试。") } }
         }
     }
     fun backdropTransfer(anchor: View?,onImage: (ByteArray,String)->Unit) {
@@ -399,7 +405,7 @@ class TvTools(private val activity: Activity) {
                         label("扫码或打开下方地址，上传图片设为电视背景。\n手机与电视需同一无线网。",16f),
                         TvDialog.urlLabel(activity, session.url)))
                 }
-            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启图片上传，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启图片上传，请检查网络后重试。") } }
         }
     }
     /** 手机快传：扫码直传文件。APK 收到后交给调用方引导安装，其余文件落私有目录。 */
@@ -434,7 +440,7 @@ class TvTools(private val activity: Activity) {
         dialog.window?.decorView?.post { status.requestFocus() }
         /** [refocusRefresh] 为 true 表示这次重建是「刷新二维码」触发的，焦点要留在原按钮上。 */
         fun startSession(refocusRefresh: Boolean=false) {
-            status.text="正在生成二维码…"
+            status.text=L10n.tr("正在生成二维码…")
             worker.execute {
                 try {
                     val s=QuickTransferServer(address,{ kind -> quickDirectory(kind) },{ freeBytes() },
@@ -457,17 +463,17 @@ class TvTools(private val activity: Activity) {
                             }
                             onReceived(file,kind)
                         } },
-                        { main.post { if(this@TvTools.dialog===dialog) { countdown?.text="二维码已过期，请刷新"; countdown?.setTextColor(TvStyle.muted) } } })
+                        { main.post { if(this@TvTools.dialog===dialog) { countdown?.text=L10n.tr("二维码已过期，请刷新"); countdown?.setTextColor(TvStyle.muted) } } })
                     main.post {
                         if(this@TvTools.dialog!==dialog) { s.close(); return@post }
                         session?.close(); session=s; phone=s; sessionStart.set(System.nanoTime())
                         content.removeAllViews()
                         content.addView(TvDialog.qrRow(activity, qr(s.url),
-                            label("手机扫码打开，选择文件发送到电视。\nAPK 会提示安装，视频图片存入电视。",16f),
+                            labelLive("手机扫码打开，选择文件发送到电视。\nAPK 会提示安装，视频图片存入电视。",16f),
                             TvDialog.urlLabel(activity, s.url)))
-                        countdown=label("二维码有效期 · 剩余 10:00",13f).apply { setTextColor(TvStyle.accent); setPadding(0,dp(6),0,dp(2)) }; content.addView(countdown)
-                        val space=label(spaceLabel(),13f).apply { setTextColor(TvStyle.muted) }; content.addView(space)
-                        val name=label("等待手机发送…",15f); content.addView(name)
+                        countdown=labelLive("二维码有效期 · 剩余 10:00",13f).apply { setTextColor(TvStyle.accent); setPadding(0,dp(6),0,dp(2)) }; content.addView(countdown)
+                        val space=labelLive(spaceLabel(),13f).apply { setTextColor(TvStyle.muted) }; content.addView(space)
+                        val name=labelLive("等待手机发送…",15f); content.addView(name)
                         val bar=ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal).apply {
                             max=100; progress=0
                             progressTintList=android.content.res.ColorStateList.valueOf(TvStyle.accent)
@@ -493,9 +499,9 @@ class TvTools(private val activity: Activity) {
                                     main.post {
                                         if(this@TvTools.dialog!==dialog) return@post
                                         receivedFiles=0
-                                        received.text="本次已接收 0 个文件"
+                                        received.text=L10n.tr("本次已接收 0 个文件")
                                         space.text=spaceLabel()
-                                        name.text="等待手机发送…"; bar.progress=0; detail.text=""
+                                        name.text=L10n.tr("等待手机发送…"); bar.progress=0; detail.text=""
                                     }
                                 }
                             }.show()
@@ -519,7 +525,7 @@ class TvTools(private val activity: Activity) {
                         // 刷新二维码后焦点留在「刷新二维码」上，别每次跳回「完成」
                         dialog.window?.decorView?.post { if(refocusRefresh) refresh.requestFocus() else close.requestFocus() }
                     }
-                } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text="无法开启手机快传，请检查网络后重试。" } }
+                } catch(_: Exception) { main.post { if(this@TvTools.dialog===dialog) status.text=L10n.tr("无法开启手机快传，请检查网络后重试。") } }
             }
         }
         startSession()
@@ -556,7 +562,7 @@ class TvTools(private val activity: Activity) {
             val bitmap=runCatching { previewBitmap(file) }.getOrNull()
             main.post {
                 if(this@TvTools.dialog!==next) return@post
-                if(bitmap==null) status.text="无法预览这张图片"
+                if(bitmap==null) status.text=L10n.tr("无法预览这张图片")
                 else { status.text=""; image.setImageBitmap(bitmap) }
             }
         }
@@ -690,7 +696,7 @@ class TvTools(private val activity: Activity) {
             val files=runCatching { TransferFiles.prune(directories); TransferFiles.list(directories) }.getOrNull()
             main.post {
                 if(this@TvTools.dialog!==dialog) return@post
-                if(files==null) { status.text="读取快传文件失败，请重试"; return@post }
+                if(files==null) { status.text=L10n.tr("读取快传文件失败，请重试"); return@post }
                 paintQuickFiles(dialog,content,directories,files,onPrimary,onTransfer)
             }
         }
@@ -720,7 +726,7 @@ class TvTools(private val activity: Activity) {
             content.removeAllViews()
             content.addView(TvDialog.title(activity,"快传文件"))
             val total=all.sumOf { it.file.length() }
-            content.addView(label("共 ${all.size} 个 · 合计 ${TransferRules.humanBytes(total)} · 电视可用 ${TransferRules.humanBytes(freeBytes())}",13f).apply { setTextColor(TvStyle.muted) })
+            content.addView(labelLive("共 ${all.size} 个 · 合计 ${TransferRules.humanBytes(total)} · 电视可用 ${TransferRules.humanBytes(freeBytes())}",13f).apply { setTextColor(TvStyle.muted) })
             if(all.isEmpty()) {
                 content.addView(label("还没有收到文件。\n手机快传扫码上传后，文件会出现在这里。",15f).apply {
                     gravity=Gravity.CENTER; setTextColor(TvStyle.muted); setPadding(0,dp(46),0,dp(46))
@@ -804,7 +810,7 @@ class TvTools(private val activity: Activity) {
                     val deleted=runCatching { item.file.delete() }.getOrDefault(false)
                     main.post {
                         if(this@TvTools.dialog!==dialog) return@post
-                        if(!deleted) Toast.makeText(activity,"文件已被删除或无法访问",Toast.LENGTH_SHORT).show()
+                        if(!deleted) Toast.makeText(activity,L10n.tr("文件已被删除或无法访问"),Toast.LENGTH_SHORT).show()
                         all=all.filterNot { it.file==item.file }
                         paint(true)
                     }

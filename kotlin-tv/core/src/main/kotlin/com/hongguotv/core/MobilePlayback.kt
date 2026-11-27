@@ -33,6 +33,10 @@ internal object MobilePlayback {
      *  官方 7.4.5.32 客户端真实调用的取址端点（APK `RpcOperation("$POST /novel/player/video_model/v1/")` 确认），
      *  2026-11-24 起重新放行，实测取到 1080P；请求体是单集 `video_id` + biz_param，**不带 mixed_video_id_map**。 */
     const val CURRENT_MODEL_PATH = "/novel/player/video_model/v1/"
+    /** 官方剧集详情接口（上游 openhongguo `PathSeries`）：`video_data.video_list[]` 是全量分集，
+     *  每项 `vid` 是官方取址认识的纯数字 ID。2026-11-27 官网 SEO 页把匿名 `vid_list` 砍到前 3 集，
+     *  这是补全分集的唯一来源。 */
+    const val DETAIL_PATH = "/novel/player/video_detail/v1/"
     /** 备用取址 GET（官方 `GetVideoModelRequest` 形态）。2026-11-22 上游 0.16.12 实网确认：
      *  主 POST 返空时，同一身份用 **v5 签名** 打这条 GET 能拿到模型（4 集跨 2 部剧）。 */
     private const val TAB_PATH = "/reading/bookapi/video_tab/multi_video_model/v1/"
@@ -235,6 +239,67 @@ internal object MobilePlayback {
             throw EmptyPlaybackResponseException()
         }
         return parse(text, id)
+    }
+
+    /** 官方详情接口：拿一部剧的全量分集 ID。
+     *
+     *  背景（2026-11-27）：官网 SEO 详情页对匿名访客只下发前 3 集 `vid_list`（实测 6 部剧全是 3/60+），
+     *  旧版能拿全量，改版后不能。官方客户端的 `video_detail/v1` 仍返回 `video_data.video_list[]`
+     *  全量分集，每项 `vid` 就是官方取址认识的纯数字 ID（上游 openhongguo 同一链路）。
+     *  失败/空响应返回 null —— 详情页继续用官网下发的 3 集，不把整页打成错误。 */
+    fun videoDetail(
+        seriesId: String,
+        identity: PlaybackDeviceSession.Profile,
+        http: OkHttpClient,
+        signer: Signer,
+        now: Long,
+    ): List<String>? {
+        if (!seriesId.matches(Regex("[0-9]{1,30}"))) return null
+        val payload = """{"series_id":"$seriesId","biz_param":{"caller_scene":"single_col","detail_page_version":0,"from_video_id":"","need_all_video_definition":false,"need_mp4_align":false,"source":4,"video_id_type":1}}"""
+        val body = gzip(payload.toByteArray(Charsets.UTF_8))
+        val signed = signer.signPlaybackV5(APP_HOST + DETAIL_PATH, query(identity), body)
+        val request = Request.Builder().url(signed.url)
+            .header("User-Agent", UA)
+            .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+            .header("Content-Encoding", "gzip")
+            .apply { signed.headers.forEach { (key, value) -> header(key, value) } }
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        val text = try {
+            val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
+            RequestScope.execute(transport.newCall(request)) { response ->
+                if (response.code == 429) throw PlaybackRateLimitedException(ContentRepository.retryAfterMs(response))
+                if (!response.isSuccessful) throw IOException("详情接口请求失败（HTTP ${response.code}）")
+                response.body?.string().orEmpty()
+            }
+        } catch (limited: PlaybackRateLimitedException) {
+            throw limited
+        } catch (problem: java.io.InterruptedIOException) {
+            throw problem
+        } catch (problem: IOException) {
+            ContentRepository.probeLog?.invoke("video_detail 请求失败 ${problem.message}")
+            return null
+        } catch (problem: RuntimeException) {
+            ContentRepository.probeLog?.invoke("video_detail 请求异常 ${problem.message}")
+            return null
+        }
+        if (text.isBlank()) {
+            ContentRepository.probeLog?.invoke("video_detail 空响应（HTTP 200 / 0 字节）")
+            return null
+        }
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
+        if (root.optInt("code", -1) != 0) {
+            ContentRepository.probeLog?.invoke("video_detail code=${root.optInt("code", -1)}")
+            return null
+        }
+        val rows = root.optJSONObject("data")?.optJSONObject("video_data")?.optJSONArray("video_list") ?: return null
+        val ids = (0 until rows.length()).mapNotNull { rows.optJSONObject(it)?.str("vid") }
+            .filter { it.matches(EPISODE_ID) }.distinct()
+        if (ids.isEmpty()) {
+            ContentRepository.probeLog?.invoke("video_detail 无分集（rows=${rows.length()}）")
+            return null
+        }
+        return ids
     }
 
     /** 一窗剧集的批量取址：同一发 `preload/v1`，`mixed_video_id_map["1004"]` 放多个 id。

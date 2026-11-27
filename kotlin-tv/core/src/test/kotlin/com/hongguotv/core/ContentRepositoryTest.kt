@@ -703,6 +703,62 @@ class ContentRepositoryTest {
         assertTrue(detail.related.isEmpty())
     }
 
+    @Test fun detailAcceptsOpaqueV1EpisodeIds() {
+        // 2026-11-27 起官网 vid_list 从纯数字改为 v1_ 混淆 ID，详情页不该再报「分集数据异常」。
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":{"series_id":"123","series_name":"测试剧","vid_list":["v1_ABC-123_xyz","v1_DEF_456"]}}}};</script>"""
+        val detail=repository { html }.detailLite("123")
+        assertEquals(listOf("v1_ABC-123_xyz","v1_DEF_456"),detail.episodes)
+    }
+
+    @Test fun detailPageFillsMissingEpisodesFromOfficialVideoDetail() {
+        // 官网匿名页只给 3 集，详情页应从官方 video_detail 的 video_list 补齐全量。
+        val ids=(1..60).map { "900$it" }
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("episode_cnt",60)
+            .put("vid_list",JSONArray().put("v1_a").put("v1_b").put("v1_c"))
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script>"""
+        val repo=repository { request ->
+            if(request.url.encodedPath=="/novel/player/video_detail/v1/") {
+                val rows=JSONArray()
+                ids.forEach { rows.put(JSONObject().put("vid",it)) }
+                JSONObject().put("code",0)
+                    .put("data",JSONObject().put("video_data",JSONObject().put("video_list",rows))).toString()
+            } else html
+        }
+        assertEquals(ids,repo.detail("123").episodes)
+    }
+
+    @Test fun feedDetailLiteKeepsSiteEpisodesAndSkipsOfficialDetailApi() {
+        // feed 换剧不需要全量，不能为每部剧白打一发官方详情接口。
+        val series=JSONObject().put("series_id","123").put("series_name","测试剧").put("episode_cnt",60)
+            .put("vid_list",JSONArray().put("v1_a").put("v1_b").put("v1_c"))
+        val html="""<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":$series}}};</script>"""
+        var calls=0
+        val repo=repository { calls++; html }
+        assertEquals(listOf("v1_a","v1_b","v1_c"),repo.detailLite("123").episodes)
+        assertEquals(1,calls)
+    }
+
+    @Test fun v1EpisodeUsesOfficialSiteFallbackPlayInfoInsteadOfSignedPlayback() {
+        val calls=mutableListOf<Request>()
+        val repo=repository { request ->
+            calls+=request
+            if(request.url.encodedPath=="/api/video/protected/fallback-play-info")
+                """{"main_url":"https://cdn.example.com/full.mp4","url_expire":2000000000,"base_resp":{"StatusCode":0,"StatusMessage":""}}"""
+            else """{"code":100103,"message":"官方取址不该被调用"}"""
+        }
+        val stream=repo.stream("v1_ABC-123_xyz")
+        assertEquals("https://cdn.example.com/full.mp4",stream.url)
+        assertNull(stream.key)
+        // 网站自有换链接口 1 发；官方取址一次都不打，也不会进风控冷却。
+        assertEquals(1,calls.size)
+        assertEquals("/api/video/protected/fallback-play-info",calls.single().url.encodedPath)
+        val sent=okio.Buffer().also { calls.single().body!!.writeTo(it) }.readUtf8()
+        assertEquals("v1_ABC-123_xyz",JSONObject(sent).str("item_id"))
+        // 同集二次取流命中 url_expire 缓存，仍只有那 1 发。
+        assertEquals("https://cdn.example.com/full.mp4",repo.streamFast("v1_ABC-123_xyz").url)
+        assertEquals(1,calls.size)
+    }
+
     @Test fun detailCollectsSameNameSeasonsFromWebsiteSearchOrderedBySeason() {
         val series=JSONObject().put("series_id","123").put("series_name","测试剧 第二季").put("vid_list",JSONArray().put("900"))
         val repo=repository { request ->
