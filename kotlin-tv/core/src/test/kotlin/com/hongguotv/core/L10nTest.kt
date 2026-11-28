@@ -25,6 +25,8 @@ class L10nTest {
     @Test fun `繁中未命中回退原文`() {
         L10n.configure(L10n.TW)
         val rare = "一个绝对不会在字典里的测试文案XYZ"
+        // tr 未命中回退原文：tr 被数据通道（快传响应等）复用，不能在这里做 s2t 兜底，
+        // 否则会写坏备份 JSON 里的剧名（2026-11-28 实测「测试→測試」）。渲染层兜底在 UiL10n。
         assertEquals(rare, L10n.tr(rare))
     }
 

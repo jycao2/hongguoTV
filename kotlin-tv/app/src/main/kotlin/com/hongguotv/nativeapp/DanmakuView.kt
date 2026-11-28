@@ -9,7 +9,9 @@ import android.view.View
 import com.hongguotv.core.Danmaku
 import com.hongguotv.core.DanmakuEmoji
 import com.hongguotv.core.DanmakuLoader
+import com.hongguotv.core.ChineseText
 import com.hongguotv.core.DanmakuPrefs
+import com.hongguotv.core.L10n
 
 /**
  * Lightweight rolling-comment overlay. The playback position is the clock: a comment enters
@@ -166,8 +168,11 @@ class DanmakuView(context: Context, textSizeSp: Float = 20f, crossMs: Long = 9_0
     private fun emit(comment: Danmaku, position: Long) {
         if (pxPerMs <= 0f) return
         if (blocked(comment.text)) return
+        // 繁中模式下弹幕内容跟剧名/简介一起做显示层繁化（2026-11-28 台湾用户反馈）；
+        // 只改显示，屏蔽词匹配用的仍是原始文本（屏蔽词以官方文本为准）。
+        val display = if (L10n.current() == L10n.TW) ChineseText.toTraditional(comment.text) else comment.text
         // Expand emoji codes once here: measure and draw must see the same text.
-        val (text, unknownCodes) = DanmakuEmoji.expand(comment.text)
+        val (text, unknownCodes) = DanmakuEmoji.expand(display)
         if (unknownCodes.isNotEmpty()) {
             // 收集表格里还缺的 emote：滚一次 logcat 就能知道该补哪些码
             android.util.Log.w("HongguoTV", "danmaku unknown emote: ${unknownCodes.joinToString(",")}")

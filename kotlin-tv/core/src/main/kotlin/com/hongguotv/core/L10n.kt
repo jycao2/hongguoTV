@@ -72,7 +72,11 @@ object L10n {
         loose.stripped[stripKey(text)]?.let { return it }
         // 弹窗正文常是 appendLine 拼出来的整块说明，整块词条不存在，但每一行都是独立词条
         byLines(text, table, loose)?.let { return it }
-        // 最后兜「带插值的整句」（`已收藏《某剧》`）：按片段表在串内替换可译的部分
+        // 最后兜「带插值的整句」（`已收藏《某剧》`）：按片段表在串内替换可译的部分。
+        // 注意：这里**不能**对未命中内容做 s2t 兜底——tr 被逻辑路径广泛调用
+        // （LibraryTransferServer.respond 会把备份 JSON 整串传进来当「文案」），
+        // 在这里转换会把剧名等数据写坏（2026-11-28 实测快传导入「测试→測試」）。
+        // 内容繁化只挂在渲染层：UiL10n.text 尾部与 trFmt。
         return phrases(text, language, table) ?: text
     }
 
@@ -147,7 +151,9 @@ object L10n {
         val translated = tr(template)
         var out = translated
         args.forEachIndexed { index, value -> out = out.replace("{$index}", value.toString()) }
-        return out
+        // 模板整串命中字典时 out 已是繁体；未命中时 tr 走 fallback 只会把模板字面转繁，
+        // 而 args（剧名/集数等动态值）是这一步才拼进去的，所以要在这里再兜一次（幂等）。
+        return if (current() == TW) ChineseText.toTraditional(out) else out
     }
 
     /** 供手机遥控页下发字典用：返回当前语言的完整词条表（JSON 字符串由调用方序列化）。 */

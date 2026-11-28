@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统语言为繁中（台湾/香港/澳门）时，桌面图标与最近任务显示繁体应用名。
+     注意：launcher 名称跟随**系统**语言，不跟随应用内「界面语言」设置（Android 平台限制）。 -->
+<resources>
+    <string name="app_name">紅果TV</string>
+</resources>

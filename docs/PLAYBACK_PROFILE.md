@@ -48,7 +48,7 @@
 ## 端上行为
 
 1. 启动先读 `filesDir/playback-profile.json`（上次缓存），验签 + 校验通过才换上；不通过当没有；
-2. 距上次尝试超过 6 小时才后台拉一次：原始地址 → `gh-proxy.com` → `ghfast.top` → `gh-proxy.net`，第一个成功的胜出；
+2. 距上次尝试超过 6 小时才后台拉一次：原始地址 → `gh-proxy.org` → `gh-proxy.com` → `ghproxy.imciel.com` → `api.gitproxy.dev`，第一个成功的胜出（2026-11-27 换掉已失效的 ghfast.top 与只返回 JS 挑战页的 gh-proxy.net）；
 3. 只接受 `revision` 严格大于当前的内置/生效档案；
 4. 任何失败都静默：继续用当前生效的那份，不弹窗、不重试、不阻塞播放；
 5. 设置 → 关于红果 → 「取址协议档案」：查看当前档案、手动检查、恢复内置默认。

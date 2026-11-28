@@ -27,8 +27,13 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
+/** 界面显示用的短版本号：去掉 CI 构建号（0.37.1+68 → 0.37.1）。
+ *  仅用于给用户看的文案；装机上报、崩溃日志、版本比对、APK 文件名等数据通道一律用完整 BuildConfig.VERSION_NAME，
+ *  完整构建号在「版本与更新」面板里仍可见，方便报问题时定位。 */
+internal fun displayVersion(): String = BuildConfig.VERSION_NAME.substringBefore('+')
+
 /** Foreground-only updater: no background service, and no networking or prompts during playback. */
-class AppUpdater(private val activity: Activity, private val idle: () -> Boolean) {
+class AppUpdater(private val activity: Activity, private val idle: () -> Boolean, private val onRow: (String) -> Unit = {}) {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val repository = AppUpdateRepository()
@@ -42,28 +47,36 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     private var ready = false
     private var permissionRequested = false
     private var dialog: AlertDialog? = null
+    /** show() 里主动替换旧弹窗时为真：这次的 dismiss 不该算「用户关掉了提示」。 */
+    private var replacing = false
     val showing get() = dialog?.isShowing == true
     private var statusView: TextView? = null
     private var statusScroll: ScrollView? = null
     private var anchor: View? = null
     private var actionButton: android.widget.Button? = null
-    private var status = "当前版本 ${BuildConfig.VERSION_NAME}"
+    private var status = "当前版本 ${displayVersion()}"
     private var retryAfter = 0L
     private var promptedThisSession = false
     private var checkedThisSession = false
+    /** 当前「版本与更新」行的值（含状态后缀），设置页重建时用它恢复显示。 */
+    var rowText: String = displayVersion()
+        private set
     private val auto get() = preferences.getBoolean("automatic", true)
     private val poll = object : Runnable {
         override fun run() {
             if (!active) return
             if (idle() && dialog == null && !busy && auto) {
                 val now = System.currentTimeMillis()
-                val last = preferences.getLong("last_attempt", 0)
                 val update = available
+                val lastOk = preferences.getLong("last_success", 0)
+                val failUntil = preferences.getLong("fail_until", 0)
                 when {
                     update != null && !promptedThisSession -> show(activity.currentFocus)
                     update != null && !ready && now >= retryAfter -> download()
                     !checkedThisSession -> checkedThisSession = check(false)
-                    now < last || now - last >= 6 * 60 * 60 * 1000L -> check(false)
+                    // 6 小时节流只在「上一次真的成功」时生效；失败走 10 分钟退避。
+                    // 之前失败也按 6 小时算，一次超时就静默半天，用户以为根本没检查（2026-11-27）。
+                    now >= failUntil && (now < lastOk || now - lastOk >= 6 * 60 * 60 * 1000L) -> check(false)
                 }
             }
             main.postDelayed(this, 15000)
@@ -99,6 +112,17 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
      */
     private fun notesText(raw: String): String = UpdateNotes.summarize(raw)
     private fun updateStatus(text: String) { status = text; statusView?.text = text; fitStatus() }
+    /**
+     * 把结论同步到设置页「版本与更新 · xxx」那行上。失败以前只写进弹窗正文，
+     * 用户不看面板就以为「没有更新」（2026-11-27）。
+     */
+    private fun row(text: String) {
+        if (text == rowText) return
+        rowText = text
+        onRow(text)
+    }
+    /** 与当前版本有关的提示（检查失败 / 已是最新），自动带上当前版本号。 */
+    private fun rowHint(hint: String) = row("${displayVersion()} · $hint")
     /** 更新说明可能很长：限制正文高度并允许滚动，避免把「立即安装」按钮挤出屏幕。 */
     private fun fitStatus() {
         val scroll = statusScroll ?: return
@@ -121,13 +145,15 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     fun show(from: View?) {
         if (!active) return
         anchor = from
+        replacing = true
         dialog?.dismiss()
-        // One nag per process lifetime: the user may close it, but the next app restart re-prompts.
+        replacing = false
+        // 提示额度只在「用户自己关掉/选了稍后」时消耗。以前在开窗瞬间就置位，
+        // 结果弹窗被 onPause（电视屏保、切后台）顺手 dismiss 之后，本进程再也不会弹（2026-11-27）。
         val updatePending = available != null
-        if (updatePending) promptedThisSession = true
         val dp = activity.resources.displayMetrics.density
         val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding((24*dp).toInt(), (12*dp).toInt(), (24*dp).toInt(), 0) }
-        body.addView(TvDialog.title(activity,"版本与更新 · ${BuildConfig.VERSION_NAME}"))
+        body.addView(TvDialog.title(activity,"版本与更新 · ${displayVersion()}"))
         statusView = TextView(activity).apply { text = status; textSize = 17f; setTextColor(TvStyle.text) }
         statusScroll = ScrollView(activity).apply {
             isFillViewport = false
@@ -144,7 +170,9 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             })
         }
         body.addView(TextView(activity).apply {
-            text = if (updatePending) "发现新版本，点击即可更新" else "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"
+            // 界面版本号去掉构建号（v0.37.1），但完整构建号留在这里方便报问题时定位
+            val hint = if (updatePending) "发现新版本，点击即可更新" else "只在应用前台浏览时检查，播放中不打扰。下载后需确认系统安装，收藏与观看记录保留。"
+            text = "$hint\n当前构建：${BuildConfig.VERSION_NAME}"
             textSize = 13f; setTextColor(TvStyle.muted)
             setPadding(0, (8*dp).toInt(), 0, (8*dp).toInt())
         })
@@ -162,13 +190,17 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         val next = AlertDialog.Builder(activity).setView(TvDialog.card(activity,body)).create()
         TvDialog.styleWindow(activity,next)
         dialog = next
+        var handled = false
         next.setOnDismissListener {
             if (dialog === next) { dialog = null; statusView = null; statusScroll = null; actionButton = null }
+            // handled=用户主动点「稍后」/确认；active=用户按返回键关掉。两者都算「提示过了」。
+            // 而 pause() 里先 active=false 再 dismiss，屏保/装系统安装器造成的关闭不消耗额度。
+            if (updatePending && !replacing && (handled || active)) promptedThisSession = true
             if (from?.isAttachedToWindow == true) from.requestFocus()
         }
         next.show()
-        later.setOnClickListener { next.dismiss() }
-        action.setOnClickListener { when { ready -> install(); available != null -> download(); else -> check(true) } }
+        later.setOnClickListener { handled = true; next.dismiss() }
+        action.setOnClickListener { handled = true; when { ready -> install(); available != null -> download(); else -> check(true) } }
         renderActions()
         fitStatus()
         action.post { if (dialog === next) action.requestFocus() }
@@ -185,7 +217,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (available == null && !busy && !ready) check(true)
     }
 
-    private fun <T> work(stage: () -> String = { "unknown" }, action: () -> T, done: (T) -> Unit) {
+    private fun <T> work(stage: () -> String = { "unknown" }, onFail: ((Exception) -> Unit)? = null, action: () -> T, done: (T) -> Unit) {
         busy = true; renderActions(); val ticket = ++generation
         task = worker.submit {
             try {
@@ -195,8 +227,13 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
                 // 失败静默无法定位问题：带上阶段与目标版本，7 天内可在 CLS 看到某版本的失败聚集
                 InstallStatsPing.reportUpdateFail(activity, stage(), available?.versionName ?: "-")
                 main.post { if (active && generation == ticket) {
-                    busy = false; ready = false; retryAfter = System.currentTimeMillis()+30*60*1000L
-                    updateStatus(if (e is IOException) e.message ?: "更新失败，请重试" else "更新校验失败，请重试"); renderActions()
+                    busy = false
+                    if (onFail != null) onFail(e) else {
+                        ready = false; retryAfter = System.currentTimeMillis()+10*60*1000L
+                        updateStatus(if (e is IOException) e.message ?: "更新失败，请重试" else "更新校验失败，请重试")
+                        rowHint("下载失败，点此重试")
+                    }
+                    renderActions()
                 } }
             }
         }
@@ -207,15 +244,34 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         // 「不打扰」只约束自动检查（前台、目录页、无弹窗）。手动/语音检查是用户当场要的，
         // 停在播放页也该立刻执行——以前把 idle() 一刀切，语音喊「检查更新」只会开个空面板。
         if (!manual && !idle()) return false
+        // 自动检查的两道闸：失败 10 分钟退避；成功 6 小时一次。
+        // 但「本次启动的第一次」必须无条件查——available/ready 只在内存里，重启后不复查就再也
+        // 不知道该升级了（0.35.0 用户重启后弹窗消失就是这么来的）。手动/语音同样不受限。
+        if (!manual) {
+            val now0 = System.currentTimeMillis()
+            if (now0 < preferences.getLong("fail_until", 0)) return false
+            if (checkedThisSession) {
+                val lastOk = preferences.getLong("last_success", 0)
+                if (now0 >= lastOk && now0 - lastOk < 6 * 60 * 60 * 1000L) return false
+            }
+        }
         preferences.edit().putLong("last_attempt", System.currentTimeMillis()).apply()
         updateStatus("正在检查新版…")
-        work(stage = { "parse" }, action = { repository.latest() }) { update ->
+        work(stage = { "parse" }, onFail = { e ->
+            // 失败也要可见 + 可重试：10 分钟后自动重来，行值显示「检查失败」，进面板能看到每个源的错因
+            preferences.edit().putLong("fail_until", System.currentTimeMillis() + 10 * 60 * 1000L).apply()
+            updateStatus("检查失败：${e.message ?: "网络不可用"}\n\n10 分钟后自动重试，也可以点下面的「检查更新」立即重试。")
+            rowHint("检查失败，点此重试")
+        }, action = { repository.latest() }) { update ->
             available = update.takeIf { it.newerThan(BuildConfig.VERSION_CODE.toLong(), Build.VERSION.SDK_INT) }; ready = false
+            preferences.edit().putLong("last_success", System.currentTimeMillis()).remove("fail_until").apply()
             if (available == null) {
-                updateStatus(if (update.versionCode > BuildConfig.VERSION_CODE && update.minSdk > Build.VERSION.SDK_INT) "新版需要 Android API ${update.minSdk}，当前电视继续使用本版" else "已是最新版本 ${BuildConfig.VERSION_NAME}")
+                updateStatus(if (update.versionCode > BuildConfig.VERSION_CODE && update.minSdk > Build.VERSION.SDK_INT) "新版需要 Android API ${update.minSdk}，当前电视继续使用本版" else "已是最新版本 ${displayVersion()}")
+                rowHint("已是最新")
                 worker.execute { apk.delete() }
             } else {
                 updateStatus("发现 ${update.versionName} · ${"%.1f".format(update.size/1048576.0)} MB\n${notesText(update.notes)}")
+                row("发现 ${update.versionName}")
                 if (manual || auto) download()
             }
         }
@@ -225,6 +281,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         val update = available ?: return
         if (busy || !active || !idle()) return
         updateStatus("正在下载 ${update.versionName}…")
+        row("下载 ${update.versionName} 中…")
         val ticket = generation + 1
         var stage = "download"
         work(stage = { stage }, action = {
@@ -233,6 +290,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             validateApk(update)
         }) {
             ready = true; updateStatus("${update.versionName} 已下载并校验\n${notesText(update.notes)}\n\n确认后由系统覆盖安装，保留本机记录。")
+            row("${update.versionName} 待安装")
             if (idle() && dialog == null && !promptedThisSession) show(activity.currentFocus)
         }
     }

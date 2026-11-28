@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用名：默认简中。繁中见 values-zh-rTW；vc2test 验证包名在其 sourceSet 覆盖（src/vc2/res）。 -->
+<resources>
+    <string name="app_name">红果TV</string>
+</resources>

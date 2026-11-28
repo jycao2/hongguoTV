@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.TextView
+import com.hongguotv.core.ChineseText
 import com.hongguotv.core.L10n
 
 /**
@@ -26,7 +27,7 @@ object UiL10n {
         walk(root)
     }
 
-    /** 把一个文本串翻成当前语言；剥前缀圆点 → 整串/逐行 → 分段 → 数字模板 四级递进。 */
+    /** 把一个文本串翻成当前语言；剥前缀圆点 → 整串/逐行 → 分段 → 数字模板 → 字级繁化 五级递进。 */
     fun text(value: String): String {
         if (!hasHan(value)) return value
         // 自检按钮、列表项常在文字前拼一个着色圆点（`●  首页`），圆点不属于文案，先剥下来
@@ -35,14 +36,23 @@ object UiL10n {
             val head = bullet.groupValues[0]
             val rest = value.substring(head.length)
             val translated = text(rest)
-            return if (translated == rest) value else head + translated
+            return if (translated == rest) trad(value) else head + translated
         }
         val whole = L10n.tr(value)
         if (whole != value) return whole
         val segmented = segments(value)
-        if (segmented != value) return segmented
-        return patterns(value)
+        if (segmented != value) return trad(segmented)
+        return trad(patterns(value))
     }
+
+    /**
+     * 繁中模式下的最后一级兜底：接口下发的动态内容（剧名、简介、弹幕、官方错误文案等）
+     * 不在字典里，四级替换都命不中时做字级简→繁（OpenCC s2tw，幂等）。
+     * 只改显示，发给平台的数据保持简中原文（搜索词在 ContentRepository.search 里转简）。
+     * 2026-11-28 台湾用户反馈：繁中介面下剧名/简介仍是简中。
+     */
+    private fun trad(text: String): String =
+        if (L10n.current() == L10n.TW) ChineseText.toTraditional(text) else text
 
     private val BULLET = Regex("^[●○◆◇■□▪▫·•]+\\s*")
 

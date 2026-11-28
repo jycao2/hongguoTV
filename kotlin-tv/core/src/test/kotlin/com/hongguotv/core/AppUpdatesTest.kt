@@ -42,6 +42,16 @@ class AppUpdatesTest {
         val o = json(); o.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1-android7.apk")
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
     }
+    @Test fun acceptPlainApkNameWithoutAndroidSuffix() {
+        // 0.37.1 起文件名后缀可选：将来去掉 -android8 时新版客户端仍能解析。
+        // 本次发布仍带后缀，老客户端照常升级；真正切换要等新版普及。
+        val plain = json(); plain.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1.apk")
+        assertEquals("hongguotv-kotlin-0.9.0-build.1.apk", AppUpdate.parse(plain.toString()).fileName)
+        assertEquals("https://github.com/jycao2/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1.apk", AppUpdate.parse(plain.toString()).downloadUrl)
+        // 错误后缀仍必须拒绝：不能让「无后缀」分支把 -android7 当成版本号的一部分吞掉
+        val bad = json(); bad.getJSONObject("apk").put("name", "hongguotv-kotlin-0.9.0-build.1-android7.apk")
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(bad.toString()) }
+    }
     @Test fun downloadUrlUsesOnlyFixedRepositoryAndValidatedNames() {
         assertEquals("https://github.com/jycao2/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android5.apk", update().downloadUrl)
         for (value in listOf("../../bad.apk", "evil.apk", "https://example.com/evil.apk", "hongguotv-kotlin-1/2-android5.apk")) {

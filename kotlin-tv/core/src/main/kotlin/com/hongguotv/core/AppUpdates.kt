@@ -25,18 +25,25 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
          * that takes the original GitHub URL and returns the proxied form; the raw URL
          * is always tried first.
          */
+        /**
+         * 2026-11-27 实测重排：ghfast.top 已连不上、gh-proxy.net 返回 JS 挑战页（客户端拿不到
+         * JSON），两个源等于永久失效——只剩 raw GitHub 和 gh-proxy.com 能用的结果是「链路一抖
+         * 就 0 个源可用」，自动更新于是完全静默。这里换成四个实测能取到 update.json、
+         * 且支持 Range 下载 APK 的源；raw GitHub 仍排第一（可信度最高）。
+         */
         val MIRRORS: List<(String) -> String> = listOf(
             { it },                                        // raw GitHub first
-            { "https://gh-proxy.com/$it" },                // fastgit style proxy
-            { "https://ghfast.top/$it" },                  // fastgit alternate
-            { "https://gh-proxy.net/$it" },                // another mirror
+            { "https://gh-proxy.org/$it" },
+            { "https://gh-proxy.com/$it" },
+            { "https://ghproxy.imciel.com/$it" },
+            { "https://api.gitproxy.dev/$it" },
         )
         /** All hosts we ever send HTTPS traffic to — the interceptor whitelist. */
         val ALLOWED_HOSTS = setOf(
             "github.com",
             "release-assets.githubusercontent.com",
             "objects.githubusercontent.com",
-            "gh-proxy.com", "ghfast.top", "gh-proxy.net",
+            "gh-proxy.org", "gh-proxy.com", "ghproxy.imciel.com", "api.gitproxy.dev",
         )
         fun parse(json: String): AppUpdate {
             val o = JSONObject(json)
@@ -49,8 +56,11 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
             require(update.tag.matches(Regex("kotlin-v[0-9][0-9A-Za-z.+-]{0,80}")))
             // 0.28.0 及更早的已发布客户端只认 -android8.apk，minSdk 下探后新包改用 -android5.apk——
             // 两种后缀都在线上的清单里出现过，解析必须同时接受，否则总有一批存量客户端「更新信息格式不正确」。
-            // 0.33.0 起恢复单包（minSdk 21）并沿用 -android8.apk 命名，这里仍保持两种后缀都收。
-            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android[58]\\.apk")))
+            // 0.33.0 起恢复单包（minSdk 21）并沿用 -android8.apk 命名。
+            // 0.37.1 起放宽为后缀可选（为将来去掉 -android8 铺路；本次发布的文件名仍带后缀，
+            // 老客户端照常升级，真正切换后缀要等新版普及后再做）。逐字符负向前瞻 (?!-android)
+            // 保证「无后缀」分支不会把 -android7 这类错误后缀当成版本号的一部分吞掉。
+            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9](?:(?!-android)[0-9A-Za-z.+-]){0,80}(?:-android[58])?\\.apk")))
             require(update.size in 1..MAX_APK_BYTES && update.sha256.matches(Regex("[0-9a-f]{64}")))
             return update
         }
@@ -135,7 +145,9 @@ class AppUpdateRepository : java.io.Closeable {
 
     fun latest(): AppUpdate {
         val base = "${AppUpdate.RELEASES}/latest/download/update.json"
-        return tryMirrors(base, 12) { response, _ ->
+        // 每个源 8 秒：大陆网络下直连 GitHub 基本一定走满超时，12 秒会把「发现新版」整体拖到 20 秒外；
+        // 镜像实测都是 0.2~2 秒返回，8 秒足够判定一个源死没死。
+        return tryMirrors(base, 8) { response, _ ->
             val bytes = response.body?.byteStream()?.use { input ->
                 val out = ByteArrayOutputStream(); val buffer = ByteArray(4096)
                 while (true) { val n = input.read(buffer); if (n < 0) break; if (out.size() + n > 65536) throw IOException("更新信息过大"); out.write(buffer, 0, n) }

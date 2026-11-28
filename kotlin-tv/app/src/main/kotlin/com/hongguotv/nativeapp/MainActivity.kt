@@ -279,6 +279,8 @@ class MainActivity: Activity() {
     private lateinit var extras: PlaybackExtras
     private lateinit var thirdStore: ThirdStore
     private lateinit var updater: AppUpdater
+    /** 设置页「版本与更新」行：更新器把「检查失败 / 发现新版 / 待安装」写到这行的值上。 */
+    private var updatesRow: SettingRow?=null
     private lateinit var profileUpdater: PlaybackProfileUpdater
     private lateinit var mediaSession: TvMediaSession
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
@@ -374,8 +376,16 @@ class MainActivity: Activity() {
     private var freezeFading: FrameLayout?=null
     /** 延迟显示 loading 的任务：500ms 内切完就在 releaseFreeze 里被撤掉，等于从未出现过 */
     private var freezeLoadingJob: Runnable?=null
+    /** issue #43：首帧回调后延迟淡出的任务。首帧刚输出时合成器还没把绿缓冲换成真实画面，
+     *  立刻淡出会露出约 2 帧绿帧（66ms），推迟 100ms 再撤。换集/撤层时必须取消，避免误伤下一集的过渡层。 */
+    private var freezeFirstFrameFade: Runnable?=null
+    private fun cancelFreezeFirstFrameFade() {
+        freezeFirstFrameFade?.let { main.removeCallbacks(it) }; freezeFirstFrameFade=null
+    }
     /** 过渡层淡出时长：只柔化「旧帧 → 新画面」这一下，不增加等待（新画面此刻已经可见） */
     private val FREEZE_FADE_MS=180L
+    /** 首帧回调到开始淡出的间隔：绿帧来自首帧输出与合成之间的窗口，等它过去再淡出 */
+    private val FREEZE_FIRST_FRAME_DELAY_MS=100L
     /** 定格截图的长边上限。过渡只有零点几秒且要盖住画面，720 足够；
      *  PixelCopy 的耗时大头是 GPU→CPU 读回，像素少一半时间就少一半（用户 2026-11-20 反馈切换慢）。 */
     private val FREEZE_MAX_EDGE=720f
@@ -814,7 +824,10 @@ class MainActivity: Activity() {
         InstallStatsPing.startOnce(applicationContext)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
-        updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && !tvTools.showing }
+        updater=AppUpdater(this, idle={ foreground && library.isLoaded && screen=="catalog" && !tvTools.showing }) { text ->
+            // 自动检查失败以前完全静默，用户只会以为「没有更新」；结论同步到设置行（2026-11-27）
+            updatesRow?.value=text
+        }
         // 取址协议档案：先把上次缓存的换上（几毫秒），再按 6 小时节流后台拉一次
         profileUpdater=PlaybackProfileUpdater(this).apply { loadCached(); refreshIfDue() }
         connectivity=getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -1260,7 +1273,7 @@ class MainActivity: Activity() {
         val brand=row()
         val brandIcon=ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) }
         val brandName=text("红果",if(tightNav) 19f else 22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); includeFontPadding=false }
-        val brandVer=text("v${BuildConfig.VERSION_NAME}",12f,muted).apply { includeFontPadding=false }
+        val brandVer=text("v${displayVersion()}",12f,muted).apply { includeFontPadding=false }
         brand.addView(brandIcon,lp(dp(28),dp(28)).apply { rightMargin=dp(if(tightNav) 7 else 9) })
         brand.addView(brandName)
         if(!tightNav) brand.addView(brandVer,lp(-2,-2).apply { topMargin=dp(6) })
@@ -3780,8 +3793,10 @@ class MainActivity: Activity() {
             desc="部分片源域名被污染打不开时，填一个代理地址转发这些请求。")
         heading(about,"关于红果",categoryDefs.getValue("about").second)
         lateinit var updates: SettingRow
-        updates=setting(about,"版本与更新  ·  ${BuildConfig.VERSION_NAME}",{ updater.show(updates) },
+        updates=setting(about,"版本与更新  ·  ${displayVersion()}",{ updater.show(updates) },
             desc="查看当前版本号与更新日志，手动检查或直接安装新版本。")
+        updatesRow=updates
+        updates.value=updater.rowText
         lateinit var profileRow: SettingRow
         profileRow=setting(about,"取址协议档案",{ showProfileSheet(profileRow) },
             desc="播放取址用的签名常量与门地址，支持远程下发；出问题时一键恢复内置默认。")
@@ -3793,7 +3808,7 @@ class MainActivity: Activity() {
             TvDialog.info(this,"开源许可","本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：jycao2/hongguoTV。").show()
         },desc="本应用的开源协议、引用项目与致谢。",hint="按确认键查看")
         // 页脚固定在滚动区之外（屏幕底部居中）：始终可见，因此不再需要抢焦点
-        val settingsFooter=text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与本机记录保存在设备 · 登录后可同步到红果账号",12f,muted).apply {
+        val settingsFooter=text("红果TV  /  ${displayVersion()}    ·    收藏与本机记录保存在设备 · 登录后可同步到红果账号",12f,muted).apply {
             id=View.generateViewId(); isFocusable=false; setPadding(dp(10),dp(8),dp(10),dp(3))
         }
         val settingsDisclaimer=text("本应用仅用于技术交流与学习，不提供、不存储、不传播任何视频内容，内容版权归原平台所有。",11f,muted).apply {
@@ -4863,6 +4878,9 @@ class MainActivity: Activity() {
      *  这不增加等待——用户在这一刻已经能看到新内容，只是旧帧还叠着半透明的一层；
      *  真要离开播放页（回首页、露错误面板）时必须传 false，否则旧帧会盖住下一页。 */
     private fun releaseFreeze(fade: Boolean=false) {
+        // issue #43：首帧回调排了 100ms 的延迟淡出，这里主动撤层（退出播放页/错误面板/切集）
+        // 时一并取消，否则 100ms 后它会重新走一遍淡出。淡出路径里自己清空了字段，取消不到自身。
+        cancelFreezeFirstFrameFade()
         freezeFade?.let { main.removeCallbacks(it); }; freezeFade=null
         // 500ms 内切完时这个任务还没到点，撤掉就等于 loading 从未出现过
         freezeLoadingJob?.let { main.removeCallbacks(it) }; freezeLoadingJob=null
@@ -5290,9 +5308,21 @@ class MainActivity: Activity() {
                 override fun onRenderedFirstFrame() {
                     if(active() && firstFrame) {
                         firstFrame=false
-                        // 新一集的画面已经真的画出来了：让上一帧淡出而不是硬切（用户 2026-11-20：一闪太生硬）
-                        releaseFreeze(fade=true); transitionFrom=0
-                        android.util.Log.w("HongguoTV","Playback first frame episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-episodeStartedAt}")
+                        // 新一集的画面画出来了：原本在这里立刻淡出冻帧（用户 2026-11-20：一闪太生硬）。
+                        // issue #43：首帧回调那一刻解码器刚吐出第一帧，合成器还没把绿色缓冲换成真实画面，
+                        // 立刻淡出就露出约 2 帧绿幕（真机 66ms）。推迟 100ms 再淡出，期间冻帧继续盖住，
+                        // 等真实画面稳定再交接。连按换集时校验集数，避免旧任务释放掉新一集的过渡层。
+                        val fadeEpisode=episodeIndex
+                        freezeFirstFrameFade?.let { main.removeCallbacks(it) }
+                        val fade=Runnable {
+                            freezeFirstFrameFade=null
+                            if(active() && episodeIndex==fadeEpisode && screen=="player") {
+                                releaseFreeze(fade=true); transitionFrom=0
+                            }
+                        }
+                        freezeFirstFrameFade=fade
+                        main.postDelayed(fade,FREEZE_FIRST_FRAME_DELAY_MS)
+                        android.util.Log.w("HongguoTV","Playback first frame episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-episodeStartedAt} fadeIn=${FREEZE_FIRST_FRAME_DELAY_MS}ms")
                     }
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }

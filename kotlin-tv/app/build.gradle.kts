@@ -15,9 +15,10 @@ android {
         minSdk = 21
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 12
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.37.0"
-        // 桌面名称：带 -Pvc2test 的验证包改叫「红果TV·融合」，与正式版「红果TV」可区分，防止点错图标
-        resValue("string", "app_name", if (project.hasProperty("vc2test")) "红果TV·融合" else "红果TV")
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.37.1"
+        // 桌面名称：app_name 迁到资源文件（res/values/strings.xml + values-zh-rTW 繁体变体），
+        // vc2test 验证包名在 src/vc2/res/values/strings.xml 覆盖为「红果TV·融合」防点错图标。
+        // 原先 gradle resValue 无法按系统语言出繁体（用户反馈：繁中地区希望显示「紅果TV」）。
     }
     buildFeatures { buildConfig = true }
     // 编译开关（2026-11-21 资产隔离）：-Pvc2test 才把 src/vc2（解码器 JNI 门面 + decoder 包 +

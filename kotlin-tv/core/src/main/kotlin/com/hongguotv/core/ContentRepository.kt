@@ -198,6 +198,8 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         return CatalogPage(items,items.isNotEmpty() && page<minOf(lastPage,100))
     }
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
+        // 官方接口只认简中：繁体输入（台湾用户 2026-11-28 反馈）先转简再送出，显示仍按界面语言
+        val keyword = ChineseText.toSimplified(keyword.trim()).ifBlank { keyword }
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
         // AI 剧没有独立搜索口径，官网把它归在漫剧搜索结果里
         if(type==ContentType.AI) return search(keyword,page,ContentType.COMIC)
@@ -212,7 +214,7 @@ open class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().con
         catch(e: Exception) { throw IOException("搜索暂不可用（App接口：${appError?.message ?: "无结果"}；网站：${e.message}）",e) }
     }
     /** 搜索联想词（App suggest 接口，5 分钟缓存）；接口按注册设备放行，失败返回空列表。 */
-    fun searchSuggest(query: String): List<String> = suggestRaw(query)
+    fun searchSuggest(query: String): List<String> = suggestRaw(ChineseText.toSimplified(query))
     /** 轻量站点搜索（不做补季/题材过滤）：给搜索联想词前几条带封面上屏用。 */
     fun preview(keyword: String): CatalogPage = webSearch(keyword, 1, null)
     /** 高级搜索：按服务端下发的条件筛选剧集；条件变化后必须重取第 1 页才能拿到新的选项面板。 */

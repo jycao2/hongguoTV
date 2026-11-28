@@ -9,7 +9,10 @@ APK_SRC = "kotlin-tv/app/build/outputs/apk/release/app-release.apk"
 # 单包分发：APK 实际 minSdk 21（Android 5.0+），清单同样声明 21，Android 5-7 与 8+ 共用一个包。
 # 文件名继续沿用 -android8.apk：≥0.30.9 的客户端两种后缀都认，但沿用旧名可以少一个变量，
 # 也让历史上存过这个链接的人不落空（改成 -android5.apk 同样能过解析）。
-APK_NAME = f"hongguotv-kotlin-{VERSION_NAME}-android8.apk"
+# 文件名不嵌 +构建号（0.37.1 起）：客户端按 update.json 的 apk.name 下载、文件名正则允许省略构建号、
+# 安装校验只比 APK 内部 versionName 与清单 versionName（两者仍是完整号）——去掉 +N 不影响升级。
+# 注意 manifest["versionName"] 仍写完整 VERSION_NAME，只有文件名用短号。
+APK_NAME = f"hongguotv-kotlin-{VERSION_NAME.split('+')[0]}-android8.apk"
 # 清单 minSdk 必须与 APK 实际值一致：0.30.10 的客户端装前校验 `candidate.minSdkVersion != update.minSdk` 即拦截。
 # 声明 21 让清单对所有设备放行（`minSdk <= 设备 sdk` 恒成立），从而一个包覆盖 Android 5.0+。
 # ≤0.28.0 的旧客户端要求声明 26 且只认 -android8.apk，已放弃（2026-11-16 决定）。

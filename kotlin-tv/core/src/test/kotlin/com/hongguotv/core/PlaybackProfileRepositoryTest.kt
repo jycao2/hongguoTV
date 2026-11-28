@@ -50,6 +50,10 @@ class PlaybackProfileRepositoryTest {
         val mirrors = AppUpdate.MIRRORS
         assertTrue("镜像链至少要有备用，否则大陆网络下必挂", mirrors.size >= 2)
         val hosts = AppUpdate.ALLOWED_HOSTS
-        assertTrue("镜像域名必须在白名单里", hosts.contains("gh-proxy.com") && hosts.contains("ghfast.top"))
+        // 逐个镜像校验：域名不在白名单里的话，拦截器会把自己配置的镜像挡掉——
+        // gh-proxy.net 就是这样「配了但永远用不了」（2026-11-27）。
+        mirrors.map { it("https://github.com/o/r/releases/download/v/f.apk") }
+            .map { it.removePrefix("https://").substringBefore("/") }
+            .forEach { assertTrue("镜像域名 $it 必须在白名单里", hosts.contains(it)) }
     }
 }

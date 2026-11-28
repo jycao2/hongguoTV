@@ -776,8 +776,21 @@ class AccountManager(private val context: Context, private val library: Library)
     }
 
     private fun phoneFailed(activity: android.app.Activity, failure: Throwable) {
-        val retry = if (failure is PhoneLogin.Failure && failure.needsWebsite) "改用扫码" else "重新填写"
-        actionDialog(activity, "手机号登录未完成", safeError(failure), retry, onAction = { showLoginDialog(activity) })
+        // 错误码 7/1106/1107 都是官方 passport 的发送频控：同号码有间隔（约 1 分钟），
+        // 连续出现多半是当日次数到顶。给专属解释而不是裸错误码，按钮直达扫码登录
+        // （0.37.0 台湾号用户反馈：反复收到「访问太频繁」后只能「重新填写」回到号码页，
+        // 再点发送又触发限频，形成死循环）。
+        val code = (failure as? PhoneLogin.Failure)?.errorCode
+        val throttled = code == 7 || code == 1106 || code == 1107
+        val scan = failure is PhoneLogin.Failure && failure.needsWebsite || throttled
+        val message = if (throttled) {
+            "官方对同一手机号的验证码发送有间隔限制，请等约 1 分钟再试；若连续出现此提示，" +
+                "该号码今日的发送次数可能已达上限，建议改用扫码登录。"
+        } else safeError(failure)
+        val retry = if (scan) "改用扫码" else "重新填写"
+        actionDialog(activity, "手机号登录未完成", message, retry, onAction = {
+            if (scan) qrLogin(activity) else phoneLogin(activity)
+        })
     }
 
     /** 单行输入弹窗：确认后回调 [submit]，空值不回调。[error] 非空时以醒目方式附在说明后。 */
